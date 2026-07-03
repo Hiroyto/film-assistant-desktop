@@ -1,0 +1,286 @@
+/* Amplify Dark Theme Fixes - Add this to your component's CSS or import it */
+
+/* Container wrapper - less aggressive targeting */
+.amplify-authenticator-container {
+    width: 100%;
+    max-width: 400px;
+    margin: 0 auto;
+    padding: 1rem;
+  }
+  
+  /* Reset Amplify's default styles with targeted selectors */
+  .amplify-authenticator-container [data-amplify-authenticator] {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    max-width: 100% !important;
+    width: 100% !important;
+  }
+  
+  /* Tab styling */
+  .amplify-authenticator-container [role="tablist"] {
+    background: transparent !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border-top: none !important;
+    border-left: none !important;
+    border-right: none !important;
+    margin-bottom: 2rem !important;
+    display: flex !important;
+  }
+  
+  .amplify-authenticator-container [role="tab"] {
+    background: transparent !important;
+    color: rgba(255, 255, 255, 0.7) !important;
+    border: none !important;
+    padding: 1rem 2rem !important;
+    font-size: 1.1rem !important;
+    font-weight: 500 !important;
+    flex: 1 !important;
+    cursor: pointer !important;
+    text-align: center !important;
+    transition: all 0.2s ease !important;
+  }
+  
+  .amplify-authenticator-container [role="tab"]:hover {
+    background: rgba(255, 133, 89, 0.1) !important;
+    color: rgba(255, 255, 255, 0.9) !important;
+  }
+  
+  .amplify-authenticator-container [role="tab"][aria-selected="true"] {
+    background: linear-gradient(135deg, #ff8559 0%, #ff6600 100%) !important;
+    color: white !important;
+    border-radius: 8px 8px 0 0 !important;
+  }
+  
+  /* Form containers */
+  .amplify-authenticator-container form,
+  .amplify-authenticator-container [role="tabpanel"] {
+    background: transparent !important;
+    padding: 0 !important;
+    width: 100% !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
+  
+  /* Field containers - key fix for input focus issues */
+  .amplify-authenticator-container .amplify-field,
+  .amplify-authenticator-container [data-amplify-field] {
+    background: transparent !important;
+    margin-bottom: 1.5rem !important;
+    width: 100% !important;
+    border: none !important;
+    position: relative !important;
+  }
+  
+  /* Labels */
+  .amplify-authenticator-container .amplify-label,
+  .amplify-authenticator-container label:not([role]) {
+    background: transparent !important;
+    color: rgba(255, 255, 255, 0.9) !important;
+    font-weight: 500 !important;
+    margin-bottom: 0.5rem !important;
+    display: block !important;
+    font-size: 1rem !important;
+    border: none !important;
+    cursor: default !important;
+  }
+  
+  /* Input fields - critical fixes */
+  .amplify-authenticator-container input[type="email"],
+  .amplify-authenticator-container input[type="password"],
+  .amplify-authenticator-container input[type="text"],
+  .amplify-authenticator-container .amplify-input {
+    background: rgba(255, 255, 255, 0.05) !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border-radius: 8px !important;
+    color: white !important;
+    padding: 0.875rem 1rem !important;
+    font-size: 1rem !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+    outline: none !important;
+    transition: all 0.2s ease !important;
+    /* Critical: Prevent interference with Amplify's event handling */
+    pointer-events: auto !important;
+    user-select: text !important;
+    -webkit-user-select: text !important;
+  }
+  
+  /* Password fields - extra padding for toggle button */
+  .amplify-authenticator-container input[type="password"],
+  .amplify-authenticator-container input[type="text"][autocomplete*="password"] {
+    padding-right: 2.5rem !important;
+  }
+  
+  /* Focus states - very specific to avoid conflicts */
+  .amplify-authenticator-container input[type="email"]:focus,
+  .amplify-authenticator-container input[type="password"]:focus,
+  .amplify-authenticator-container input[type="text"]:focus,
+  .amplify-authenticator-container .amplify-input:focus {
+    border-color: #ff8559 !important;
+    background: rgba(255, 255, 255, 0.08) !important;
+    box-shadow: 0 0 0 2px rgba(255, 133, 89, 0.2) !important;
+    outline: none !important;
+  }
+  
+  /* Placeholder text */
+  .amplify-authenticator-container input::placeholder {
+    color: rgba(255, 255, 255, 0.5) !important;
+  }
+  
+  /* Password visibility toggle - more specific targeting */
+  .amplify-authenticator-container button[type="button"][aria-label*="password"],
+  .amplify-authenticator-container button[type="button"][aria-label*="Show"],
+  .amplify-authenticator-container button[type="button"][aria-label*="Hide"] {
+    background: transparent !important;
+    border: none !important;
+    color: rgba(255, 255, 255, 0.6) !important;
+    position: absolute !important;
+    right: 12px !important;
+    top: 50% !important;
+    transform: translateY(-50%) !important;
+    width: 20px !important;
+    height: 20px !important;
+    cursor: pointer !important;
+    z-index: 10 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    font-size: 16px !important;
+    padding: 2px !important;
+    pointer-events: auto !important;
+  }
+  
+  .amplify-authenticator-container button[type="button"][aria-label*="password"]:hover,
+  .amplify-authenticator-container button[type="button"][aria-label*="Show"]:hover,
+  .amplify-authenticator-container button[type="button"][aria-label*="Hide"]:hover {
+    color: rgba(255, 255, 255, 0.8) !important;
+  }
+  
+  /* Button styling */
+  .amplify-authenticator-container button {
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    transition: all 0.2s ease !important;
+    cursor: pointer !important;
+    border: none !important;
+    outline: none !important;
+  }
+  
+  /* Primary buttons */
+  .amplify-authenticator-container button[type="submit"],
+  .amplify-authenticator-container .amplify-button--primary,
+  .amplify-authenticator-container button[data-variation="primary"] {
+    background: linear-gradient(135deg, #ff8559 0%, #ff6600 100%) !important;
+    color: white !important;
+    padding: 1rem !important;
+    width: 100% !important;
+    margin-top: 1rem !important;
+    font-size: 1rem !important;
+  }
+  
+  .amplify-authenticator-container button[type="submit"]:hover,
+  .amplify-authenticator-container .amplify-button--primary:hover,
+  .amplify-authenticator-container button[data-variation="primary"]:hover {
+    transform: translateY(-1px) !important;
+    box-shadow: 0 8px 25px rgba(255, 133, 89, 0.3) !important;
+  }
+  
+  /* Link buttons */
+  .amplify-authenticator-container .amplify-button--link,
+  .amplify-authenticator-container button[data-variation="link"] {
+    color: #ff8559 !important;
+    background: transparent !important;
+    border: none !important;
+    text-decoration: none !important;
+    margin-top: 1rem !important;
+    text-align: center !important;
+  }
+  
+  .amplify-authenticator-container .amplify-button--link:hover,
+  .amplify-authenticator-container button[data-variation="link"]:hover {
+    color: #ff6600 !important;
+    text-decoration: underline !important;
+  }
+  
+  /* Checkbox styling */
+  .amplify-authenticator-container input[type="checkbox"] {
+    accent-color: #ff8559 !important;
+    margin-right: 0.5rem !important;
+    width: 16px !important;
+    height: 16px !important;
+    cursor: pointer !important;
+    margin-top: 2px !important;
+    background: transparent !important;
+  }
+  
+  .amplify-authenticator-container input[type="checkbox"] + label,
+  .amplify-authenticator-container label:has(input[type="checkbox"]) {
+    color: rgba(255, 255, 255, 0.9) !important;
+    cursor: pointer !important;
+    display: flex !important;
+    align-items: flex-start !important;
+    font-size: 0.9rem !important;
+    line-height: 1.4 !important;
+    user-select: none !important;
+    background: transparent !important;
+  }
+  
+  /* Links */
+  .amplify-authenticator-container a {
+    color: #ff8559 !important;
+    text-decoration: underline !important;
+    cursor: pointer !important;
+    background: transparent !important;
+  }
+  
+  .amplify-authenticator-container a:hover {
+    color: #ff6600 !important;
+  }
+  
+  /* Text elements */
+  .amplify-authenticator-container .amplify-text,
+  .amplify-authenticator-container p,
+  .amplify-authenticator-container span:not([role="tab"]) {
+    color: rgba(255, 255, 255, 0.9) !important;
+    background: transparent !important;
+  }
+  
+  /* Headings */
+  .amplify-authenticator-container .amplify-heading,
+  .amplify-authenticator-container h1,
+  .amplify-authenticator-container h2,
+  .amplify-authenticator-container h3 {
+    color: white !important;
+    text-align: center !important;
+    margin-bottom: 2rem !important;
+    background: transparent !important;
+  }
+  
+  /* Error messages */
+  .amplify-authenticator-container .amplify-alert,
+  .amplify-authenticator-container [role="alert"] {
+    background: rgba(220, 53, 69, 0.1) !important;
+    border: 1px solid rgba(220, 53, 69, 0.3) !important;
+    color: #ff6b6b !important;
+    border-radius: 8px !important;
+    padding: 1rem !important;
+    margin-bottom: 1rem !important;
+  }
+  
+  /* Hide Amplify branding */
+  .amplify-authenticator-container .amplify-footer {
+    display: none !important;
+  }
+  
+  /* Prevent any background overrides */
+  .amplify-authenticator-container * {
+    background-color: transparent !important;
+  }
+  
+  /* Specific override for any inline styles that might be causing issues */
+  .amplify-authenticator-container [style*="background-color"],
+  .amplify-authenticator-container [style*="background"] {
+    background-color: transparent !important;
+    background: transparent !important;
+  }

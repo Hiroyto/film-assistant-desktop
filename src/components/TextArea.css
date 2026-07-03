@@ -1,0 +1,196 @@
+/* TextArea.css */
+
+/* ============================================
+   COLLAPSED STATE STYLES
+   ============================================ */
+
+   .textarea-collapsed-container {
+    margin-bottom: 0.5rem;
+  }
+  
+  .textarea-collapsed {
+    background: linear-gradient(135deg, rgba(60, 60, 68, 0.5) 0%, rgba(70, 70, 78, 0.5) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    padding: 0.625rem 0.75rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    min-height: 38px;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  
+  .textarea-collapsed:hover {
+    background: linear-gradient(135deg, rgba(70, 70, 78, 0.65) 0%, rgba(80, 80, 88, 0.65) 100%);
+    border-color: rgba(255, 107, 53, 0.25);
+  }
+  
+  .textarea-collapsed.has-content {
+    border-color: rgba(255, 107, 53, 0.2);
+    background: linear-gradient(135deg, rgba(60, 60, 68, 0.7) 0%, rgba(70, 70, 78, 0.7) 100%);
+  }
+  
+  .textarea-collapsed.has-content:hover {
+    border-color: rgba(255, 107, 53, 0.35);
+  }
+  
+  .textarea-collapsed-content {
+    flex: 1;
+    font-size: 13px;
+    line-height: 1.4;
+    min-width: 0;
+  }
+  
+  .textarea-collapsed-helper {
+    color: rgba(255, 255, 255, 0.5);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-style: italic;
+  }
+  
+  .textarea-collapsed:hover .textarea-collapsed-helper {
+    color: rgba(255, 255, 255, 0.7);
+  }
+  
+  .textarea-collapsed-value {
+    color: rgba(255, 255, 255, 0.95);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-style: italic;
+  }
+  
+  .textarea-collapsed-arrow {
+    flex-shrink: 0;
+    color: rgba(255, 255, 255, 0.3);
+    font-size: 10px;
+    transition: all 0.2s ease;
+  }
+  
+  .textarea-collapsed:hover .textarea-collapsed-arrow {
+    color: #ff6b35;
+    transform: translateX(1px);
+  }
+  
+  /* ============================================
+     EXPANDED STATE STYLES
+     ============================================ */
+  
+  .textarea-container {
+    display: flex;
+    align-items: flex-start;
+    position: relative;
+    margin-bottom: 1rem;
+  }
+  
+  .textarea-content {
+    flex: 1;
+  }
+  
+  .textarea-tooltip-icon {
+    display: inline-flex;
+    align-items: center;
+    cursor: help;
+    padding: 2px;
+    color: #666;
+  }
+  
+  /* ============================================
+     COLLAPSE BUTTON (inside textarea)
+     ============================================ */
+  
+  .textarea-collapse-button {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    border: none;
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    z-index: 10;
+  }
+  
+  .textarea-collapse-button:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.85);
+    transform: scale(1.05);
+  }
+  
+  /* ============================================
+     BUTTON STACK (right side)
+     ============================================ */
+  
+  .textarea-button-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-left: 8px;
+    animation: fadeIn 0.3s ease-out;
+  }
+  
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateX(-10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+  
+  .textarea-button {
+    min-width: 36px;
+    height: 36px;
+    padding: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    transition: all 0.2s ease;
+    cursor: pointer;
+    background-color: #2a2a2a;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #ffffff;
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3), inset 0 -1px 2px rgba(255, 255, 255, 0.1);
+  }
+  
+  .textarea-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  
+  .textarea-intern-button:hover:not(:disabled) {
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.3), inset 0 -1px 2px rgba(255, 255, 255, 0.15);
+  }
+  
+  .textarea-generate-button:hover:not(:disabled) {
+    background-color: #3b82f6;
+    border: 1px solid rgba(59, 130, 246, 0.5);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.3), inset 0 -1px 2px rgba(255, 255, 255, 0.15), 0 0 8px rgba(59, 130, 246, 0.3);
+  }
+
+  .textarea-generate-button:not(:disabled):hover {
+  background-color: #FF8C00 !important;
+  border: 1px solid rgba(255, 140, 0, 0.5) !important;
+  box-shadow:
+    0 0 12px rgba(255, 140, 0, 0.4),
+    inset 0 1px 2px rgba(0, 0, 0, 0.2) !important;
+}
+  
+  .textarea-clear-button:hover:not(:disabled) {
+    background-color: #dc2626;
+    border: 1px solid rgba(220, 38, 38, 0.5);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.3), inset 0 -1px 2px rgba(255, 255, 255, 0.15), 0 0 8px rgba(220, 38, 38, 0.3);
+  }

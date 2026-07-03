@@ -1,0 +1,34 @@
+.minimap {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  width: 160px;
+  background: rgba(20,20,24,0.9);
+  border-radius: 10px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.minimap-act {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.act-label {
+  font-size: 10px;
+  opacity: 0.6;
+}
+
+.minimap-segment {
+  background: rgba(255,255,255,0.25);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.minimap-segment.active {
+  background: #ff6b35;
+}

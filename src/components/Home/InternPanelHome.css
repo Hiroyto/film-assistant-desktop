@@ -1,0 +1,433 @@
+/* InternPanel Component Styles */
+
+.intern-panel-container {
+  position: fixed;
+  top: 138px;
+  right: 80px;
+  z-index: 999;
+  animation: slideIn 0.3s ease-out forwards;
+}
+
+.intern-panel {
+  background: rgba(24, 24, 27, 0.95);
+  backdrop-filter: blur(20px);
+  border-radius: 16px;
+  border: 1px solid rgba(63, 63, 70, 0.4);
+  box-shadow: 
+    0 25px 50px -12px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+  overflow: hidden;
+  resize: none;
+}
+
+/* Resize Handles */
+.resize-handle {
+  position: absolute;
+  background-color: transparent;
+  z-index: 1001;
+}
+
+.resize-handle-width {
+  left: -4px;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+}
+
+.resize-handle-height {
+  bottom: -4px;
+  left: 0;
+  right: 0;
+  height: 8px;
+  cursor: row-resize;
+}
+
+.resize-indicator {
+  position: absolute;
+  background-color: rgba(84, 191, 219, 0.5);
+  border-radius: 1px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.resize-indicator-width {
+  left: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2px;
+  height: 40px;
+}
+
+.resize-indicator-height {
+  bottom: 3px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 40px;
+  height: 2px;
+}
+
+.resize-handle:hover .resize-indicator {
+  opacity: 1;
+}
+
+/* Header */
+.intern-panel-header {
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid rgba(63, 63, 70, 0.3);
+  background: rgba(84, 191, 219, 0.08);
+}
+
+.intern-panel-title {
+  color: #f8fafc;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+
+/* Content */
+.intern-panel-content {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* Selection Controls */
+.intern-selection-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.selection-breadcrumb-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.selection-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 20px;
+}
+
+.selection-label {
+  color: #54bfdb;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.selection-toggle-btn {
+  background: rgba(84, 191, 219, 0.2);
+  border: 1px solid rgba(84, 191, 219, 0.3);
+  color: #7dd3f0;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.selection-toggle-btn:hover {
+  background: rgba(84, 191, 219, 0.3);
+  border-color: rgba(84, 191, 219, 0.5);
+}
+
+.breadcrumb-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.breadcrumb-chip {
+  background: rgba(84, 191, 219, 0.15);
+  border: 1px solid rgba(84, 191, 219, 0.3);
+  color: #7dd3f0;
+  padding: 4px 8px 4px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.breadcrumb-chip:hover {
+  background: rgba(84, 191, 219, 0.25);
+  border-color: rgba(84, 191, 219, 0.5);
+  transform: translateY(-1px);
+}
+
+.breadcrumb-remove {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+  border-radius: 50%;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: bold;
+  transition: all 0.2s ease;
+}
+
+.breadcrumb-remove:hover {
+  background: rgba(239, 68, 68, 0.4);
+  color: #f87171;
+}
+
+.selection-action-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.selection-action-btn {
+  flex: 1;
+  background: rgba(51, 65, 85, 0.4);
+  border: 1px solid rgba(71, 85, 105, 0.4);
+  color: #cbd5e1;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.selection-action-btn:hover {
+  background: rgba(84, 191, 219, 0.2);
+  border-color: rgba(84, 191, 219, 0.4);
+  color: #7dd3f0;
+  transform: translateY(-1px);
+}
+
+.selection-status-text {
+  color: #94a3b8;
+  font-size: 13px;
+  line-height: 1.4;
+  padding: 12px 16px;
+  background: rgba(51, 65, 85, 0.2);
+  border: 1px solid rgba(71, 85, 105, 0.2);
+  border-radius: 8px;
+}
+
+/* Form Section */
+.intern-form-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.intern-input-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: relative;
+}
+
+/* Input header with label and clear button */
+.intern-input-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.intern-input-label {
+  color: #e2e8f0;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.intern-textarea {
+  background: rgba(30, 41, 59, 0.6);
+  border: 1px solid rgba(71, 85, 105, 0.4);
+  color: #f1f5f9;
+  padding: 12px 16px;
+  border-radius: 10px;
+  font-size: 14px;
+  line-height: 1.5;
+  resize: vertical;
+  min-height: 100px;
+  font-family: inherit;
+  transition: all 0.2s ease;
+}
+
+.intern-textarea:focus {
+  outline: none;
+  border-color: rgba(84, 191, 219, 0.6);
+  box-shadow: 0 0 0 3px rgba(84, 191, 219, 0.1);
+  background: rgba(30, 41, 59, 0.8);
+}
+
+.intern-textarea::placeholder {
+  color: #64748b;
+}
+
+/* Button Container for Submit and Clear - REMOVED */
+/* .intern-button-container - REMOVED */
+
+.intern-submit-btn {
+  background: #54bfdb;
+  border: none;
+  color: white;
+  padding: 14px 20px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+  width: 100%; /* Full width since it's alone now */
+}
+
+.intern-submit-btn:not(:disabled):hover {
+  background: #47a8c7;
+  transform: translateY(-2px);
+  box-shadow: 
+    0 10px 25px -5px rgba(84, 191, 219, 0.4),
+    0 0 20px rgba(84, 191, 219, 0.3);
+}
+
+.intern-submit-btn:disabled {
+  background: rgba(71, 85, 105, 0.4);
+  color: #64748b;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.intern-submit-btn.loading {
+  background: #54bfdb;
+  color: transparent;
+}
+
+/* Clear Button - Corner Position */
+.intern-clear-btn-corner {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 28px;
+}
+
+.intern-clear-btn-corner:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: rgba(239, 68, 68, 0.5);
+  box-shadow: 0 2px 8px rgba(239, 68, 68, 0.2);
+}
+
+.intern-clear-btn-corner:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Old clear button styles - REMOVED */
+
+.loading-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: white;
+}
+
+.loading-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top: 2px solid white;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+/* Response Section */
+.intern-response-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.intern-response-label {
+  color: #e2e8f0;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.intern-response-box {
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(71, 85, 105, 0.3);
+  border-radius: 10px;
+  padding: 16px;
+  min-height: 120px;
+  overflow-y: auto;
+  color: #cbd5e1;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.response-content {
+  color: #cbd5e1;
+}
+
+.response-placeholder {
+  color: #64748b;
+  font-style: italic;
+}
+
+/* Custom scrollbar */
+.intern-response-box::-webkit-scrollbar {
+  width: 6px;
+}
+
+.intern-response-box::-webkit-scrollbar-track {
+  background: rgba(71, 85, 105, 0.2);
+  border-radius: 3px;
+}
+
+.intern-response-box::-webkit-scrollbar-thumb {
+  background: rgba(71, 85, 105, 0.5);
+  border-radius: 3px;
+}
+
+.intern-response-box::-webkit-scrollbar-thumb:hover {
+  background: rgba(71, 85, 105, 0.7);
+}
+
+/* Animations */
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}

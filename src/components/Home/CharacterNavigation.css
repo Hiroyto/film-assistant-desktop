@@ -1,0 +1,272 @@
+/* StackedActionButtons Component - Cinematic Theme */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+.stacked-buttons-container {
+  position: fixed;
+  top: 138px;
+  right: 20px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: fadeInUp 0.4s ease-out;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.stacked-action-button {
+  width: 48px !important;
+  height: 48px !important;
+  padding: 0 !important;
+  border-radius: 50% !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  background: rgba(20, 20, 20, 0.9) !important;
+  backdrop-filter: blur(20px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  color: rgba(255, 255, 255, 0.9) !important;
+  cursor: pointer !important;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  box-shadow: 
+    0 4px 16px rgba(0, 0, 0, 0.3),
+    0 1px 0 rgba(255, 255, 255, 0.1) inset !important;
+  font-family: 'Inter', sans-serif !important;
+  position: relative !important;
+  overflow: hidden !important;
+}
+
+.stacked-action-button::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.05) 100%);
+  border-radius: inherit;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.stacked-action-button:hover {
+  background: rgba(40, 40, 40, 0.95) !important;
+  border-color: rgba(255, 255, 255, 0.2) !important;
+  transform: translateY(-2px) scale(1.05) !important;
+  box-shadow: 
+    0 8px 24px rgba(0, 0, 0, 0.4),
+    0 1px 0 rgba(255, 255, 255, 0.15) inset !important;
+  color: rgba(255, 255, 255, 1) !important;
+}
+
+.stacked-action-button:hover::before {
+  opacity: 1;
+}
+
+.stacked-action-button:active {
+  transform: translateY(-1px) scale(1.02) !important;
+  box-shadow: 
+    0 4px 12px rgba(0, 0, 0, 0.3),
+    0 1px 0 rgba(255, 255, 255, 0.1) inset !important;
+}
+
+/* Active state for buttons */
+.stacked-action-button[data-active="true"] {
+  background: linear-gradient(135deg, rgba(255, 107, 53, 0.8) 0%, rgba(255, 140, 66, 0.8) 100%) !important;
+  border-color: rgba(255, 107, 53, 0.4) !important;
+  color: #ffffff !important;
+  box-shadow: 
+    0 6px 20px rgba(255, 107, 53, 0.4),
+    0 1px 0 rgba(255, 255, 255, 0.2) inset !important;
+}
+
+.stacked-action-button[data-active="true"]:hover {
+  background: linear-gradient(135deg, rgba(255, 122, 68, 0.9) 0%, rgba(255, 155, 81, 0.9) 100%) !important;
+  box-shadow: 
+    0 8px 24px rgba(255, 107, 53, 0.5),
+    0 1px 0 rgba(255, 255, 255, 0.25) inset !important;
+  transform: translateY(-3px) scale(1.08) !important;
+}
+
+/* Model button specific styling */
+.model-button[data-model="base"] {
+  background: rgba(30, 70, 150, 0.8) !important;
+  border-color: rgba(100, 150, 255, 0.3) !important;
+  box-shadow: 
+    0 4px 16px rgba(30, 70, 150, 0.3),
+    0 1px 0 rgba(255, 255, 255, 0.1) inset !important;
+}
+
+.model-button[data-model="short"] {
+  background: rgba(150, 30, 150, 0.8) !important;
+  border-color: rgba(255, 100, 255, 0.3) !important;
+  box-shadow: 
+    0 4px 16px rgba(150, 30, 150, 0.3),
+    0 1px 0 rgba(255, 255, 255, 0.1) inset !important;
+}
+
+.model-button[data-model="base"]:hover {
+  background: rgba(40, 80, 160, 0.9) !important;
+  box-shadow: 
+    0 6px 20px rgba(30, 70, 150, 0.4),
+    0 1px 0 rgba(255, 255, 255, 0.15) inset !important;
+}
+
+.model-button[data-model="short"]:hover {
+  background: rgba(160, 40, 160, 0.9) !important;
+  box-shadow: 
+    0 6px 20px rgba(150, 30, 150, 0.4),
+    0 1px 0 rgba(255, 255, 255, 0.15) inset !important;
+}
+
+/* Icon styling within buttons */
+.stacked-action-button svg {
+  width: 20px !important;
+  height: 20px !important;
+  color: inherit !important;
+  transition: all 0.2s ease !important;
+}
+
+.stacked-action-button:hover svg {
+  transform: scale(1.1);
+}
+
+/* Character panel styling - inherit from original */
+.character-panel {
+  transition: all 0.3s ease;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.character-card {
+  transition: all 0.2s ease;
+}
+
+.character-card:hover {
+  box-shadow: 0 4px 8px rgba(255, 102, 0, 0.2);
+  border-color: rgba(255, 102, 0, 0.3);
+  transform: translateY(-2px);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .stacked-buttons-container {
+    top: 194px;
+    right: 15px;
+    gap: 6px;
+  }
+  
+  .stacked-action-button {
+    width: 42px !important;
+    height: 42px !important;
+  }
+  
+  .stacked-action-button svg {
+    width: 18px !important;
+    height: 18px !important;
+  }
+  
+  .character-panel {
+    top: 194px;
+    right: 70px;
+    width: 280px;
+  }
+}
+
+@media (max-width: 576px) {
+  .stacked-buttons-container {
+    top: 174px;
+    right: 10px;
+    gap: 5px;
+  }
+  
+  .stacked-action-button {
+    width: 38px !important;
+    height: 38px !important;
+  }
+  
+  .stacked-action-button svg {
+    width: 16px !important;
+    height: 16px !important;
+  }
+  
+  .character-panel {
+    top: 174px;
+    right: 55px;
+    width: 260px;
+  }
+}
+
+/* Extra small screens */
+@media (max-width: 480px) {
+  .stacked-buttons-container {
+    right: 8px;
+    gap: 4px;
+  }
+  
+  .stacked-action-button {
+    width: 36px !important;
+    height: 36px !important;
+  }
+  
+  .stacked-action-button svg {
+    width: 14px !important;
+    height: 14px !important;
+  }
+  
+  .character-panel {
+    right: 50px;
+    width: 240px;
+  }
+}
+
+/* Smooth stagger animation for buttons appearing */
+.stacked-action-button:nth-child(1) { animation-delay: 0.1s; }
+.stacked-action-button:nth-child(2) { animation-delay: 0.15s; }
+.stacked-action-button:nth-child(3) { animation-delay: 0.2s; }
+.stacked-action-button:nth-child(4) { animation-delay: 0.25s; }
+
+/* Tooltip-like indicators */
+.stacked-action-button::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: -120px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(0, 0, 0, 0.9);
+  color: white;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  transition: all 0.3s ease;
+  pointer-events: none;
+  z-index: 1001;
+}
+
+.stacked-action-button:hover::after {
+  opacity: 1;
+  visibility: visible;
+  left: -125px;
+}

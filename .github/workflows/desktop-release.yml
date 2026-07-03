@@ -1,0 +1,61 @@
+name: Desktop Release
+
+# Publica o app desktop (Windows .exe + macOS .dmg) no GitHub Releases DESTE repo.
+# Pré-requisitos:
+#   - Este repo deve ser o repo PÚBLICO dedicado ao desktop (a web consome os releases dele).
+#   - A web aponta para ele via REACT_APP_GITHUB_REPO_OWNER / _NAME.
+#
+# Como disparar:
+#   - Suba a versão em package.json e faça push de uma tag `vX.Y.Z`, OU
+#   - rode manualmente em Actions → "Desktop Release" → Run workflow.
+#
+# Assinatura (opcional): preencha os secrets abaixo. Vazios = build NÃO-ASSINADO
+#   (funciona, mas o usuário vê SmartScreen no Windows / Gatekeeper no macOS).
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write        # necessário para o electron-forge criar o release e subir assets
+
+jobs:
+  publish:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest   # gera FilmAssistantSetup.exe (Squirrel)
+          - os: macos-latest     # gera .dmg (Apple Silicon / arm64)
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # npm ci roda o postinstall (electron-rebuild do better-sqlite3).
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Publish to GitHub Releases
+        env:
+          # Forge precisa do owner/name explícitos (forge.config.js). Aponta para ESTE repo.
+          GITHUB_REPO_OWNER: ${{ github.repository_owner }}
+          GITHUB_REPO_NAME: ${{ github.event.repository.name }}
+          # Token padrão do Actions — tem contents:write neste repo (ver permissions acima).
+          # Se você publicar num repo DIFERENTE do que roda o workflow, troque por um
+          # PAT (secrets.PUBLISH_TOKEN) com contents:write no repo de releases.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # --- Assinatura Windows (opcional) ---
+          WINDOWS_CERT_FILE: ${{ secrets.WINDOWS_CERT_FILE }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          # --- Assinatura + notarização macOS (opcional) ---
+          APPLE_IDENTITY: ${{ secrets.APPLE_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npm run desktop:publish

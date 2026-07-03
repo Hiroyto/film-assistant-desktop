@@ -1,0 +1,88 @@
+/* Botões de download do app desktop (Windows + macOS) na landing web. */
+
+.ddl-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-top: 28px;
+}
+
+.ddl-label {
+  font-size: 0.82rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.ddl-version {
+  color: rgba(255, 255, 255, 0.4);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.ddl-buttons {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.ddl-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 20px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease, transform 0.15s ease;
+  backdrop-filter: blur(4px);
+}
+
+.ddl-btn:hover {
+  border-color: rgba(230, 126, 34, 0.7);
+  background: rgba(230, 126, 34, 0.10);
+  transform: translateY(-1px);
+}
+
+.ddl-icon {
+  display: inline-flex;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+/* Realce do SO do visitante. */
+.ddl-btn.ddl-recommended {
+  border-color: rgba(230, 126, 34, 0.85);
+  background: rgba(230, 126, 34, 0.14);
+}
+
+.ddl-badge {
+  margin-left: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #e67e22;
+  background: rgba(230, 126, 34, 0.18);
+}
+
+/* Estado indisponível / carregando. */
+.ddl-btn.ddl-disabled {
+  opacity: 0.5;
+  cursor: default;
+  pointer-events: none;
+}
+
+.ddl-note {
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.45);
+}

@@ -1,0 +1,327 @@
+/* =====================================================
+FILMASSISTANT SCREENPLAY LAYOUT ENGINE
+Hollywood-style page layout
+Prefix: fa-
+===================================================== */
+
+
+/* ================================
+PAGE BACKGROUND
+================================ */
+
+.fa-script-root{
+  width:8.5in;
+  margin:auto;
+
+  padding:40px 0;
+
+  background:#e5e5e5;
+
+  position:relative;
+
+  min-height:11in;
+}
+
+
+
+/* ================================
+PAGE STACK
+================================ */
+
+.fa-script-pages{
+  position:absolute;
+  top:0;
+  left:0;
+  border:3px solid red;
+
+  width:8.5in;
+
+  display:flex;
+  flex-direction:column;
+  gap:40px;
+
+  z-index:9999;
+
+  pointer-events:none;
+}
+
+
+
+/* ================================
+PAGE
+================================ */
+
+.fa-script-page{
+
+  width:8.5in;
+  height:11in;
+
+  background:white;
+
+  box-shadow:
+    0 8px 24px rgba(0,0,0,0.15);
+
+  position:relative;
+
+  flex-shrink:0;
+
+  pointer-events:none;
+
+}
+
+
+
+/* ================================
+EDITOR LAYER
+================================ */
+
+.fa-script-source{
+  position:relative;
+  width:8.5in;
+  z-index:1;
+  opacity:0.5;
+}
+
+
+/* ================================
+PROSEMIRROR
+================================ */
+
+.fa-script-source .ProseMirror{
+
+  width:100%;
+
+  box-sizing:border-box;
+
+  padding:
+
+    1in     /* top */
+    1in     /* right */
+    1in     /* bottom */
+    1.5in;  /* left */
+
+  font-family:
+    "Courier New",
+    Courier,
+    monospace;
+
+  font-size:12pt;
+
+  line-height:1.6;
+
+  min-height:11in;
+
+  outline:none;
+
+}
+
+
+
+/* ================================
+PARAGRAPH RESET
+================================ */
+
+.fa-script-source .ProseMirror p{
+
+  margin:0;
+
+  white-space:pre-wrap;
+
+  line-height:1.6;
+
+}
+
+
+
+/* ================================
+SCREENPLAY FORMATS
+================================ */
+
+
+/* SCENE HEADING */
+
+.fa-script-source
+.ProseMirror
+p[data-line-type="scene"]{
+
+  text-transform:uppercase;
+
+  font-weight:bold;
+
+  margin-top:2.5em;
+
+  margin-bottom:1em;
+
+}
+
+
+
+/* ACTION */
+
+.fa-script-source
+.ProseMirror
+p[data-line-type="description"]{
+
+  margin:0;
+
+}
+
+
+
+/* CHARACTER */
+
+.fa-script-source
+.ProseMirror
+p[data-line-type="character"]{
+
+  margin-left:2.7in;
+
+  margin-top:1.2em;
+
+  text-align:center;
+
+  text-transform:uppercase;
+
+}
+
+
+
+/* PARENTHETICAL */
+
+.fa-script-source
+.ProseMirror
+p[data-line-type="parenthetical"]{
+
+  margin-left:2.2in;
+
+  margin-right:2.4in;
+
+}
+
+
+
+/* DIALOGUE */
+
+.fa-script-source
+.ProseMirror
+p[data-line-type="dialogue"]{
+
+  margin-left:1.6in;
+
+  margin-right:1.6in;
+
+}
+
+
+
+/* TRANSITION */
+
+.fa-script-source
+.ProseMirror
+p[data-line-type="transition"]{
+
+  margin-left:4.8in;
+
+  text-align:right;
+
+  text-transform:uppercase;
+
+  margin-top:2em;
+
+}
+
+
+
+/* ================================
+SCENE ID BADGE
+================================ */
+
+.fa-script-source
+.ProseMirror
+p[data-line-type="scene"]::after{
+
+  content:attr(data-scene-id);
+
+  font-size:10pt;
+
+  color:#ff6600;
+
+  margin-left:8px;
+
+}
+
+
+
+/* ================================
+CURSOR
+================================ */
+
+.fa-script-source .ProseMirror *{
+
+  caret-color:#ff6600;
+
+}
+
+
+
+/* ================================
+SELECTION
+================================ */
+
+.fa-script-source .ProseMirror ::selection{
+
+  background:rgba(255,140,0,0.2);
+
+}
+
+
+
+/* ================================
+PRINT MODE
+================================ */
+
+@media print{
+
+.fa-script-root{
+
+  background:white;
+
+}
+
+.fa-script-page{
+
+  box-shadow:none;
+
+}
+
+}
+
+
+
+/* ================================
+MOBILE
+================================ */
+
+@media screen and (max-width:900px){
+
+.fa-script-root{
+
+  width:100%;
+
+}
+
+.fa-script-page{
+
+  width:100%;
+
+  height:auto;
+
+}
+
+.fa-script-source{
+
+  width:100%;
+
+}
+
+}

@@ -1,0 +1,194 @@
+/* ScenesActionButtons Component - Dedicated for Scenes Page */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+.scenes-action-buttons-container {
+  position: fixed;
+  top: 138px;
+  right: 20px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: scenesButtonsFadeInUp 0.4s ease-out;
+}
+
+@keyframes scenesButtonsFadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.scenes-action-button {
+  width: 48px !important;
+  height: 48px !important;
+  padding: 0 !important;
+  border-radius: 50% !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  background: rgba(20, 20, 20, 0.9) !important;
+  backdrop-filter: blur(20px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  color: rgba(255, 255, 255, 0.9) !important;
+  cursor: pointer !important;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  box-shadow: 
+    0 4px 16px rgba(0, 0, 0, 0.3),
+    0 1px 0 rgba(255, 255, 255, 0.1) inset !important;
+  font-family: 'Inter', sans-serif !important;
+  position: relative !important;
+  overflow: hidden !important;
+}
+
+.scenes-action-button::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.05) 100%);
+  border-radius: inherit;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.scenes-action-button:hover {
+  background: rgba(40, 40, 40, 0.95) !important;
+  border-color: rgba(255, 255, 255, 0.2) !important;
+  transform: translateY(-2px) scale(1.05) !important;
+  box-shadow: 
+    0 8px 24px rgba(0, 0, 0, 0.4),
+    0 1px 0 rgba(255, 255, 255, 0.15) inset !important;
+  color: rgba(255, 255, 255, 1) !important;
+}
+
+.scenes-action-button:hover::before {
+  opacity: 1;
+}
+
+.scenes-action-button:active {
+  transform: translateY(-1px) scale(1.02) !important;
+  box-shadow: 
+    0 4px 12px rgba(0, 0, 0, 0.3),
+    0 1px 0 rgba(255, 255, 255, 0.1) inset !important;
+}
+
+/* Active state for scenes intern button - Using cyan theme */
+.scenes-action-button[data-active="true"] {
+  background: linear-gradient(135deg, rgba(84, 191, 219, 0.8) 0%, rgba(100, 200, 230, 0.8) 100%) !important;
+  border-color: rgba(84, 191, 219, 0.4) !important;
+  color: #ffffff !important;
+  box-shadow: 
+    0 6px 20px rgba(84, 191, 219, 0.4),
+    0 1px 0 rgba(255, 255, 255, 0.2) inset !important;
+}
+
+.scenes-action-button[data-active="true"]:hover {
+  background: linear-gradient(135deg, rgba(71, 168, 194, 0.9) 0%, rgba(85, 185, 215, 0.9) 100%) !important;
+  box-shadow: 
+    0 8px 24px rgba(84, 191, 219, 0.5),
+    0 1px 0 rgba(255, 255, 255, 0.25) inset !important;
+  transform: translateY(-3px) scale(1.08) !important;
+}
+
+/* Icon styling within buttons */
+.scenes-action-button svg {
+  width: 20px !important;
+  height: 20px !important;
+  color: inherit !important;
+  transition: all 0.2s ease !important;
+}
+
+.scenes-action-button:hover svg {
+  transform: scale(1.1);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .scenes-action-buttons-container {
+    top: 194px;
+    right: 15px;
+    gap: 6px;
+  }
+  
+  .scenes-action-button {
+    width: 42px !important;
+    height: 42px !important;
+  }
+  
+  .scenes-action-button svg {
+    width: 18px !important;
+    height: 18px !important;
+  }
+}
+
+@media (max-width: 576px) {
+  .scenes-action-buttons-container {
+    top: 174px;
+    right: 10px;
+    gap: 5px;
+  }
+  
+  .scenes-action-button {
+    width: 38px !important;
+    height: 38px !important;
+  }
+  
+  .scenes-action-button svg {
+    width: 16px !important;
+    height: 16px !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .scenes-action-buttons-container {
+    right: 8px;
+    gap: 4px;
+  }
+  
+  .scenes-action-button {
+    width: 36px !important;
+    height: 36px !important;
+  }
+  
+  .scenes-action-button svg {
+    width: 14px !important;
+    height: 14px !important;
+  }
+}
+
+/* Smooth stagger animation for buttons appearing */
+.scenes-action-button:nth-child(1) { animation-delay: 0.1s; }
+
+/* Tooltip-like indicators for scenes buttons */
+.scenes-action-button::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: -120px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(0, 0, 0, 0.9);
+  color: white;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  transition: all 0.3s ease;
+  pointer-events: none;
+  z-index: 1001;
+}
+
+.scenes-action-button:hover::after {
+  opacity: 1;
+  visibility: visible;
+  left: -125px;
+}
