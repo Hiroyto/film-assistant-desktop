@@ -1,0 +1,974 @@
+/**
+ * HOMEPAGE STYLES
+ * 
+ * Styles for the new landing page component
+ * No Radix UI dependencies - pure CSS control
+ * Enhanced with dark gradient design improvements
+ */
+
+ .homepage-wrapper {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow-x: hidden;
+  }
+
+ .homepage-container {
+    min-height: auto;
+    background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+    color: #e0e0e0;
+    position: relative;
+    overflow-x: hidden;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+  }
+  
+  /* ============================================================
+     HERO BANNER SECTION
+     ============================================================ */
+  
+  .hero-banner {
+    background: transparent;
+    min-height: 100vh;
+    max-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 74px 2rem;
+    border-bottom: 2px solid rgba(58, 58, 58, 0.3);
+    position: relative;
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0;
+    z-index: 10;
+  }
+  
+  .hero-content {
+    width: 100%;
+    max-width: 800px;
+    text-align: center;
+    box-sizing: border-box;
+    margin: 0 auto;
+    padding-top: 3rem;
+    position: relative;
+    transform: translateY(0);
+    z-index: 10;
+  }
+  
+  .hero-title {
+    font-size: 3.5rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    margin: 0 0 2rem 0 !important;
+    padding: 0 !important;
+    color: #ffffff;
+    line-height: 1.2;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    text-align: center;
+    width: 100%;
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    position: relative !important;
+    top: 0 !important;
+    transform: none !important;
+  }
+
+  /* Gradient text for "Single Spark" - reversed for brighter end on "Spark" */
+  .gradient-text {
+    background: linear-gradient(-45deg, #FFD700 0%, #FF8C42 50%, #FF6B35 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    font-weight: 700;
+  }
+  
+  .hero-subtitle {
+    font-size: 1.3rem;
+    color: rgba(255, 255, 255, 0.7);
+    margin: 0 0 3.5rem 0;
+    font-weight: 300;
+    text-align: center;
+    width: 100%;
+    display: block;
+    visibility: visible;
+    opacity: 1;
+  }
+  
+  .hero-input-container {
+    margin: 0 auto 2.5rem auto;
+    position: relative;
+    width: 100%;
+    max-width: 100%;
+  }
+  
+  /* Clear button - appears in bottom right when input is focused */
+  .btn-clear-input {
+    position: absolute;
+    bottom: 0.75rem;
+    right: 0.75rem;
+    height: 32px;
+    padding: 0 1rem;
+    background: rgba(255, 140, 66, 0.15);
+    border: 1px solid rgba(255, 140, 66, 0.3);
+    border-radius: 6px;
+    color: #ff8c42;
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    opacity: 0;
+    animation: fadeInButton 0.2s ease forwards;
+    backdrop-filter: blur(10px);
+    z-index: 10;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  }
+
+  .btn-clear-input:hover {
+    background: rgba(255, 140, 66, 0.25);
+    border-color: rgba(255, 140, 66, 0.5);
+    transform: scale(1.05);
+  }
+
+  .btn-clear-input:active {
+    transform: scale(0.95);
+  }
+
+  @keyframes fadeInButton {
+    from {
+      opacity: 0;
+      transform: scale(0.9);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+  
+  .hero-input {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.03);
+    border: 2px solid rgba(255, 140, 66, 0.3);
+    border-radius: 12px;
+    padding: 1.25rem 1.5rem;
+    font-size: 1.1rem;
+    color: #ffffff;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    transition: all 0.3s ease-in-out;
+    line-height: 1.5;
+    min-height: 90px;
+    height: auto;
+    backdrop-filter: blur(10px);
+    display: flex;
+    align-items: center;
+    box-sizing: border-box;
+    outline: none !important;
+    resize: none;
+    overflow: hidden;
+    position: relative;
+    background-clip: padding-box;
+    box-shadow: 0 0 30px rgba(255, 140, 66, 0.4);
+  }
+
+  .hero-button-container {
+    text-align: center;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+  }
+  
+  .button-divider {
+    display: flex;
+    align-items: center;
+    width: 200px;
+    margin: 0.5rem 0;
+  }
+  
+  .button-divider::before,
+  .button-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(to right, transparent, rgba(255, 140, 66, 0.3), transparent);
+  }
+  
+  .divider-text {
+    padding: 0 1rem;
+    color: rgba(255, 255, 255, 0.3);
+    font-size: 0.9rem;
+    font-weight: 300;
+    text-transform: lowercase;
+  }
+  
+  .hero-input:hover {
+    border-color: rgba(255, 140, 66, 0.5);
+    box-shadow: 0 0 35px rgba(255, 107, 53, 0.5);
+    background: rgba(255, 255, 255, 0.05);
+  }
+  
+  .hero-input:focus {
+    border: 2px solid #FF8C42 !important;
+    box-shadow: 0 6px 20px rgba(255, 140, 0, 0.25) !important;
+    background: rgba(255, 255, 255, 0.05);
+    transform: translateY(-2px);
+    height: 120px;
+    overflow-y: auto;
+    outline: none !important;
+    display: block;
+    align-items: flex-start;
+    padding: 1.25rem 3.5rem 1.25rem 1.5rem; /* Extra right padding for clear button */
+  }
+  
+  .hero-input::placeholder {
+    color: rgba(255, 255, 255, 0.4);
+    font-style: italic;
+  }
+  
+  /* ============================================================
+     BUTTON STYLES
+     ============================================================ */
+  
+  /* Button text styling */
+  .btn-story-text {
+    position: relative;
+    z-index: 3;
+  }
+
+  /* Primary button - Build Your Story */
+  .btn-build-story {
+    font-size: 1.1rem;
+    padding: 1rem 3rem;
+    background: linear-gradient(135deg, #FF8C42 0%, #FF6B35 100%);
+    color: #ffffff;
+    border: none;
+    border-radius: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 20px rgba(255, 140, 66, 0.3);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    position: relative;
+    overflow: hidden;
+    z-index: 1;
+  }
+
+  .btn-build-story::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(135deg, #59c4bc 0%, #4a9f99 100%);
+    transition: left 0.4s ease;
+    z-index: -1;
+  }
+
+  .btn-build-story:hover::before {
+    left: 0;
+  }
+
+  .btn-build-story:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 30px rgba(89, 196, 188, 0.4);
+  }
+
+  .btn-build-story:active {
+    transform: translateY(0);
+    box-shadow: 0 4px 20px rgba(89, 196, 188, 0.3);
+  }
+
+  .btn-build-story:disabled {
+    background: linear-gradient(135deg, #666 0%, #777 100%);
+    cursor: not-allowed;
+    opacity: 0.5;
+    transform: none;
+  }
+  
+  /* Secondary button - Jump to Outline */
+  .btn-jump-outline {
+    font-size: 1rem;
+    padding: 0.9rem 2.5rem;
+    background: transparent;
+    color: #ff8c42;
+    border: 2px solid #ff8c42;
+    border-radius: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+  }
+  
+  .btn-jump-outline:hover {
+    background: rgba(255, 140, 66, 0.1);
+    box-shadow: 0 0 20px rgba(255, 140, 66, 0.2);
+    transform: translateY(-2px);
+  }
+  
+  .btn-jump-outline:active {
+    transform: translateY(0);
+  }
+  
+  /* Floating scroll button - bottom right of hero */
+  .btn-scroll-to-stories {
+    position: absolute;
+    bottom: 2rem;
+    right: 3.5rem;
+    background: rgba(255, 140, 66, 0.1);
+    color: #ff8c42;
+    border: 2px solid rgba(255, 140, 66, 0.4);
+    border-radius: 50px;
+    padding: 0.75rem 1.5rem;
+    font-size: 0.95rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    align-items: center;
+    gap: 0.5rem;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 4px 15px rgba(255, 140, 66, 0.2);
+    animation: float-button 3s ease-in-out infinite;
+  }
+
+  .btn-scroll-to-stories:hover {
+    background: rgba(255, 140, 66, 0.2);
+    border-color: rgba(255, 140, 66, 0.6);
+    box-shadow: 0 6px 20px rgba(255, 140, 66, 0.3);
+    transform: translateY(-2px);
+  }
+
+  .btn-scroll-to-stories:active {
+    transform: translateY(0);
+  }
+
+  .btn-scroll-to-stories svg {
+    animation: bounce-arrow 2s ease-in-out infinite;
+  }
+
+  @keyframes float-button {
+    0%, 100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-5px);
+    }
+  }
+
+  @keyframes bounce-arrow {
+    0%, 100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(3px);
+    }
+  }
+  
+  /* ============================================================
+     PROJECTS SECTION
+     ============================================================ */
+  
+  .projects-section {
+    padding: 4rem 2rem;
+    background: transparent;
+    position: relative;
+    z-index: 10;
+    width: 100%;
+    min-height: 60vh;
+  }
+
+  .projects-container {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
+    width: 100%;
+    box-sizing: border-box;
+    background: rgba(42, 42, 42, 0.6);
+    border-radius: 1.5rem;
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 107, 53, 0.1);
+    position: relative;
+    /* Subtle orange glow underneath */
+    box-shadow: 
+      0 8px 30px rgba(255, 140, 66, 0.15),
+      0 15px 60px rgba(255, 107, 53, 0.08),
+      0 0 80px rgba(255, 140, 66, 0.06);
+  }
+  
+  /* Additional diffused glow underneath the container */
+  .projects-container::after {
+    content: '';
+    position: absolute;
+    bottom: -40px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 85%;
+    height: 40px;
+    background: radial-gradient(ellipse at center, rgba(255, 140, 66, 0.3) 0%, rgba(255, 107, 53, 0.15) 40%, transparent 80%);
+    filter: blur(20px);
+    pointer-events: none;
+    z-index: -1;
+  }
+  
+  .projects-header {
+    text-align: center;
+    font-size: 1.8rem;
+    font-weight: 600;
+    color: #e0e0e0;
+    margin-bottom: 1.5rem;
+    z-index: 10;
+  }
+
+  /* Ensure StoryCard glassmorphic effect works on HomePage */
+  /* Force all elements in projects section to not have white backgrounds */
+  .projects-section *,
+  .projects-section *::before,
+  .projects-section *::after {
+    background-color: transparent !important;
+    z-index: 10;
+  }
+
+  /* Ensure grid has no extra margin/padding */
+  .projects-section .grid {
+    margin: 0 !important;
+    padding: 0 !important;
+    grid-auto-rows: min-content !important;
+    align-items: start !important;
+    gap: 1rem !important;
+  }
+
+  /* Ensure grid items (card wrappers) have no extra spacing */
+  .projects-section .grid > div {
+    margin: 0 !important;
+    padding: 0 !important;
+    height: auto !important;
+    min-height: auto !important;
+  }
+
+  /* Apply dark glassmorphic background only to the card button element */
+  .projects-section [role="button"] {
+    background: rgba(30, 30, 30, 0.6) !important;
+    border: 1px solid rgba(255, 107, 53, 0.3) !important;
+    backdrop-filter: blur(10px);
+    width: 100%;
+    height: auto !important;
+    box-sizing: border-box;
+  }
+
+  /* Override StoryCard's hover state */
+  .projects-section [role="button"]:hover {
+    background: rgba(40, 40, 40, 0.8) !important;
+    border-color: rgba(255, 107, 53, 0.5) !important;
+    box-shadow: 0 8px 16px rgba(255, 107, 53, 0.2) !important;
+  }
+
+  /* Keep the projects container with its dark background */
+  .projects-container {
+    background: rgba(42, 42, 42, 0.6) !important;
+    z-index: 10;
+  }
+  
+  /* ============================================================
+     EMPTY STATE
+     ============================================================ */
+  
+  .empty-state {
+    text-align: center;
+    padding: 3rem;
+    color: #888;
+    width: 100%;
+    max-width: 400px;
+    margin: 0 auto;
+  }
+  
+  .empty-state h3 {
+    font-size: 1.3rem;
+    margin-bottom: 0.5rem;
+    color: #b0b0b0;
+  }
+  
+  .empty-state p {
+    font-size: 1rem;
+    margin-bottom: 1.5rem;
+    color: #888;
+  }
+  
+  /* ============================================================
+     TIPS SECTION
+     ============================================================ */
+  
+  .tips-section {
+    padding: 2rem 0 4rem;
+    width: 100%;
+    position: relative;
+    z-index: 10;
+  }
+
+  .tips-container {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 0 2rem;
+    background: #2a2a2a;
+    padding: 2rem;
+    border-radius: 12px;
+    border: 1px solid #3a3a3a;
+    text-align: center;
+    box-sizing: border-box;
+  }
+  
+  .tips-section h3 {
+    font-size: 1.2rem;
+    margin-bottom: 1.5rem;
+    color: #e0e0e0;
+  }
+  
+  .tips-actions {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  
+  .tip-btn {
+    background: #333;
+    color: #e0e0e0;
+    border: 1px solid #4a4a4a;
+    padding: 0.75rem 1.5rem;
+    border-radius: 8px;
+    font-size: 0.95rem;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    font-weight: 500;
+  }
+  
+  .tip-btn:hover {
+    background: #3a3a3a;
+    border-color: #ff8c42;
+    color: #ff8c42;
+    transform: translateY(-2px);
+  }
+  
+  /* ============================================================
+     GRADIENT BACKGROUND & DECORATIVE ELEMENTS
+     ============================================================ */
+  
+  .gradient-background {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: 
+      radial-gradient(ellipse at 20% 30%, rgba(255, 140, 66, 0.08) 0%, transparent 40%),
+      radial-gradient(ellipse at 80% 70%, rgba(255, 107, 53, 0.06) 0%, transparent 40%),
+      radial-gradient(circle at 50% 50%, rgba(255, 200, 100, 0.04) 0%, transparent 60%);
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  /* Mesh gradient overlay for depth */
+  .gradient-mesh {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: 
+      linear-gradient(135deg, rgba(255, 140, 66, 0.05) 0%, transparent 30%),
+      linear-gradient(-135deg, rgba(255, 107, 53, 0.03) 0%, transparent 30%),
+      linear-gradient(45deg, rgba(255, 200, 100, 0.02) 0%, transparent 40%);
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  /* Decorative gradient blobs - increased count and animation */
+  .decoration {
+    position: fixed;
+    border-radius: 50%;
+    filter: blur(120px);
+    opacity: 0.15;
+    pointer-events: none;
+    animation: float 25s ease-in-out infinite;
+    z-index: 1;
+  }
+
+  .decoration-1 {
+    top: -150px;
+    left: -150px;
+    width: 500px;
+    height: 500px;
+    background: radial-gradient(circle, rgba(255, 215, 0, 0.6), rgba(255, 140, 66, 0.4), transparent);
+    animation-delay: 0s;
+  }
+
+  .decoration-2 {
+    bottom: -200px;
+    right: -200px;
+    width: 600px;
+    height: 600px;
+    background: radial-gradient(circle, rgba(255, 107, 53, 0.5), rgba(255, 140, 0, 0.3), transparent);
+    animation-delay: 8s;
+  }
+
+  .decoration-3 {
+    top: 40%;
+    left: 50%;
+    width: 400px;
+    height: 400px;
+    background: radial-gradient(circle, rgba(255, 200, 100, 0.4), rgba(255, 140, 66, 0.2), transparent);
+    animation-delay: 15s;
+    animation-name: float-center;
+  }
+
+  @keyframes float {
+    0%, 100% {
+      transform: translate(0, 0) scale(1);
+    }
+    25% {
+      transform: translate(20px, -30px) scale(1.03);
+    }
+    50% {
+      transform: translate(-15px, 20px) scale(0.97);
+    }
+    75% {
+      transform: translate(25px, 15px) scale(1.01);
+    }
+  }
+
+  @keyframes float-center {
+    0%, 100% {
+      transform: translate(-50%, -50%) scale(1);
+    }
+    25% {
+      transform: translate(calc(-50% + 20px), calc(-50% - 30px)) scale(1.03);
+    }
+    50% {
+      transform: translate(calc(-50% - 15px), calc(-50% + 20px)) scale(0.97);
+    }
+    75% {
+      transform: translate(calc(-50% + 25px), calc(-50% + 15px)) scale(1.01);
+    }
+  }
+
+  /* Geometric shapes for visual interest */
+  .geometric-shapes {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .shape {
+    position: absolute;
+    opacity: 0.03;
+    border: 1px solid rgba(255, 140, 66, 0.2);
+  }
+
+  .shape-circle {
+    width: 300px;
+    height: 300px;
+    border-radius: 50%;
+    top: 15%;
+    right: 10%;
+    animation: rotate 40s linear infinite;
+  }
+
+  .shape-triangle {
+    width: 0;
+    height: 0;
+    border-left: 200px solid transparent;
+    border-right: 200px solid transparent;
+    border-bottom: 350px solid rgba(255, 140, 66, 0.02);
+    bottom: 10%;
+    left: 5%;
+    animation: rotate 50s linear infinite reverse;
+    border: none;
+    background: linear-gradient(135deg, 
+      transparent 45%, 
+      rgba(255, 140, 66, 0.02) 45%, 
+      rgba(255, 140, 66, 0.02) 55%, 
+      transparent 55%
+    );
+  }
+
+  .shape-square {
+    width: 250px;
+    height: 250px;
+    top: 60%;
+    left: 15%;
+    transform: rotate(45deg);
+    border-radius: 20px;
+    animation: pulseRotate 30s ease-in-out infinite;
+  }
+
+  @keyframes rotate {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  @keyframes pulseRotate {
+    0%, 100% {
+      transform: rotate(45deg) scale(1);
+      opacity: 0.03;
+    }
+    50% {
+      transform: rotate(45deg) scale(1.1);
+      opacity: 0.05;
+    }
+  }
+
+  /* Subtle noise texture overlay */
+  .homepage-container::after {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 1;
+    opacity: 0.5;
+  }
+  
+  /* ============================================================
+     RESPONSIVE DESIGN
+     ============================================================ */
+  
+  @media (max-width: 768px) {
+    .hero-banner {
+      min-height: 60vh;
+      padding: 3rem 1rem;
+    }
+
+    .hero-content {
+      padding-top: 2rem;
+    }
+  
+    .hero-title {
+      font-size: 2.5rem;
+      margin-bottom: 1rem;
+    }
+  
+    .hero-subtitle {
+      font-size: 1.1rem;
+      margin-bottom: 2rem;
+    }
+  
+    .hero-input {
+      font-size: 1rem;
+      padding: 1.25rem 1rem;
+    }
+  
+    .hero-input-container {
+      margin-bottom: 2rem;
+    }
+
+    .btn-build-story {
+      font-size: 1rem;
+      padding: 0.875rem 2rem;
+    }
+
+    .btn-scroll-to-stories {
+      bottom: 1.5rem;
+      right: 2rem;
+      padding: 0.65rem 1.25rem;
+      font-size: 0.85rem;
+    }
+  
+    /* .projects-section {
+      padding: 3rem 0;
+    } */
+  
+    .projects-header {
+      font-size: 1.4rem;
+      margin-bottom: 2rem;
+    }
+  
+    .story-card {
+      min-width: 250px;
+      max-width: 250px;
+    }
+  
+    .empty-state {
+      min-width: auto;
+      padding: 2rem 1rem;
+    }
+  
+    .tips-section {
+      margin: 2rem 0 2rem;
+    }
+  
+    .tips-actions {
+      flex-direction: column;
+    }
+  
+    .tip-btn {
+      width: 100%;
+    }
+
+    /* Reduce background effects on mobile for performance */
+    .decoration {
+      filter: blur(80px);
+      opacity: 0.1;
+    }
+
+    .shape {
+      display: none;
+    }
+
+    .homepage-container::after {
+      opacity: 0.3;
+    }
+  }
+  
+  @media (max-width: 480px) {
+    .hero-title {
+      font-size: 1.75rem;
+    }
+  
+    .hero-subtitle {
+      font-size: 1rem;
+    }
+  
+    .hero-input {
+      font-size: 0.95rem;
+      height: 60px;
+    }
+  
+    .projects-header {
+      font-size: 1.2rem;
+    }
+  
+    .story-card {
+      min-width: 220px;
+      max-width: 220px;
+    }
+  }
+  
+  /* ============================================================
+     LOADING STATES
+     ============================================================ */
+  
+  .loading-skeleton {
+    background: linear-gradient(90deg, #2a2a2a 25%, #333 50%, #2a2a2a 75%);
+    background-size: 200% 100%;
+    animation: loading 1.5s infinite;
+  }
+  
+  @keyframes loading {
+    0% {
+      background-position: 200% 0;
+    }
+    100% {
+      background-position: -200% 0;
+    }
+  }
+  
+  /* ============================================================
+     ACCESSIBILITY
+     ============================================================ */
+  
+  .hero-input:focus-visible,
+  .btn-build-story:focus-visible,
+  .btn-jump-outline:focus-visible,
+  .tip-btn:focus-visible {
+    outline: 2px solid #59c4bc;
+    outline-offset: 2px;
+  }
+  
+  /* Reduced motion for users who prefer it */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+
+    .decoration,
+    .shape {
+      animation: none !important;
+    }
+
+    .btn-scroll-to-stories,
+    .btn-scroll-to-stories svg {
+      animation: none !important;
+    }
+  }
+
+  /* ============================================================
+     FOOTER OVERRIDE - Prevent excessive white space
+     ============================================================ */
+  
+  .footer-wrapper {
+    width: 100%;
+    max-height: 150px;
+    overflow: hidden;
+    flex-shrink: 0;
+    margin-top: auto;
+  }
+
+  /* Override Radix Theme in Footer */
+  .footer-wrapper > div[class*="Theme"],
+  .footer-wrapper .rt-Theme {
+    min-height: auto !important;
+    height: auto !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  /* footer,
+  .footer,
+  [class*="footer"],
+  [class*="Footer"] {
+    min-height: auto !important;
+    max-height: 150px !important;
+    height: auto !important;
+    padding: 2rem 1rem !important;
+    margin: 0 !important;
+    flex-shrink: 0 !important;
+  } */
+  
+  /* Ensure footer children don't expand */
+  /* footer > *,
+  .footer > *,
+  footer [class*="Flex"],
+  .footer [class*="Flex"] {
+    margin: 0 !important;
+    padding: 1rem 0 !important;
+    min-height: auto !important;
+  } */
+
+  /* Constrain Radix Flex inside footer */
+  /* footer .rt-Flex,
+  .footer-wrapper .rt-Flex {
+    min-height: auto !important;
+    padding: 1rem !important;
+  }
+   */

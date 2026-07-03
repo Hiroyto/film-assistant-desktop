@@ -1,0 +1,1320 @@
+/**
+ * scripts.css — Screenplay editor styles
+ * Sections: Font, Layout, ProseMirror, Line Types, Dark Theme, Light Theme,
+ *           Fullscreen Dark, Fullscreen Light, Toolbar, Dropdowns, Sidebar,
+ *           Overlays, Character Popup, Line Breaks, Layout Utils, Print/Mobile
+ */
+
+/* ===== 1. FONT CONSISTENCY ===== */
+.screenplay-editor-container,
+.screenplay-content-area,
+.ProseMirror,
+.ProseMirror *,
+.fullscreen-script-overlay .ProseMirror,
+.fullscreen-script-overlay .ProseMirror * {
+  font-family: "Courier New", "Courier", monospace !important;
+  font-size: 12pt !important;
+}
+
+@media screen {
+  .screenplay-editor-container,
+  .screenplay-content-area,
+  .ProseMirror,
+  .fullscreen-script-overlay .ProseMirror {
+    -webkit-font-smoothing: auto !important;
+    -moz-osx-font-smoothing: auto !important;
+    text-rendering: optimizeSpeed !important;
+  }
+}
+
+/* ===== 2. EDITOR CONTAINER LAYOUT ===== */
+.screenplay-editor-container {
+  position: relative;
+  width: 100%;
+  max-width: none;
+  margin: 0 auto;
+  overflow: hidden;
+  box-sizing: border-box;
+  display: flex;
+}
+
+.screenplay-content-area {
+  flex: none;
+  width: 100%;     
+  position: relative;
+  overflow: visible;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.screenplay-toolbar-area {
+  flex-shrink: 0;
+  width: 100%;
+  z-index: 100;
+  position: sticky;
+  top: 0;
+  background-color: transparent;
+}
+
+.toolbar-spacer {
+  flex: 1;
+}
+
+/* Format buttons center naturally within the toolbar.
+   Right-side icons are absolutely positioned so they don't push the center off. */
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.toolbar-group-end {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  position: absolute;
+  right: 0;
+  top: 0;
+  height: 100%;
+}
+
+/* ===== 3. PROSEMIRROR CORE ===== */
+.ProseMirror {
+  font-family:"Courier New",monospace;
+  font-size:12pt;
+  width:100%;
+  min-height: 11in;
+
+  line-height:1.6;
+  box-sizing:border-box;
+
+  outline:none;
+}
+
+.ProseMirror p {
+  margin: 0;
+  padding: 0 !important;
+  min-height: 1.5em !important;
+  position: relative !important;
+  line-height: 1.5 !important;
+  white-space: pre-wrap !important;
+  color: #000000 !important;
+  font-family: "Courier New", "Courier", monospace !important;
+  font-size: 12pt !important;
+  box-sizing: border-box !important;
+  break-inside: avoid;
+}
+
+.ProseMirror p[data-line-type="character"],
+.ProseMirror p[data-line-type="dialogue"],
+.ProseMirror p[data-line-type="parenthetical"] {
+  break-inside: avoid;
+}
+
+.ProseMirror p[style*="break-before: page"] {
+  margin-top: 2em;
+}
+
+.ProseMirror p + p {
+  margin-top: 1em 
+}
+
+.ProseMirror
+  p[data-line-type="dialogue"]
+  + p:not([data-line-type="dialogue"]):not([data-line-type="parenthetical"]) {
+  margin-top: 1.8em
+}
+
+.ProseMirror p:empty::before {
+  content: "\200B";
+  display: inline;
+  white-space: pre;
+  font-family: "Courier New", "Courier", monospace !important;
+  font-size: 12pt !important;
+}
+
+.ProseMirror p:empty {
+  min-height: 1.6em !important;
+  font-family: "Courier New", "Courier", monospace !important;
+  font-size: 12pt !important;
+}
+
+.ProseMirror ::selection {
+  background-color: rgba(255, 140, 0, 0.2);
+}
+
+.ProseMirror.has-focus {
+  outline: none;
+}
+
+.ProseMirror * {
+  caret-color: #ff6600;
+}
+
+/* ===== 4. SCREENPLAY LINE TYPES (STANDARD FORMAT) ===== */
+/* Matches exportScreenplayToPdf.ts formatting exactly */
+
+/* SCENE HEADINGS - Flush left, uppercase, bold */
+.ProseMirror p[data-line-type="scene"] {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  max-width: 6in !important;
+  text-transform: uppercase;
+  font-weight: bold;
+  margin-top: 2em;
+  margin-bottom: 0 !important;
+  font-family: "Courier New", "Courier", monospace !important;
+  font-size: 12pt !important;
+  line-height: 1.5 !important;
+}
+
+/* ACTION/DESCRIPTION - Flush left */
+.ProseMirror p[data-line-type="description"] {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  max-width: 6in !important;
+}
+
+/* CHARACTER NAME - 2.2in from left margin (55.9mm in PDF) */
+.ProseMirror p[data-line-type="character"] {
+  margin-left: 2.2in !important;
+  margin-right: 0 !important;
+  width: auto !important;
+  max-width: 3.8in !important;
+  text-transform: uppercase;
+  text-align: left;
+  margin-top: 1em;
+  margin-bottom: 0 !important;
+}
+
+/* PARENTHETICAL - 1.6in from left margin (40.6mm in PDF), 2.3in wide (58.4mm in PDF) */
+.ProseMirror p[data-line-type="parenthetical"] {
+  margin-left: 1.6in !important;
+  margin-right: 0 !important;
+  width: 2.3in !important;
+  font-family: "Courier New", "Courier", monospace !important;
+  font-size: 12pt !important;
+  line-height: 1.5 !important;
+  margin-top: 0;
+  margin-bottom: 0 !important;
+}
+
+/* DIALOGUE - 1.0in from left margin (25.4mm in PDF), 3.5in wide (88.9mm in PDF) */
+.ProseMirror p[data-line-type="dialogue"] {
+  margin-left: 1.0in !important;
+  margin-right: 0 !important;
+  width: 3.5in !important;
+  margin-top: 0;
+  margin-bottom: 0 !important;
+}
+
+/* TRANSITION - Right aligned, uppercase */
+.ProseMirror p[data-line-type="transition"] {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  width: 6in !important;
+  text-align: right;
+  text-transform: uppercase;
+  font-family: "Courier New", "Courier", monospace !important;
+  font-size: 12pt !important;
+  line-height: 1.5 !important;
+  margin-top: 1em;
+  margin-bottom: 1em !important;
+}
+
+.ProseMirror p[data-line-type="scene"]::after {
+  content: attr(data-scene-id);
+  display: inline-block;
+  font-size: 10pt !important;
+  color: rgba(255, 102, 0, 0.8) !important;
+  background-color: rgba(255, 102, 0, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: 8px;
+  font-weight: normal !important;
+  vertical-align: middle;
+  text-transform: none !important;
+  font-family: "Courier New", "Courier", monospace !important;
+}
+
+/* ===== 5. CHARCOAL (DARK) THEME ===== */
+.screenplay-content-area.dark-theme .screenplay-page {
+  background-color: #1f2937;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+}
+
+.screenplay-content-area.dark-theme .ProseMirror {
+  color: #f3f4f6 !important;
+  font-family: "Courier New", "Courier", monospace !important;
+  font-size: 12pt !important;
+  line-height: 1.5 !important;
+  min-height: auto !important;
+  height: auto !important;
+}
+
+.screenplay-content-area.dark-theme .ProseMirror p {
+  color: #f3f4f6 !important;
+  font-family: "Courier New", "Courier", monospace !important;
+  font-size: 12pt !important;
+  line-height: 1.5 !important;
+}
+
+.screenplay-content-area.dark-theme .ProseMirror p[data-line-type="description"] {
+  color: #f3f4f6 !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
+.screenplay-content-area.dark-theme .ProseMirror p[data-line-type="scene"] {
+  text-transform: uppercase;
+  font-weight: bold;
+  margin-top: 2em;
+  margin-bottom: 0 !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
+.screenplay-content-area.dark-theme .ProseMirror p[data-line-type="character"] {
+  text-align: left !important;
+  margin-left: 2.2in !important;
+  margin-right: 0 !important;
+  width: auto !important;
+  max-width: 3.8in !important;
+  margin-top: 1em;
+  text-transform: uppercase;
+}
+
+.screenplay-content-area.dark-theme .ProseMirror p[data-line-type="dialogue"] {
+  margin-left: 1.0in !important;
+  margin-right: 0 !important;
+  width: 3.5in !important;
+}
+
+.screenplay-content-area.dark-theme .ProseMirror p[data-line-type="parenthetical"] {
+  margin-left: 1.6in !important;
+  margin-right: 0 !important;
+  width: 2.3in !important;
+  margin-top: 0;
+  margin-bottom: 0 !important;
+}
+
+.screenplay-content-area.dark-theme .ProseMirror p[data-line-type="transition"] {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  width: 6in !important;
+  text-align: right;
+  text-transform: uppercase;
+  margin-top: 1em;
+  margin-bottom: 1em !important;
+}
+
+.screenplay-content-area.dark-theme .ProseMirror p[data-line-type="scene"]::after {
+  color: rgba(255, 102, 0, 0.9) !important;
+  background-color: rgba(255, 102, 0, 0.15);
+}
+
+.screenplay-content-area.dark-theme .ProseMirror p + p {
+  margin-top: 1em;
+}
+
+.screenplay-content-area.dark-theme
+  .ProseMirror
+  p[data-line-type="dialogue"]
+  + p:not([data-line-type="dialogue"]):not([data-line-type="parenthetical"]) {
+  margin-top: 1.8em;
+}
+
+.screenplay-content-area.dark-theme .ProseMirror ::selection {
+  background-color: rgba(255, 140, 0, 0.35);
+}
+
+.screenplay-content-area.dark-theme .ProseMirror * {
+  caret-color: #ff6600;
+}
+
+/* ===== 6. LIGHT THEME ===== */
+.screenplay-content-area.light-theme {
+  background-color: var(--bg-primary);
+}
+
+.screenplay-content-area.light-theme .screenplay-editor-root {
+  background-color: #e5e7eb;
+}
+
+.screenplay-content-area.light-theme .screenplay-page {
+  background-color: #ffffff;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+}
+
+.screenplay-content-area.light-theme .ProseMirror {
+  color: #111827 !important;
+  font-family: "Courier New", "Courier", monospace !important;
+  font-size: 12pt !important;
+  line-height: 1.5 !important;
+  min-height: auto !important;
+  height: auto !important;
+}
+
+.screenplay-content-area.light-theme .ProseMirror p {
+  color: #111827 !important;
+  font-family: "Courier New", "Courier", monospace !important;
+  font-size: 12pt !important;
+  line-height: 1.5 !important;
+}
+
+.screenplay-content-area.light-theme .ProseMirror p[data-line-type="description"] {
+  color: #111827 !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
+.screenplay-content-area.light-theme .ProseMirror p[data-line-type="scene"] {
+  text-transform: uppercase;
+  font-weight: bold;
+  margin-top: 2em;
+  margin-bottom: 0 !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
+.screenplay-content-area.light-theme .ProseMirror p[data-line-type="character"] {
+  text-align: left !important;
+  margin-left: 2.2in !important;
+  margin-right: 0 !important;
+  width: auto !important;
+  max-width: 3.8in !important;
+  margin-top: 1em;
+  text-transform: uppercase;
+}
+
+.screenplay-content-area.light-theme .ProseMirror p[data-line-type="dialogue"] {
+  margin-left: 1.0in !important;
+  margin-right: 0 !important;
+  width: 3.5in !important;
+}
+
+.screenplay-content-area.light-theme .ProseMirror p[data-line-type="parenthetical"] {
+  margin-left: 1.6in !important;
+  margin-right: 0 !important;
+  width: 2.3in !important;
+  margin-top: 0;
+  margin-bottom: 0 !important;
+}
+
+.screenplay-content-area.light-theme .ProseMirror p[data-line-type="transition"] {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  width: 6in !important;
+  text-align: right;
+  text-transform: uppercase;
+  margin-top: 1em;
+  margin-bottom: 1em !important;
+}
+
+.screenplay-content-area.light-theme .ProseMirror p[data-line-type="scene"]::after {
+  background-color: rgba(255, 102, 0, 0.1);
+}
+
+.screenplay-content-area.light-theme .ProseMirror p + p {
+  margin-top: 1em;
+}
+
+.screenplay-content-area.light-theme
+  .ProseMirror
+  p[data-line-type="dialogue"]
+  + p:not([data-line-type="dialogue"]):not([data-line-type="parenthetical"]) {
+  margin-top: 1.8em;
+}
+
+.screenplay-content-area.light-theme .ProseMirror ::selection {
+  background-color: rgba(255, 140, 0, 0.2);
+}
+
+.screenplay-content-area.light-theme .ProseMirror * {
+  caret-color: #ff6600;
+}
+
+/* ===== 7. FULLSCREEN DARK THEME ===== */
+.fullscreen-script-overlay .screenplay-content-area {
+  background-color: #2d3748 !important;
+  color: white !important;
+}
+
+.fullscreen-script-overlay .ProseMirror {
+  background-color: #2d3748 !important;
+  color: white !important;
+}
+
+.fullscreen-script-overlay .ProseMirror p {
+  color: white !important;
+}
+
+.fullscreen-script-overlay .screenplay-content .ProseMirror p[data-line-type="scene"] {
+  color: #2563eb !important;
+  text-transform: uppercase;
+  font-weight: bold;
+  margin-top: 2em;
+  margin-bottom: 0 !important;
+}
+
+.fullscreen-script-overlay .screenplay-content .ProseMirror p[data-line-type="character"] {
+  color: #dc2626 !important;
+  text-align: left !important;
+  margin-left: 2.2in !important;
+  width: auto !important;
+  max-width: 3.8in !important;
+  margin-top: 1em;
+  text-transform: uppercase;
+}
+
+.fullscreen-script-overlay .screenplay-content .ProseMirror p[data-line-type="dialogue"] {
+  margin-left: 1.0in !important;
+  width: 3.5in !important;
+}
+
+.fullscreen-script-overlay .screenplay-content .ProseMirror p[data-line-type="parenthetical"] {
+  margin-left: 1.6in !important;
+  width: 2.3in !important;
+  margin-top: 0;
+  margin-bottom: 0 !important;
+}
+
+.fullscreen-script-overlay .screenplay-content .ProseMirror p[data-line-type="transition"] {
+  color: #9333ea !important;
+  margin-left: 0 !important;
+  width: 6in !important;
+  text-align: right;
+  text-transform: uppercase;
+  margin-top: 1em;
+  margin-bottom: 1em !important;
+}
+
+.fullscreen-script-overlay .screenplay-content .ProseMirror p[data-line-type="description"] {
+  color: white !important;
+  margin-left: 0 !important;
+}
+
+.fullscreen-script-overlay .screenplay-content .ProseMirror p[data-line-type="scene"]::after {
+  content: attr(data-scene-id);
+  display: inline-block;
+  font-size: 10pt !important;
+  color: rgba(255, 102, 0, 0.8) !important;
+  background-color: rgba(255, 102, 0, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: 8px;
+  font-weight: normal !important;
+  vertical-align: middle;
+  text-transform: none !important;
+  font-family: "Courier New", "Courier", monospace !important;
+}
+
+/* ===== 8. FULLSCREEN LIGHT THEME ===== */
+.fullscreen-script-overlay .screenplay-content-area.light-theme {
+  background-color: white !important;
+  color: black !important;
+  padding: 1in 1in 1in 1.5in !important;
+}
+
+.fullscreen-script-overlay .screenplay-content-area.light-theme .ProseMirror {
+  background-color: white !important;
+  color: black !important;
+  min-height: 9in !important;
+  padding: 0 !important;
+}
+
+.fullscreen-script-overlay .screenplay-content-area.light-theme .ProseMirror p {
+  color: black !important;
+}
+
+.fullscreen-script-overlay .screenplay-content-area.light-theme .ProseMirror p[data-line-type="scene"] {
+  text-transform: uppercase;
+  font-weight: bold;
+  margin-top: 2em;
+  margin-bottom: 0 !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
+.fullscreen-script-overlay .screenplay-content-area.light-theme .ProseMirror p[data-line-type="character"] {
+  text-align: left !important;
+  margin-left: 2.2in !important;
+  margin-right: 0 !important;
+  width: auto !important;
+  max-width: 3.8in !important;
+  margin-top: 1em;
+  text-transform: uppercase;
+}
+
+.fullscreen-script-overlay .screenplay-content-area.light-theme .ProseMirror p[data-line-type="dialogue"] {
+  margin-left: 1.0in !important;
+  margin-right: 0 !important;
+  width: 3.5in !important;
+}
+
+.fullscreen-script-overlay .screenplay-content-area.light-theme .ProseMirror p[data-line-type="parenthetical"] {
+  margin-left: 1.6in !important;
+  margin-right: 0 !important;
+  width: 2.3in !important;
+  margin-top: 0;
+  margin-bottom: 0 !important;
+}
+
+.fullscreen-script-overlay .screenplay-content-area.light-theme .ProseMirror p[data-line-type="transition"] {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  width: 6in !important;
+  text-align: right;
+  text-transform: uppercase;
+  margin-top: 1em;
+  margin-bottom: 1em !important;
+}
+
+.fullscreen-script-overlay .screenplay-content-area.light-theme .ProseMirror p[data-line-type="description"] {
+  color: black !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  max-width: 6in !important;
+}
+
+.fullscreen-script-overlay .screenplay-content-area.light-theme .ProseMirror p[data-line-type="scene"]::after {
+  content: attr(data-scene-id);
+  display: inline-block;
+  font-size: 10pt !important;
+  color: rgba(255, 102, 0, 0.8) !important;
+  background-color: rgba(255, 102, 0, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: 8px;
+  font-weight: normal !important;
+  vertical-align: middle;
+  text-transform: none !important;
+  font-family: "Courier New", "Courier", monospace !important;
+}
+
+.fullscreen-script-overlay .screenplay-content-area.light-theme .ProseMirror p + p {
+  margin-top: 1em;
+}
+
+.fullscreen-script-overlay .screenplay-content-area.light-theme
+  .ProseMirror
+  p[data-line-type="dialogue"]
+  + p:not([data-line-type="dialogue"]):not([data-line-type="parenthetical"]) {
+  margin-top: 1.8em;
+}
+
+/* ===== 9. TOOLBAR STYLES ===== */
+.screenplay-toolbar {
+  width: 100%;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 2px;
+  padding: 0;           
+  border-bottom: 1px solid rgba(255,255,255,0.12);
+  box-sizing: border-box;
+  min-height: 38px; 
+  background: transparent !important;
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  box-shadow: 0 -1px 0 rgba(0,0,0,0.35);
+  overflow: hidden;
+  position: relative;
+}
+
+.toolbar-button {
+  font-family: var(--mono, 'JetBrains Mono', monospace);
+  font-size: 11px;        
+  padding: 4px 14px;     
+  border: none;
+  background: transparent;
+  color: var(--text-dim, #6a6660);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.12s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 38px;
+  width: auto;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.toolbar-button:hover {
+  background: var(--accent-soft, rgba(232,165,92,0.06));
+  color: var(--text-mid, #a8a49a);
+  transform: none;   
+  box-shadow: none;
+}
+
+.toolbar-button.active {
+  background: var(--accent-glow, rgba(232,165,92,0.12));
+  color: var(--accent, rgba(255, 102, 0, 0.8));
+  border-color: transparent;
+}
+
+.toolbar-button svg {
+  color: inherit !important;
+  stroke: currentColor !important;
+}
+
+.format-menu {
+  position: absolute;
+  right: 50px;
+  top: 0;
+  background-color: white;
+  border-radius: 0.5rem;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+  padding: 0.5rem;
+  display: none;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 150px;
+  z-index: 10;
+}
+
+.toolbar-button.active .format-menu {
+  display: flex;
+}
+
+.format-option {
+  padding: 8px 12px;
+  text-align: left;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.format-option:hover {
+  background-color: rgba(255, 102, 0, 0.1);
+}
+
+.toolbar-divider {
+  width: 1px;
+  height: 20px;
+  background-color: rgba(0, 0, 0, 0.15);
+  margin: 0 6px;
+  flex-shrink: 0;
+}
+
+/* ===== 10. DROPDOWN / AUTOCOMPLETE ===== */
+.slugline-dropdown,
+.character-dropdown,
+.transition-dropdown {
+  position: absolute;
+  background-color: #fff;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+  z-index: 1000;
+  max-height: 200px;
+  overflow-y: auto;
+  font-family: "Courier New", monospace;
+  font-size: 12pt;
+  min-width: 150px;
+}
+
+.slugline-option,
+.character-option,
+.transition-option {
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+  line-height: 1.2;
+}
+
+.slugline-option:hover,
+.character-option:hover,
+.transition-option:hover,
+.slugline-option.active,
+.character-option.active,
+.transition-option.active {
+  background-color: rgba(255, 102, 0, 0.1);
+}
+
+.slugline-preview,
+.character-preview,
+.transition-preview {
+  position: absolute;
+  font-family: "Courier New", monospace;
+  color: #333333;
+  pointer-events: none;
+  z-index: 99;
+  font-size: 12pt;
+}
+
+/* ===== 11. SIDEBAR STYLES ===== */
+.beat-sidebar {
+  width: 300px;
+  overflow: visible;
+  margin-left: -0.5rem !important;
+}
+
+.beat-item {
+  transition: all 0.2s ease-in-out;
+  position: relative;
+  border-left: 3px solid transparent;
+}
+
+.beat-item:hover {
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+  transform: translateY(-2px);
+  border-left-color: #ff6600;
+}
+
+.beat-item.selected {
+  background-color: rgba(255, 102, 0, 0.1);
+  border-color: rgba(255, 102, 0, 0.5);
+  border-left-color: #ff6600;
+}
+
+.scene-item {
+  transition: all 0.2s ease-in-out;
+  position: relative;
+  border-left: 2px solid transparent;
+  overflow: hidden;
+}
+
+.scene-item:hover {
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+  transform: translateY(-2px) translateX(2px);
+  border-left-color: #ff6600;
+}
+
+.scene-item.selected {
+  background-color: rgba(255, 102, 0, 0.1);
+  border-color: rgba(255, 102, 0, 0.5);
+  border-left-color: #ff6600;
+}
+
+/* ===== 12. OVERLAYS & INDICATORS ===== */
+.generating-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(255, 255, 255, 0.8);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 100;
+  border-radius: 0.5rem;
+}
+
+.generating-content {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 2rem;
+  background-color: white;
+  border-radius: 0.75rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.page-indicator {
+  position: absolute;
+  bottom: 0.5in;
+  right: 0.5in;
+  font-family: "Courier New", monospace;
+  font-size: 10pt;
+  color: #999;
+  pointer-events: none;
+}
+
+.fullscreen-script-overlay .screenplay-content-area::-webkit-scrollbar {
+  width: 12px;
+}
+
+.fullscreen-script-overlay .screenplay-content-area::-webkit-scrollbar-track {
+  background: #2d3748;
+}
+
+.fullscreen-script-overlay .screenplay-content-area::-webkit-scrollbar-thumb {
+  background-color: #4a5568;
+  border-radius: 6px;
+  border: 2px solid #2d3748;
+}
+
+.fullscreen-script-overlay .screenplay-content-area::-webkit-scrollbar-thumb:hover {
+  background-color: #718096;
+}
+
+/* ===== 13. CHARACTER POPUP ===== */
+.character-popup {
+  position: absolute;
+  right: 50px;
+  top: 0;
+  background-color: white;
+  border-radius: 0.5rem;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  padding: 0;
+  width: 320px;
+  max-height: 500px;
+  z-index: 1000;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+}
+
+.character-popup-content {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.character-popup-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+  background-color: rgba(255, 102, 0, 0.05);
+}
+
+.character-popup-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #333;
+}
+
+.character-popup-close {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  cursor: pointer;
+  color: #666;
+  padding: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: all 0.2s ease;
+}
+
+.character-popup-close:hover {
+  background-color: rgba(255, 102, 0, 0.1);
+  color: #ff6600;
+}
+
+.character-form {
+  padding: 1rem;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+  background-color: #fafafa;
+}
+
+.character-input {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  margin-bottom: 0.5rem;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.character-input:focus {
+  outline: none;
+  border-color: #ff6600;
+  box-shadow: 0 0 0 2px rgba(255, 102, 0, 0.1);
+}
+
+.character-textarea {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  margin-bottom: 0.75rem;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 60px;
+  box-sizing: border-box;
+}
+
+.character-textarea:focus {
+  outline: none;
+  border-color: #ff6600;
+  box-shadow: 0 0 0 2px rgba(255, 102, 0, 0.1);
+}
+
+.character-form-buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.character-btn {
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+.character-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.character-btn-primary {
+  background-color: #ff6600;
+  color: white;
+}
+
+.character-btn-primary:hover:not(:disabled) {
+  background-color: #e55a00;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(255, 102, 0, 0.3);
+}
+
+.character-btn-secondary {
+  background-color: #f5f5f5;
+  color: #666;
+  border: 1px solid #ddd;
+}
+
+.character-btn-secondary:hover {
+  background-color: #e9e9e9;
+  color: #333;
+}
+
+.character-list::-webkit-scrollbar { width: 6px; }
+.character-list::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 3px; }
+.character-list::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 3px; }
+.character-list::-webkit-scrollbar-thumb:hover { background: #a1a1a1; }
+
+.character-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 0.75rem;
+  margin-bottom: 0.5rem;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  background-color: white;
+  transition: all 0.2s ease;
+}
+
+.character-item:hover {
+  border-color: rgba(255, 102, 0, 0.2);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  transform: translateY(-1px);
+}
+
+.character-info { flex: 1; margin-right: 0.75rem; }
+.character-description { color: #666; font-size: 0.8rem; line-height: 1.3; word-wrap: break-word; }
+.character-actions { display: flex; flex-direction: column; gap: 0.25rem; flex-shrink: 0; }
+
+.character-btn-insert { background-color: #28a745; color: white; padding: 0.25rem 0.5rem; font-size: 0.75rem; }
+.character-btn-insert:hover { background-color: #218838; transform: translateY(-1px); box-shadow: 0 2px 4px rgba(40, 167, 69, 0.3); }
+
+.character-btn-edit { background-color: #007bff; color: white; padding: 0.25rem 0.5rem; font-size: 0.75rem; }
+.character-btn-edit:hover { background-color: #0056b3; transform: translateY(-1px); box-shadow: 0 2px 4px rgba(0, 123, 255, 0.3); }
+
+.character-btn-delete { background-color: #dc3545; color: white; padding: 0.25rem 0.5rem; font-size: 0.75rem; }
+.character-btn-delete:hover { background-color: #c82333; transform: translateY(-1px); box-shadow: 0 2px 4px rgba(220, 53, 69, 0.3); }
+
+.character-empty { text-align: center; color: #999; font-style: italic; padding: 2rem 1rem; font-size: 0.9rem; }
+
+/* ===== 14. LINE BREAK HANDLING ===== */
+.ProseMirror br {
+  display: block;
+  margin: 0;
+  padding: 0;
+  line-height: 1.5;
+  content: "\A";
+  white-space: pre;
+}
+
+.ProseMirror p br + * { margin-top: 0; }
+
+.ProseMirror br.screenplay-line-break {
+  display: block;
+  content: "";
+  margin: 0;
+  padding: 0;
+  line-height: 1.5;
+  min-height: 1.5em;
+  white-space: pre;
+}
+
+.ProseMirror p br.screenplay-line-break {
+  font-family: "Courier New", "Courier", monospace !important;
+  font-size: 12pt !important;
+  line-height: 1.5 !important;
+}
+
+.ProseMirror br.screenplay-line-break + * { display: inline; }
+
+.screenplay-content .ProseMirror br.screenplay-line-break,
+.fullscreen-script-overlay .ProseMirror br.screenplay-line-break {
+  display: block;
+  content: "";
+  margin: 0;
+  padding: 0;
+  line-height: 1.5;
+  min-height: 1.5em;
+}
+
+/* ===== 15. LAYOUT UTILITIES ===== */
+.scripts-page .rt-Container {
+  padding-left: 0.25rem !important;
+  padding-right: 1rem !important;
+}
+
+.script-editor-container {
+  flex: 1 !important;
+  min-width: 0 !important;
+  width: 100% !important;
+}
+
+.script-editor-container .white-container {
+  width: 100% !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.scripts-page .app-container {
+  display: flex;
+  flex-direction: column;
+}
+
+.scripts-page .app-container > div > div > div {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.scripts-page .beat-sidebar {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.app-container.scripts-page {
+  z-index: 50;
+  margin-top: 0;
+  padding-top: 0;
+}
+
+.secondary-nav-container {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+
+/* ===== 16. PRINT + MOBILE ===== */
+@media print {
+  .screenplay-editor-root {
+    background: white;
+  }
+
+  .screenplay-editor-container {
+    width: 8.5in;
+    border: none;
+    overflow: visible;
+    box-shadow: none;
+  }
+
+  .screenplay-toolbar-area { display: none; }
+  .screenplay-content-area { width: 100%; }
+
+  .screenplay-editor-container,
+  .screenplay-content-area,
+  .ProseMirror,
+  .ProseMirror * {
+    font-family: "Courier New", "Courier", monospace !important;
+    font-size: 12pt !important;
+    line-height: 1.5 !important;
+    color: black !important;
+  }
+}
+
+@media screen and (max-width: 968px) {
+  .screenplay-editor-container {
+    width: 100%;
+    flex-direction: column;
+    height: auto;
+  }
+
+  .screenplay-content-area {
+    width: 100%;
+    min-height: 11in;
+    padding: 0.5in;
+  }
+
+  .screenplay-toolbar-area {
+    width: 100%;
+    height: auto;
+    border-left: none;
+    border-top: 1px solid rgba(0, 0, 0, 0.1);
+    padding: 0.5rem;
+    flex-direction: row;
+    justify-content: center;
+    background-color: #f9f9f9;
+  }
+
+  .screenplay-toolbar { flex-direction: row; gap: 1rem; }
+  .format-menu { right: 0; top: 50px; }
+  .beat-sidebar { width: 100%; margin-bottom: 1rem; }
+
+  .character-popup {
+    right: 0;
+    left: 0;
+    width: auto;
+    margin: 0 1rem;
+    top: 60px;
+  }
+
+  .character-actions { flex-direction: row; flex-wrap: wrap; }
+  .character-btn-insert,
+  .character-btn-edit,
+  .character-btn-delete { font-size: 0.7rem; padding: 0.2rem 0.4rem; }
+}
+
+.screenplay-editor-root {
+  width: 100%;
+  margin: auto;
+  padding: 40px 0;
+  position: relative;
+  min-width: 8.5in;
+  overflow-x: auto;
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+.screenplay-pages {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 40px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.screenplay-page {
+  width: 8.5in;
+  height: 11in;
+  background: white;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  flex-shrink: 0;
+}
+
+.screenplay-source {
+  position: relative;
+  z-index: 2;
+  width: 8.5in;
+  margin: 0 auto;
+}
+
+.screenplay-source .ProseMirror {
+  padding: 1in 1in 1in 1.5in;
+}
+
+.ProseMirror p {
+  page-break-inside: avoid;
+}
+
+.ProseMirror {
+  position: relative;
+}
+
+/* ===== SCENE NAVIGATION SHINE ===== */
+
+@keyframes sceneShine {
+  0% {
+    box-shadow: 0 0 0 0 rgba(100, 180, 255, 0) !important;
+    background: rgba(100, 180, 255, 0) !important;
+  }
+  25% {
+    box-shadow: 0 0 0 8px rgba(100, 180, 255, 0.45) !important;
+    background: rgba(100, 180, 255, 0.20) !important;
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(100, 180, 255, 0.35) !important;
+    background: rgba(100, 180, 255, 0.15) !important;
+  }
+  75% {
+    box-shadow: 0 0 0 4px rgba(100, 180, 255, 0.20) !important;
+    background: rgba(100, 180, 255, 0.08) !important;
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(100, 180, 255, 0) !important;
+    background: rgba(100, 180, 255, 0) !important;
+  }
+}
+
+.ProseMirror p.scene-navigate-shine {
+  animation: sceneShine 2000ms cubic-bezier(0.2, 0.9, 0.2, 1) both !important;
+  border-radius: 4px !important;
+  outline: none !important;
+  transition: all 0.3s ease !important;
+  position: relative !important;
+  z-index: 10 !important;
+}
+
+.screenplay-content-area.dark-theme .ProseMirror p.scene-navigate-shine {
+  animation: sceneShine 2000ms cubic-bezier(0.2, 0.9, 0.2, 1) both !important;
+}
+
+.screenplay-content-area.light-theme .ProseMirror p.scene-navigate-shine {
+  animation: sceneShine 2000ms cubic-bezier(0.2, 0.9, 0.2, 1) both !important;
+}
+
+.ProseMirror p[data-line-type="scene"].scene-navigate-shine,
+.ProseMirror p[data-line-type="slugline"].scene-navigate-shine {
+  animation: sceneShine 2000ms cubic-bezier(0.2, 0.9, 0.2, 1) both !important;
+  border-radius: 4px !important;
+  padding: 2px 4px !important;
+  margin-left: -4px !important;
+  margin-right: -4px !important;
+  z-index: 10 !important;
+}
+
+.screenplay-content-area.dark-theme .ProseMirror p[data-line-type="scene"].scene-navigate-shine {
+  color: #60a5fa !important;
+}
+
+.screenplay-content-area.light-theme .ProseMirror p[data-line-type="scene"].scene-navigate-shine {
+  color: inherit !important;
+}
+
+.ProseMirror p[data-line-type="scene"].scene-navigate-shine::after {
+  position: relative !important;
+  z-index: 11 !important;
+}
+
+/* ===== Guided Generation pending highlight =====
+ * Mirrors the inline style used by the (legacy) ProseMirror decoration in
+ * InlineAIDecorationPlugin.ts, but applied at the paragraph level via a
+ * schema-backed DOM attribute so the green stays put when PaginatedEditor
+ * splits content onto a new page.
+ */
+.ProseMirror p[data-pending-generation="true"] {
+  background: rgba(16, 185, 129, 0.18);
+  border-bottom: 2px solid #10b981;
+  padding: 1px 2px;
+  border-radius: 2px;
+  box-shadow:
+    0 0 8px rgba(16, 185, 129, 0.35),
+    inset 0 0 4px rgba(16, 185, 129, 0.1);
+  transition: background 0.3s ease;
+}

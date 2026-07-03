@@ -1,0 +1,667 @@
+/* CSS Custom Properties (Variables) */
+:root {
+  /* Color Palette */
+  --bg-primary: linear-gradient(135deg, #1a1a1c 0%, #2a2a2e 100%);
+  --bg-secondary: linear-gradient(135deg, rgba(42, 42, 46, 0.95) 0%, rgba(52, 52, 58, 0.95) 100%);
+  --bg-tertiary: linear-gradient(135deg, rgba(35, 35, 42, 0.95) 0%, rgba(45, 45, 52, 0.95) 100%);
+  --bg-input: linear-gradient(135deg, rgba(60, 60, 68, 0.8) 0%, rgba(70, 70, 78, 0.8) 100%);
+  --bg-input-focus: linear-gradient(135deg, rgba(70, 70, 78, 0.9) 0%, rgba(80, 80, 88, 0.9) 100%);
+  
+  /* Orange Accent Colors */
+  --orange-primary: #ff6b35;
+  --orange-secondary: #ff8c42;
+  --orange-gradient: linear-gradient(135deg, #ff6b35 0%, #ff8c42 100%);
+  --orange-subtle: rgba(255, 107, 53, 0.2);
+  --orange-very-subtle: rgba(255, 107, 53, 0.15);
+  --orange-border: rgba(255, 107, 53, 0.3);
+  
+  /* Text Colors */
+  --text-primary: #ffffff;
+  --text-secondary: rgba(255, 255, 255, 0.9);
+  --text-tertiary: rgba(255, 255, 255, 0.6);
+  --text-quaternary: rgba(255, 255, 255, 0.4);
+  
+  /* Border Colors */
+  --border-subtle: rgba(255, 255, 255, 0.12);
+  --border-input: rgba(255, 255, 255, 0.2);
+  --border-focus: var(--orange-primary);
+  
+  /* Shadow and Effects */
+  --shadow-primary: 0 8px 32px rgba(0, 0, 0, 0.3);
+  --shadow-secondary: 0 4px 16px rgba(255, 107, 53, 0.25);
+  --shadow-focus: 0 0 0 3px rgba(255, 107, 53, 0.15);
+  --backdrop-blur: blur(20px);
+  
+  /* Spacing */
+  --spacing-xs: 8px;
+  --spacing-sm: 12px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  
+  /* Border Radius */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  
+  /* Transitions */
+  --transition-fast: all 0.2s ease;
+  --transition-normal: all 0.3s ease;
+  --transition-slow: all 0.4s ease;
+}
+
+/* Base Styles - Force dark gradient background */
+html {
+  background: var(--bg-primary) !important;
+}
+
+body {
+  background: var(--bg-primary) !important;
+  min-height: 100vh;
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  
+}
+
+/* Force override any existing background styles */
+body * {
+  background-attachment: initial;
+}
+
+/* Main Container */
+.app-container {
+  padding-bottom: 3rem;
+  transition: var(--transition-normal);
+  position: relative;
+  background: transparent !important;
+}
+
+.gradient-background {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  background: var(--bg-primary) !important;
+  z-index: -1 !important;
+  pointer-events: none !important;
+}
+
+/* Additional gradient overlay for depth */
+.app-container::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100vw;
+  height: 100vh;
+  background: radial-gradient(ellipse at center, rgba(26, 26, 28, 0.8) 0%, rgba(42, 42, 46, 0.9) 100%);
+  z-index: -1;
+  pointer-events: none;
+}
+
+/* Ensure no other elements have orange background */
+.main-content-wrapper,
+.text-areas-background {
+  background: transparent !important;
+}
+
+/* Main Content Wrapper */
+.main-content-wrapper {
+  width: 100%;
+  max-width: 80rem;
+  margin: 0 auto;
+  transition: var(--transition-normal);
+  position: relative;
+  display: flex;
+  flex-direction: row;
+}
+
+.text-areas-background {
+  flex-shrink: 0;
+  position: relative;
+  transition: var(--transition-normal);
+}
+
+/* White Container (Main Sections) */
+.white-container {
+  background: var(--bg-secondary);
+  backdrop-filter: var(--backdrop-blur);
+  border: 1px solid var(--orange-subtle);
+  border-radius: var(--radius-xl);
+  padding: var(--spacing-xl);
+  margin-bottom: var(--spacing-lg);
+  box-shadow: var(--shadow-primary), 0 1px 0 rgba(255, 255, 255, 0.1) inset;
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  transition: var(--transition-normal);
+}
+
+/* Orange accent line at top of sections */
+.white-container::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--orange-border), transparent);
+}
+
+/* Field Labels - Target specific headers with multiple selectors */
+.field-label,
+.white-container h1,
+.white-container h2,
+.white-container h3,
+.white-container .field-label,
+[class*="field-label"] {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: #ffffff !important; /* Force white for section headers */
+  margin-bottom: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+/* Additional targeting for Radix UI Text components */
+.white-container [data-accent-color],
+.white-container .rt-Text {
+  color: #ffffff !important;
+}
+
+/* Form Elements */
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-lg);
+  width: 100%;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.form-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: var(--spacing-xs);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+/* Text Areas and Inputs */
+.text-area-container textarea,
+.form-input {
+  background: var(--bg-input);
+  border: 1px solid var(--border-input);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.5;
+  resize: vertical;
+  min-height: 120px;
+  transition: var(--transition-normal);
+  font-family: inherit;
+}
+
+.text-area-container textarea:focus,
+.form-input:focus {
+  outline: none;
+  border-color: var(--border-focus);
+  box-shadow: var(--shadow-focus);
+  background: var(--bg-input-focus);
+}
+
+.text-area-container textarea::placeholder,
+.form-input::placeholder {
+  color: var(--text-quaternary);
+}
+
+/* Buttons - Only target the specific Save Work and Generate Story buttons */
+button[name="save_work"],
+button[name="generate_story"] {
+  background: var(--orange-gradient) !important;
+  border: none !important;
+  border-radius: var(--radius-md) !important;
+  padding: 14px 28px !important;
+  color: white !important;
+  font-weight: 500 !important;
+  font-size: 14px !important;
+  cursor: pointer !important;
+  transition: var(--transition-normal) !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: var(--spacing-xs) !important;
+  box-shadow: var(--shadow-secondary) !important;
+}
+
+button[name="save_work"]:hover,
+button[name="generate_story"]:hover {
+  transform: translateY(-2px) !important;
+  box-shadow: 0 8px 24px rgba(255, 107, 53, 0.35) !important;
+}
+
+button[name="save_work"]:disabled,
+button[name="generate_story"]:disabled {
+  opacity: 0.6 !important;
+  cursor: not-allowed !important;
+  transform: none !important;
+}
+
+/* Keep existing button styles for everything else */
+.button,
+.semi-transparent-button {
+  background: var(--orange-gradient);
+  border: none;
+  border-radius: var(--radius-md);
+  padding: 14px 28px;
+  color: white;
+  font-weight: 500;
+  font-size: 14px;
+  cursor: pointer;
+  transition: var(--transition-normal);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  box-shadow: var(--shadow-secondary);
+}
+
+.button:hover,
+.semi-transparent-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(255, 107, 53, 0.35);
+}
+
+.button:disabled,
+.semi-transparent-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.button-secondary {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.05) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: var(--text-secondary);
+}
+
+.button-secondary:hover {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.15) 0%, rgba(255, 255, 255, 0.1) 100%);
+  box-shadow: 0 8px 24px rgba(255, 255, 255, 0.1);
+}
+
+/* Tooltip Icons */
+.tooltip-icon,
+.segment-tooltip-icon {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--orange-very-subtle);
+  border: 1px solid var(--orange-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--orange-primary);
+  font-size: 12px;
+  cursor: help;
+  transition: var(--transition-fast);
+}
+
+.tooltip-icon:hover,
+.segment-tooltip-icon:hover {
+  background: rgba(255, 107, 53, 0.25);
+  transform: scale(1.1);
+}
+
+/* Act Sections */
+.act-section {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--orange-very-subtle);
+  border-radius: var(--radius-xl);
+  margin-bottom: var(--spacing-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-primary);
+  position: relative;
+}
+
+/* Orange accent line at top of acts */
+.act-section::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--orange-border), transparent);
+  z-index: 1;
+}
+
+.act-header {
+  padding: var(--spacing-lg) var(--spacing-xl);
+  background: linear-gradient(135deg, rgba(255, 107, 53, 0.08) 0%, rgba(255, 140, 66, 0.04) 100%);
+  border-bottom: 1px solid var(--orange-subtle);
+  cursor: pointer;
+  transition: var(--transition-normal);
+  position: relative;
+  overflow: hidden;
+}
+
+.act-header:hover {
+  background: linear-gradient(135deg, rgba(255, 107, 53, 0.12) 0%, rgba(255, 140, 66, 0.08) 100%);
+}
+
+.act-title {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.act-subtitle {
+  color: var(--text-tertiary);
+  font-style: italic;
+  font-size: 1rem;
+}
+
+/* Segment Styles */
+.segment-container {
+  padding: 1.5rem;
+  margin: 1rem 1.5rem;
+  cursor: pointer;
+  transition: var(--transition-normal);
+}
+
+.segment-number {
+  background: var(--orange-gradient);
+  color: white;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.segment-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.segment-preview {
+  color: var(--text-tertiary);
+  font-size: 14px;
+  line-height: 1.4;
+  margin-top: var(--spacing-xs);
+}
+
+.segment-editing-badge {
+  background: var(--orange-gradient);
+  color: white;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.segment-hover-hint {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-style: italic;
+}
+
+.segment-arrow {
+  color: var(--orange-primary);
+  font-size: 14px;
+  transition: var(--transition-normal);
+}
+
+.segment-arrow.expanded {
+  transform: rotate(90deg);
+}
+
+.segment-arrow.hovered {
+  transform: scale(1.2);
+}
+
+.segment-preview-area {
+  padding: var(--spacing-md);
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  margin-top: var(--spacing-sm);
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+
+.segment-preview-area:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.segment-empty-state {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+/* Summary Section Specific */
+.summary-textarea-wrapper {
+  margin-bottom: var(--spacing-md);
+}
+
+/* Saved Indicator */
+.saved-indicator {
+  position: fixed;
+  top: 100px;
+  right: 30px;
+  background: var(--orange-gradient);
+  color: white;
+  padding: var(--spacing-xs) var(--spacing-md);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  z-index: 1000;
+  transition: opacity 0.3s ease;
+  box-shadow: var(--shadow-secondary);
+}
+
+/* Selection Mode Indicator */
+.selection-mode-indicator {
+  position: fixed;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(59, 130, 246, 0.9);
+  color: white;
+  padding: 0.5rem 1.5rem;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 600;
+  z-index: 1002;
+  backdrop-filter: var(--backdrop-blur);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+  animation: slideInFromTop 0.3s ease-out;
+}
+
+/* Keyframe Animations */
+@keyframes slideInFromTop {
+  from {
+    transform: translateX(-50%) translateY(-20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    left: -100%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+/* Glimmer Effect for Hover */
+.glimmer-overlay {
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 140, 0, 0.15), transparent);
+  z-index: 1;
+  pointer-events: none;
+  animation: none;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .form-grid {
+    grid-template-columns: 1fr;
+    gap: var(--spacing-md);
+  }
+  
+  .white-container {
+    padding: var(--spacing-lg);
+    margin-bottom: var(--spacing-md);
+  }
+  
+  .act-header {
+    padding: var(--spacing-md) var(--spacing-lg);
+  }
+  
+  .segment-container {
+    padding: var(--spacing-md);
+    margin: var(--spacing-sm) var(--spacing-md);
+  }
+  
+  .field-label {
+    font-size: 1.25rem;
+  }
+  
+  .act-title {
+    font-size: 24px;
+  }
+}
+
+@media (max-width: 480px) {
+  .white-container {
+    padding: var(--spacing-md);
+  }
+  
+  .act-header {
+    padding: var(--spacing-md);
+  }
+  
+  .segment-container {
+    padding: var(--spacing-sm);
+    margin: var(--spacing-xs) var(--spacing-sm);
+  }
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  :root {
+    --border-input: rgba(255, 255, 255, 0.4);
+    --border-subtle: rgba(255, 255, 255, 0.3);
+    --text-tertiary: rgba(255, 255, 255, 0.8);
+    --text-quaternary: rgba(255, 255, 255, 0.6);
+  }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Dark mode adjustments (for systems that support it) */
+@media (prefers-color-scheme: dark) {
+  /* Already optimized for dark mode, but can add adjustments if needed */
+}
+
+/* Print styles */
+@media print {
+  .app-container {
+    background: white !important;
+    color: black !important;
+  }
+  
+  .white-container {
+    background: white !important;
+    border: 1px solid #ccc !important;
+    box-shadow: none !important;
+  }
+  
+  .button,
+  .semi-transparent-button {
+    display: none !important;
+  }
+}
+
+.segment-badge-shine {
+  position: relative;
+  overflow: hidden;
+}
+
+.segment-badge-shine::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -120%;
+  width: 60%;
+  height: 100%;
+  background: linear-gradient(
+    120deg,
+    transparent,
+    rgba(255,255,255,0.4),
+    transparent
+  );
+  transform: skewX(-25deg);
+  animation: segmentShine 1.2s ease;
+}
+
+@keyframes segmentShine {
+  0% {
+    left: -120%;
+  }
+  100% {
+    left: 140%;
+  }
+}
+
+@keyframes badgeGlowPulse {
+  0% {
+    box-shadow: 0 0 0 2px rgba(255,140,0,0.2), 0 0 8px rgba(255,140,0,0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 2px rgba(255,140,0,0.4), 0 0 16px rgba(255,140,0,0.8);
+  }
+  100% {
+    box-shadow: 0 0 0 2px rgba(255,140,0,0.2), 0 0 8px rgba(255,140,0,0.4);
+  }
+}

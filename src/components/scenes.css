@@ -1,0 +1,2353 @@
+/* VERTICAL TIMELINE SCENES CSS */
+/* Updated: Warm brown-black palette → Cool blue-gray palette to match Home page */
+
+/* Basic theme setup */
+body, html, #root {
+  background: linear-gradient(135deg, #1a1a1c 0%, #2a2a2e 100%);
+  color: #e0e0e0;
+  margin: 0;
+  padding: 0;
+}
+
+.app-container {
+  background: linear-gradient(135deg, #1a1a1c 0%, #2a2a2e 100%);
+  color: #e0e0e0;
+  min-height: 100vh;
+  padding-top: 0.5rem;
+}
+
+/* Reduce spacing between StoryNavigation and main content */
+.secondary-nav-container {
+  margin-bottom: 1rem !important;
+}
+
+/* Main container layout */
+.main-container {
+  display: flex;
+  /* height: calc(100vh - 156px); */
+  min-height: calc(100vh - 156px);
+  position: relative;
+}
+
+/* Radial vignette overlay for depth — matches Home page */
+.main-container::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100vw;
+  height: 100vh;
+  background: 
+    radial-gradient(ellipse at center, transparent 50%, rgba(255, 107, 53, 0.04) 100%),
+    radial-gradient(ellipse at center, rgba(26, 26, 28, 0.4) 0%, rgba(18, 18, 20, 0.85) 100%);
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* Main container adjustments for intern mode */
+.main-container.intern-mode-active {
+  position: relative; /* Establish positioning context for backdrop */
+}
+
+/* Vertical Timeline Sidebar */
+.timeline-sidebar {
+  width: 450px;
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 1.5rem 2rem;
+  overflow-y: auto;
+  position: relative;
+  backdrop-filter: blur(20px);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  animation: slideInFromLeft 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Animation for timeline appearing */
+@keyframes slideInFromLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Animation for timeline disappearing */
+@keyframes slideOutToLeft {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+    width: 450px;
+    min-width: 450px;
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-100%);
+    width: 0;
+    min-width: 0;
+  }
+}
+
+/* Apply exit animation when timeline is being hidden */
+.timeline-sidebar.exiting {
+  animation: slideOutToLeft 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  overflow: hidden;
+}
+
+.sidebar-header {
+  text-align: center;
+  margin-bottom: 1.25rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.sidebar-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #ffffff;
+  margin-bottom: 0;
+}
+
+/* View Toggle Styles */
+.view-toggle-container {
+  margin-top: 0.75rem;
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
+
+.view-toggle {
+  position: relative;
+  display: flex;
+  background: rgba(42, 42, 46, 0.8);
+  border-radius: 25px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+  width: fit-content;
+  margin: 0 auto;
+}
+
+.toggle-option {
+  position: relative;
+  z-index: 2;
+  background: transparent;
+  border: none;
+  color: #a0a0a0;
+  padding: 0.5rem 1.2rem;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.3s ease;
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  min-width: 90px;
+  text-align: center;
+}
+
+.toggle-option.active {
+  color: #ffffff;
+}
+
+/* Style the disabled view toggle buttons */
+.toggle-option:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.toggle-slider {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  width: calc(50% - 4px);
+  background: linear-gradient(135deg, rgba(255, 107, 53, 0.9), rgba(255, 140, 66, 0.9));
+  border-radius: 20px;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 1;
+  box-shadow: 0 2px 8px rgba(255, 107, 53, 0.3);
+}
+
+.toggle-slider.left {
+  transform: translateX(4px);
+}
+
+.toggle-slider.right {
+  transform: translateX(calc(100% + 4px));
+}
+
+/* Vertical Timeline */
+.timeline {
+  position: relative;
+  animation: slideInFromLeft 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.timeline::before {
+  content: '';
+  position: absolute;
+  left: 12px;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: linear-gradient(180deg, 
+    rgba(255, 107, 53, 0.8) 0%, 
+    rgba(255, 140, 66, 0.8) 33%, 
+    rgba(59, 130, 246, 0.8) 66%, 
+    rgba(99, 159, 255, 0.8) 100%);
+  border-radius: 2px;
+  box-shadow: 0 0 10px rgba(255, 107, 53, 0.3);
+}
+
+/* Act Sections */
+.act-section {
+  margin-bottom: 1.5rem;
+  background: rgba(42, 42, 46, 0.3);
+  border-radius: 12px;
+  padding: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Make timeline more compact in intern mode */
+.main-container.intern-mode-active .act-section {
+  margin-bottom: 1rem; /* Reduce spacing */
+}
+
+.act-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+  position: relative;
+  z-index: 2;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  padding: 0.75rem 0.5rem;
+  border-radius: 8px;
+  min-height: 60px;
+}
+
+.act-header.collapsed {
+  padding: 1rem 0.5rem;
+  min-height: 70px;
+  background: rgba(42, 42, 46, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.act-header.collapsed:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.act-header.expanded {
+  background: rgba(255, 107, 53, 0.1);
+  border: 1px solid rgba(255, 107, 53, 0.2);
+}
+
+.act-header.expanded:hover {
+  background: rgba(255, 107, 53, 0.15);
+}
+
+.act-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.act-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: #a0a0a0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.act-header.collapsed .act-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #e0e0e0;
+}
+
+.act-header.expanded .act-title {
+  color: rgba(255, 107, 53, 1);
+}
+
+.act-stats {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.75rem;
+}
+
+.act-scene-count {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 0.15rem 0.5rem;
+  border-radius: 10px;
+  font-weight: 500;
+  color: #e0e0e0;
+  font-size: 0.7rem;
+}
+
+.act-progress {
+  background: rgba(255, 107, 53, 0.2);
+  color: rgba(255, 107, 53, 1);
+  padding: 0.15rem 0.5rem;
+  border-radius: 10px;
+  font-weight: 600;
+  font-size: 0.7rem;
+  border: 1px solid rgba(255, 107, 53, 0.3);
+}
+
+.act-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(42, 42, 46, 0.9);
+  border: 2px solid rgba(255, 107, 53, 0.8);
+  margin-right: 0.75rem;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 4;
+}
+
+/* Segment Items */
+.segment-item {
+  position: relative;
+  margin-left: 1.5rem;
+  margin-bottom: 0.35rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+/* Make timeline more compact in intern mode */
+.main-container.intern-mode-active .segment-item {
+  margin-bottom: 0.25rem; /* Reduce spacing */
+}
+
+.segment-item::before {
+  content: '';
+  position: absolute;
+  left: -22px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, rgba(255, 107, 53, 0.8), rgba(255, 140, 66, 0.8));
+  border: 2px solid #1a1a1c;
+  transition: all 0.3s ease;
+  z-index: 3;
+}
+
+.segment-item.selected::before {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.9), rgba(99, 159, 255, 0.9));
+  transform: translateY(-50%) scale(1.3);
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.6);
+}
+
+.segment-card {
+  background: rgba(42, 42, 46, 0.6);
+  border-radius: 8px;
+  padding: 0.65rem 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  transition: all 0.3s ease;
+  backdrop-filter: blur(10px);
+}
+
+.segment-item:hover:not(.selected) .segment-card {
+  background: rgba(255, 107, 53, 0.1);
+  border-color: rgba(255, 140, 66, 0.6);
+  transform: translateX(4px);
+}
+
+.segment-item.selected .segment-card {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: rgba(59, 130, 246, 0.6);
+  transform: translateX(8px);
+  box-shadow: 0 4px 16px rgba(59, 130, 246, 0.2);
+}
+
+.segment-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: #ffffff;
+  margin-bottom: 0;
+  line-height: 1.2;
+}
+
+.segment-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: #a0a0a0;
+}
+
+.segment-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.segment-status-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.scene-count {
+  background: rgba(255, 255, 255, 0.15);
+  padding: 0.15rem 0.5rem;
+  border-radius: 10px;
+  font-weight: 500;
+  color: #e0e0e0;
+  font-size: 0.7rem;
+}
+
+.segment-item.selected .scene-count {
+  background: rgba(59, 130, 246, 0.3);
+  color: #ffffff;
+}
+
+.completion-status {
+  font-size: 0.65rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 6px;
+  font-weight: 500;
+}
+
+.status-empty {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+}
+
+.status-partial {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+}
+
+.status-complete {
+  background: rgba(34, 197, 94, 0.2);
+  color: #86efac;
+}
+
+/* All Scenes View Styles */
+.all-scenes-timeline {
+  position: relative;
+  animation: slideInFromRight 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes slideInFromRight {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.all-scenes-header {
+  margin-bottom: 1rem;
+  padding: 1rem;
+  background: rgba(42, 42, 46, 0.4);
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.all-scenes-stats {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.total-scenes-count {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 0.25rem 0.75rem;
+  border-radius: 12px;
+  font-weight: 600;
+  color: #e0e0e0;
+  font-size: 0.8rem;
+}
+
+.completion-overview {
+  background: rgba(255, 107, 53, 0.2);
+  color: rgba(255, 107, 53, 1);
+  padding: 0.25rem 0.75rem;
+  border-radius: 12px;
+  font-weight: 600;
+  font-size: 0.8rem;
+  border: 1px solid rgba(255, 107, 53, 0.3);
+}
+
+.all-scenes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.no-scenes-message {
+  text-align: center;
+  padding: 2rem 1rem;
+  color: #a0a0a0;
+  background: rgba(42, 42, 46, 0.3);
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.no-scenes-message p {
+  margin: 0.5rem 0;
+}
+
+.no-scenes-message .subtext {
+  font-size: 0.8rem;
+  color: #808080;
+  font-style: italic;
+}
+
+/* All Scenes Item Styles */
+.all-scenes-item {
+  cursor: pointer;
+  transition: all 0.3s ease;
+  animation: slideInFromLeftStagger 0.3s ease forwards;
+  opacity: 0;
+  transform: translateX(-10px);
+}
+
+/* Stagger animation for scene items */
+.all-scenes-item:nth-child(1) { animation-delay: 0.05s; }
+.all-scenes-item:nth-child(2) { animation-delay: 0.1s; }
+.all-scenes-item:nth-child(3) { animation-delay: 0.15s; }
+.all-scenes-item:nth-child(4) { animation-delay: 0.2s; }
+.all-scenes-item:nth-child(5) { animation-delay: 0.25s; }
+.all-scenes-item:nth-child(n+6) { animation-delay: 0.3s; }
+
+@keyframes slideInFromLeftStagger {
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.scene-flat-card {
+  background: linear-gradient(135deg, #2e2e34 0%, #2c2c32 100%);
+  border-radius: 10px;
+  border-left: 4px solid transparent;
+  padding: 0.75rem 1rem;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.all-scenes-item:hover .scene-flat-card {
+  background: linear-gradient(135deg, #36363e 0%, #34343c 100%);
+  border-left-color: #ff8c42;
+  transform: translateX(4px);
+  border-color: rgba(255, 140, 66, 0.2);
+  box-shadow: 0 2px 8px rgba(255, 140, 66, 0.15);
+}
+
+.all-scenes-item.selected .scene-flat-card {
+  background: linear-gradient(135deg, #324155 0%, #2a3441 100%);
+  border-left-color: #4f94d4;
+  border-color: rgba(79, 148, 212, 0.3);
+  box-shadow: 0 2px 12px rgba(79, 148, 212, 0.2);
+  transform: translateX(6px);
+}
+
+.scene-flat-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.25rem;
+}
+
+.scene-flat-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.act-indicator {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0.15rem 0.4rem;
+  border-radius: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.act-indicator.act-1 {
+  background: rgba(255, 107, 53, 0.2);
+  color: rgba(255, 107, 53, 1);
+  border: 1px solid rgba(255, 107, 53, 0.3);
+}
+
+.act-indicator.act-2 {
+  background: rgba(59, 130, 246, 0.2);
+  color: rgba(59, 130, 246, 1);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.act-indicator.act-3 {
+  background: rgba(147, 51, 234, 0.2);
+  color: rgba(147, 51, 234, 1);
+  border: 1px solid rgba(147, 51, 234, 0.3);
+}
+
+.scene-flat-number {
+  background: rgba(0, 0, 0, 0.3);
+  color: #9a9ab0;
+  padding: 0.15rem 0.4rem;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  font-family: monospace;
+  min-width: 35px;
+  text-align: center;
+}
+
+.all-scenes-item.selected .scene-flat-number {
+  background: rgba(79, 148, 212, 0.3);
+  color: #93c5fd;
+}
+
+.scene-flat-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: #e8e8f0;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.all-scenes-item.selected .scene-flat-title {
+  color: #ffffff;
+}
+
+.scene-flat-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.segment-context {
+  font-size: 0.7rem;
+  color: #8888a0;
+  max-width: 80px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.all-scenes-item.selected .segment-context {
+  color: #93c5fd;
+}
+
+.scene-status {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  font-weight: bold;
+}
+
+.scene-status.has-content {
+  background: rgba(34, 197, 94, 0.2);
+  color: #86efac;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.scene-status.empty {
+  background: rgba(156, 163, 175, 0.2);
+  color: #9ca3af;
+  border: 1px solid rgba(156, 163, 175, 0.3);
+}
+
+.scene-flat-preview {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 0.75rem;
+  color: #a0a0a0;
+  line-height: 1.4;
+  font-style: italic;
+}
+
+.all-scenes-item.selected .scene-flat-preview {
+  color: #b8c5d1;
+}
+
+/* Main Workspace */
+.main-workspace {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 2rem;
+  padding-left: 2rem;
+  padding-right: 200px; /* Default right padding for action buttons */
+  overflow-y: auto;
+  transition: padding-right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  z-index: 1;
+}
+
+/* Disable workspace transition during intern mode animation to prevent jump */
+.main-container.intern-mode-active .main-workspace {
+  transition: none; /* Remove transition during timeline animation */
+}
+
+/* Full width mode when timeline is hidden */
+.main-workspace.full-width {
+  padding-right: 420px; /* Account for intern panel */
+}
+
+/* Intern mode specific adjustments */
+.main-workspace.intern-mode {
+  /* Additional intern mode styling */
+  background: linear-gradient(135deg, #1a1a1c 0%, #2a2a2e 100%);
+}
+
+.workspace-header {
+  margin-bottom: 2rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 2rem;
+  padding: 0 1rem; /* Increase horizontal padding to match scenes-content */
+}
+
+.workspace-title-section {
+  flex: 1;
+}
+
+.workspace-title {
+  font-size: 2rem;
+  font-weight: 700;
+  color: #ffffff;
+  margin-bottom: 0.5rem;
+}
+
+.workspace-subtitle {
+  color: #a0a0a0;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.intern-mode-subtitle {
+  color: #54bfdb;
+  font-size: 0.9rem;
+  font-weight: 500;
+  margin-top: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  background: linear-gradient(135deg, rgba(84, 191, 219, 0.15) 0%, rgba(84, 191, 219, 0.1) 100%);
+  border-radius: 12px;
+  border: 1px solid rgba(84, 191, 219, 0.3);
+  animation: pulseGlow 3s ease-in-out infinite;
+}
+
+@keyframes pulseGlow {
+  0%, 100% {
+    box-shadow: 0 0 8px rgba(84, 191, 219, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 16px rgba(84, 191, 219, 0.4);
+  }
+}
+
+.workspace-actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-shrink: 0;
+  flex-wrap: wrap; /* Allow wrapping if needed */
+}
+
+.btn {
+  padding: 0.6rem 1rem;
+  border-radius: 8px;
+  border: none;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  white-space: nowrap; /* Prevent text wrapping */
+  min-width: 0; /* Allow shrinking */
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, rgba(255, 107, 53, 0.8), rgba(255, 140, 66, 0.8));
+  color: #ffffff;
+}
+
+.btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(255, 107, 53, 0.4);
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.1);
+  color: #e0e0e0;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* Scenes Content */
+.scenes-content {
+  background: rgba(42, 42, 46, 0.4);
+  border-radius: 16px;
+  padding: 2rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(20px);
+  min-height: 400px;
+  margin: 0 1rem; /* Add horizontal margin to prevent edge touching */
+}
+
+.empty-state {
+  text-align: center;
+  padding: 3rem;
+  color: #a0a0a0;
+}
+
+.empty-state h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #ff8c42;
+}
+.empty-state p {
+  line-height: 1.6;
+  max-width: 400px;
+  margin: 0 auto;
+}
+
+/* Scene Cards - Timeline Style */
+.scenes-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.scene-card {
+  position: relative;
+  background: linear-gradient(135deg, #2e2e34 0%, #2c2c32 100%);
+  border-radius: 12px;
+  border-left: 4px solid #ff6b35;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  cursor: pointer;
+  overflow: hidden;
+  width: 100%;
+  box-sizing: border-box;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15), 0 1px 3px rgba(0, 0, 0, 0.1);
+  animation: cardSettle 0.6s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+/* Subtle texture overlay */
+.scene-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-image: 
+    radial-gradient(circle at 1px 1px, rgba(100, 100, 140, 0.03) 1px, transparent 0);
+  background-size: 20px 20px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.scene-card:hover {
+  background: linear-gradient(135deg, #36363e 0%, #34343c 100%);
+  transform: translateX(3px) translateY(-1px);
+  border-left-color: #ff8c42;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2), 0 2px 6px rgba(255, 140, 66, 0.15);
+}
+
+.scene-card.selected {
+  border-left-color: #4f94d4;
+  background: linear-gradient(135deg, #324155 0%, #2a3441 100%);
+  box-shadow: 0 4px 16px rgba(79, 148, 212, 0.2), 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.scene-card.selected:hover {
+  background: linear-gradient(135deg, #3a4c63 0%, #324155 100%);
+  box-shadow: 0 6px 20px rgba(79, 148, 212, 0.25), 0 3px 10px rgba(0, 0, 0, 0.2);
+}
+
+/* Empty scene breathing animation */
+.scene-card.empty {
+  animation: breathe 4s ease-in-out infinite, cardSettle 0.6s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@keyframes cardSettle {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes breathe {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.005);
+  }
+}
+
+/* Clean visual feedback for selected scenes - focused on textarea highlighting */
+.scene-card.selected-for-intern {
+  /* Subtle card-level indication */
+  border-left-color: #54bfdb;
+  position: relative;
+}
+
+/* Primary visual feedback: Blue textarea highlighting (like reference image) */
+.scene-card.selected-for-intern .scene-textarea {
+  border: 2px solid #54bfdb !important;
+  background: rgba(26, 34, 47, 0.9) !important;
+  color: #e8f4f8 !important;
+  box-shadow: none !important;
+}
+
+/* Clean selected indicator */
+.scene-card.selected-for-intern .scene-header::after {
+  content: '✓ SELECTED';
+  position: absolute;
+  top: -8px;
+  right: 10px;
+  background: #54bfdb;
+  color: white;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  z-index: 10;
+}
+
+/* Ensure the scene header has relative positioning for the indicator */
+.scene-card.selected-for-intern .scene-header {
+  position: relative;
+}
+
+/* Make scene cards fully clickable in intern mode */
+.main-container.intern-mode-active .scene-card {
+  cursor: pointer;
+}
+
+.main-container.intern-mode-active .all-scenes-item {
+  cursor: pointer;
+}
+
+.main-container.intern-mode-active .segment-scene-card {
+  cursor: pointer;
+}
+
+/* Ensure readOnly inputs and textareas are clickable in intern mode */
+.main-container.intern-mode-active .scene-textarea:read-only {
+  cursor: pointer;
+}
+
+.main-container.intern-mode-active .scene-title-input:read-only {
+  cursor: pointer;
+}
+
+/* Subtle title input highlighting for selected scenes */
+.scene-card.selected-for-intern .scene-title-input {
+  border: 1px solid rgba(84, 191, 219, 0.4);
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+  background: rgba(84, 191, 219, 0.08);
+}
+
+/* Clean styling for selected scenes in all-scenes view */
+.all-scenes-item.selected-for-intern .scene-flat-card {
+  border-left-color: #54bfdb !important;
+  border: 1px solid rgba(84, 191, 219, 0.3) !important;
+}
+
+/* Clean styling for segment scene cards */
+.segment-scene-card.selected-for-intern {
+  border-left-color: #54bfdb !important;
+  border: 1px solid rgba(84, 191, 219, 0.3) !important;
+}
+
+/* Apply clean textarea styling to segment scene cards */
+.segment-scene-card.selected-for-intern .scene-textarea {
+  border: 2px solid #54bfdb !important;
+  background: rgba(26, 34, 47, 0.9) !important;
+  color: #e8f4f8 !important;
+  box-shadow: none !important;
+}
+
+/* Subtle opacity reduction for non-selected scenes */
+.main-container.intern-mode-active .scene-card:not(.selected-for-intern) {
+  opacity: 0.7;
+  transition: opacity 0.3s ease;
+}
+
+.main-container.intern-mode-active .all-scenes-item:not(.selected-for-intern) {
+  opacity: 0.7;
+  transition: opacity 0.3s ease;
+}
+
+.main-container.intern-mode-active .segment-scene-card:not(.selected-for-intern) {
+  opacity: 0.7;
+  transition: opacity 0.3s ease;
+}
+
+/* Hover effects for better interaction feedback */
+.main-container.intern-mode-active .scene-card:not(.selected-for-intern):hover {
+  opacity: 0.9;
+}
+
+.main-container.intern-mode-active .all-scenes-item:not(.selected-for-intern):hover {
+  opacity: 0.9;
+}
+
+.main-container.intern-mode-active .segment-scene-card:not(.selected-for-intern):hover {
+  opacity: 0.9;
+}
+
+/* Scene header layout */
+.scene-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  min-height: 50px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.scene-info {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 1;
+  min-width: 0; /* Allow shrinking */
+}
+
+/* Scene number badge */
+.scene-number {
+  background: linear-gradient(135deg, #262630 0%, #282832 100%);
+  color: #9a9ab0;
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  min-width: 35px;
+  text-align: center;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
+  transition: all 0.3s ease;
+}
+
+.scene-card.selected .scene-number {
+  background: linear-gradient(135deg, #1e2a3a 0%, #243040 100%);
+  color: #93c5fd;
+}
+
+/* Scene title input - Always editable */
+.scene-title-input {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #e8e8f0;
+  background: transparent;
+  border: none;
+  outline: none;
+  flex: 1;
+  padding: 0.25rem 0;
+  font-family: inherit;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  min-width: 0;
+  width: 100%;
+  position: relative;
+  z-index: 2;
+}
+
+.scene-title-input:focus {
+  background: rgba(79, 148, 212, 0.08);
+  border-radius: 6px;
+  padding: 0.25rem 0.5rem;
+  color: #ffffff;
+  transform: scale(1.01);
+}
+
+.scene-title-input::placeholder {
+  color: #8888a0;
+  font-style: italic;
+}
+
+/* Scene content area - FIXED */
+.scene-content {
+  padding: 0.75rem 1rem 1rem 1rem;
+  display: none;
+  animation: expandContent 0.5s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  margin-top: 0.5rem;
+  width: 100%;
+  box-sizing: border-box;
+  position: relative;
+}
+
+.scene-card.expanded .scene-content {
+  display: block;
+}
+
+@keyframes expandContent {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+    max-height: 0;
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    max-height: 500px;
+  }
+}
+
+/* Scene textarea */
+.scene-textarea {
+  background: linear-gradient(135deg, #1c1c22 0%, #1e1e26 100%);
+  border: 1px solid #3e3e4a;
+  border-radius: 8px;
+  padding: 0.875rem;
+  color: #e0e0ea;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  min-height: 120px;
+  resize: vertical;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  outline: none;
+  margin: 0;
+  position: relative;
+  z-index: 2;
+}
+
+/* Subtle texture for textarea */
+.scene-textarea::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-image: 
+    radial-gradient(circle at 1px 1px, rgba(100, 100, 140, 0.02) 1px, transparent 0);
+  background-size: 15px 15px;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.scene-textarea:focus {
+  border-color: #ff8c42;
+  background: linear-gradient(135deg, #20202a 0%, #22222c 100%);
+  box-shadow: 0 0 0 3px rgba(255, 140, 66, 0.15), 0 0 20px rgba(255, 107, 53, 0.08);
+  transform: scale(1.002);
+  animation: focusGlow 2s ease-in-out infinite;
+}
+
+.scene-textarea::placeholder {
+  color: #8888a0;
+  font-style: italic;
+  line-height: 1.6;
+}
+
+/* Gentle focus glow animation */
+@keyframes focusGlow {
+  0% {
+    box-shadow: 0 0 0 3px rgba(255, 140, 66, 0.15), 0 0 20px rgba(255, 107, 53, 0.08);
+  }
+  50% {
+    box-shadow: 0 0 0 3px rgba(255, 140, 66, 0.2), 0 0 25px rgba(255, 107, 53, 0.12);
+  }
+  100% {
+    box-shadow: 0 0 0 3px rgba(255, 140, 66, 0.15), 0 0 20px rgba(255, 107, 53, 0.08);
+  }
+}
+
+/* Action buttons container */
+.scene-actions {
+  display: flex;
+  gap: 0.25rem;
+  opacity: 0;
+  transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  z-index: 3;
+}
+
+.scene-card:hover .scene-actions {
+  opacity: 1;
+}
+
+.scene-action {
+  background: rgba(0, 0, 0, 0.2);
+  border: none;
+  color: #9a9ab0;
+  padding: 0.25rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  backdrop-filter: blur(10px);
+}
+
+.scene-action:hover {
+  background: rgba(100, 100, 140, 0.3);
+  color: #e8e8f0;
+  transform: scale(1.1);
+}
+
+.scene-action.expand:hover {
+  background: rgba(79, 148, 212, 0.3);
+  color: #93c5fd;
+}
+
+.scene-action.edit:hover {
+  background: rgba(79, 148, 212, 0.3);
+  color: #93c5fd;
+}
+
+.scene-action.delete:hover {
+  background: rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Scene insertion controls */
+.scene-insert-controls {
+  position: absolute;
+  left: -40px; 
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.scene-card:hover .scene-insert-controls {
+  opacity: 1;
+}
+
+.insert-button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #2e2e36 !important;
+  border-radius: 50%;
+  border: 1px solid #3e3e48 !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  color: #e0e0e0 !important;
+}
+
+.insert-button:hover {
+  background-color: #ff6b35 !important;
+  color: white !important;
+  transform: scale(1.1);
+  border-color: #ff8c42 !important;
+}
+
+.insert-button.insert-before:hover {
+  background-color: #059669 !important;
+  border-color: #10b981 !important;
+}
+
+.insert-button.insert-after:hover {
+  background-color: #2563eb !important;
+  border-color: #3b82f6 !important;
+}
+
+/* Segment Container System for All Scenes View */
+/* Segment Container Selection and Highlighting */
+.segment-container.selected {
+  border-width: 3px;
+  transform: scale(1.01);
+}
+
+.segment-container.selected.act-1 {
+  border-color: rgba(255, 107, 53, 1);
+  box-shadow: 0 8px 32px rgba(255, 107, 53, 0.25);
+  background: rgba(255, 107, 53, 0.08);
+}
+
+.segment-container.selected.act-2 {
+  border-color: rgba(59, 130, 246, 1);
+  box-shadow: 0 8px 32px rgba(59, 130, 246, 0.25);
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.segment-container.selected.act-3 {
+  border-color: rgba(147, 51, 234, 1);
+  box-shadow: 0 8px 32px rgba(147, 51, 234, 0.25);
+  background: rgba(147, 51, 234, 0.08);
+}
+
+.segment-container.segment-highlighted {
+  animation: segmentPulse 2s ease-in-out;
+}
+
+@keyframes segmentPulse {
+  0% {
+    transform: scale(1.01);
+    box-shadow: 0 8px 32px rgba(255, 107, 53, 0.4);
+  }
+  50% {
+    transform: scale(1.03);
+    box-shadow: 0 12px 48px rgba(255, 107, 53, 0.6);
+  }
+  100% {
+    transform: scale(1.01);
+    box-shadow: 0 8px 32px rgba(255, 107, 53, 0.25);
+  }
+}
+
+.segment-container.segment-highlighted.act-2 {
+  animation: segmentPulseBlue 2s ease-in-out;
+}
+
+@keyframes segmentPulseBlue {
+  0% {
+    transform: scale(1.01);
+    box-shadow: 0 8px 32px rgba(59, 130, 246, 0.4);
+  }
+  50% {
+    transform: scale(1.03);
+    box-shadow: 0 12px 48px rgba(59, 130, 246, 0.6);
+  }
+  100% {
+    transform: scale(1.01);
+    box-shadow: 0 8px 32px rgba(59, 130, 246, 0.25);
+  }
+}
+
+.segment-container.segment-highlighted.act-3 {
+  animation: segmentPulsePurple 2s ease-in-out;
+}
+
+@keyframes segmentPulsePurple {
+  0% {
+    transform: scale(1.01);
+    box-shadow: 0 8px 32px rgba(147, 51, 234, 0.4);
+  }
+  50% {
+    transform: scale(1.03);
+    box-shadow: 0 12px 48px rgba(147, 51, 234, 0.6);
+  }
+  100% {
+    transform: scale(1.01);
+    box-shadow: 0 8px 32px rgba(147, 51, 234, 0.25);
+  }
+}
+
+.segment-containers {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  width: 100%;
+}
+
+.segment-container {
+  background: rgba(42, 42, 46, 0.4);
+  border-radius: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  padding: 1rem;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.segment-container.act-1 {
+  border-color: rgba(255, 107, 53, 0.3);
+}
+
+.segment-container.act-2 {
+  border-color: rgba(59, 130, 246, 0.3);
+}
+
+.segment-container.act-3 {
+  border-color: rgba(147, 51, 234, 0.3);
+}
+
+.segment-container.hovered {
+  transform: scale(1.02);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.segment-container.hovered.act-1 {
+  border-color: rgba(255, 107, 53, 0.8);
+  box-shadow: 0 8px 32px rgba(255, 107, 53, 0.2);
+  background: rgba(255, 107, 53, 0.05);
+}
+
+.segment-container.hovered.act-2 {
+  border-color: rgba(59, 130, 246, 0.8);
+  box-shadow: 0 8px 32px rgba(59, 130, 246, 0.2);
+  background: rgba(59, 130, 246, 0.05);
+}
+
+.segment-container.hovered.act-3 {
+  border-color: rgba(147, 51, 234, 0.8);
+  box-shadow: 0 8px 32px rgba(147, 51, 234, 0.2);
+  background: rgba(147, 51, 234, 0.05);
+}
+
+.segment-container.expanded {
+  transform: scale(1.02);
+  min-height: 200px;
+}
+
+.segment-container-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.segment-info {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.act-badge {
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.25rem 0.5rem;
+  border-radius: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.act-badge.act-1 {
+  background: rgba(255, 107, 53, 0.2);
+  color: rgba(255, 107, 53, 1);
+  border: 1px solid rgba(255, 107, 53, 0.3);
+}
+
+.act-badge.act-2 {
+  background: rgba(59, 130, 246, 0.2);
+  color: rgba(59, 130, 246, 1);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.act-badge.act-3 {
+  background: rgba(147, 51, 234, 0.2);
+  color: rgba(147, 51, 234, 1);
+  border: 1px solid rgba(147, 51, 234, 0.3);
+}
+
+.segment-container-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #ffffff;
+  margin: 0;
+}
+
+.segment-scene-count {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 0.2rem 0.6rem;
+  border-radius: 10px;
+  font-size: 0.75rem;
+  color: #e0e0e0;
+  font-weight: 500;
+}
+
+.drop-indicator {
+  background: rgba(255, 107, 53, 0.8);
+  color: white;
+  padding: 0.5rem 1rem;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.8;
+    transform: scale(1.05);
+  }
+}
+
+.segment-scenes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: 60px;
+}
+
+.empty-segment {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 60px;
+  border: 2px dashed rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  color: #a0a0a0;
+}
+
+.empty-drop-zone {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1rem;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  transition: all 0.3s ease;
+  cursor: pointer;
+  border: 2px dashed rgba(255, 255, 255, 0.3);
+}
+
+.empty-drop-zone:hover {
+  background: rgba(255, 107, 53, 0.1);
+  color: #ffffff;
+  border-color: rgba(255, 107, 53, 0.6);
+  transform: scale(1.02);
+}
+
+.empty-text {
+  font-style: italic;
+  font-size: 0.9rem;
+}
+
+.segment-scene-card .scene-content {
+  padding: 0.75rem 1rem 1rem 1rem;
+  display: block;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  margin-top: 0.5rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.segment-scene-card .scene-textarea {
+  background: linear-gradient(135deg, #1c1c22 0%, #1e1e26 100%);
+  border: 1px solid #3e3e4a;
+  border-radius: 8px;
+  padding: 0.875rem;
+  color: #e0e0ea;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  min-height: 120px;
+  resize: vertical;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  outline: none;
+  margin: 0;
+}
+
+.segment-scene-card .scene-textarea:read-only {
+  background: linear-gradient(135deg, #1c1c22 0%, #1e1e26 100%);
+  opacity: 0.8;
+  cursor: pointer;
+}
+
+.segment-scene-card .scene-textarea:focus {
+  border-color: #ff8c42;
+  background: linear-gradient(135deg, #20202a 0%, #22222c 100%);
+  box-shadow: 0 0 0 3px rgba(255, 140, 66, 0.15), 0 0 20px rgba(255, 107, 53, 0.08);
+  transform: scale(1.002);
+}
+
+.segment-scene-card .scene-textarea::placeholder {
+  color: #8888a0;
+  font-style: italic;
+  line-height: 1.6;
+}
+
+.segment-scene-card {
+  background: linear-gradient(135deg, #2e2e34 0%, #2c2c32 100%);
+  border-radius: 8px;
+  border-left: 3px solid #ff6b35;
+  padding: 0.75rem;
+  transition: all 0.3s ease;
+  position: relative;
+}
+
+.segment-scene-card:hover {
+  background: linear-gradient(135deg, #36363e 0%, #34343c 100%);
+  transform: translateX(2px);
+}
+
+.segment-scene-card.reorganize-mode {
+  cursor: grab;
+  user-select: none;
+}
+
+.segment-scene-card.reorganize-mode:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.segment-scene-card.reorganize-mode:active {
+  cursor: grabbing;
+  transform: rotate(2deg) scale(1.02);
+  opacity: 0.8;
+  z-index: 1000;
+}
+
+/* Smart State-Based Drop Zones */
+.segment-drop-zone.add-mode {
+  border-color: rgba(34, 197, 94, 0.6);
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.segment-drop-zone.add-mode:hover {
+  border-color: rgba(34, 197, 94, 0.9);
+  background: rgba(34, 197, 94, 0.15);
+  box-shadow: 0 0 15px rgba(34, 197, 94, 0.3);
+}
+
+.segment-drop-zone.add-mode span {
+  color: rgba(34, 197, 94, 0.9);
+}
+
+.segment-drop-zone.insert-mode {
+  border-color: rgba(255, 107, 53, 0.6);
+  background: rgba(255, 107, 53, 0.08);
+  animation: insertPulse 2s ease-in-out infinite;
+}
+
+.segment-drop-zone.insert-mode:hover {
+  border-color: rgba(255, 107, 53, 0.9);
+  background: rgba(255, 107, 53, 0.15);
+  box-shadow: 0 0 15px rgba(255, 107, 53, 0.3);
+  animation: none;
+}
+
+.segment-drop-zone.insert-mode span {
+  color: rgba(255, 107, 53, 0.9);
+}
+
+@keyframes insertPulse {
+  0%, 100% {
+    border-color: rgba(255, 107, 53, 0.6);
+    background: rgba(255, 107, 53, 0.08);
+  }
+  50% {
+    border-color: rgba(255, 107, 53, 0.8);
+    background: rgba(255, 107, 53, 0.12);
+  }
+}
+
+.empty-drop-zone.add-mode {
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.empty-drop-zone.add-mode:hover {
+  background: rgba(255, 107, 53, 0.1);
+  border-color: rgba(255, 107, 53, 0.6);
+  color: #ffffff;
+}
+
+.empty-drop-zone.insert-mode {
+  border-color: rgba(255, 107, 53, 0.6);
+  background: rgba(255, 107, 53, 0.1);
+  animation: insertPulse 2s ease-in-out infinite;
+}
+
+.empty-drop-zone.insert-mode:hover {
+  border-color: rgba(255, 107, 53, 0.9);
+  background: rgba(255, 107, 53, 0.2);
+  animation: none;
+}
+
+.segment-drop-zone.permanent {
+  opacity: 1;
+  transform: scaleY(1);
+  animation: none;
+  background: rgba(42, 42, 46, 0.6);
+  border-style: solid;
+}
+
+.segment-drop-zone.permanent.start {
+  border-color: rgba(34, 197, 94, 0.6);
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.segment-drop-zone.permanent.between {
+  border-color: rgba(59, 130, 246, 0.6);
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.segment-drop-zone.permanent:hover {
+  transform: scaleY(1.1);
+  cursor: pointer;
+}
+
+.segment-drop-zone.permanent.start:hover {
+  border-color: rgba(34, 197, 94, 0.9);
+  background: rgba(34, 197, 94, 0.15);
+  box-shadow: 0 0 15px rgba(34, 197, 94, 0.3);
+}
+
+.segment-drop-zone.permanent.between:hover {
+  border-color: rgba(59, 130, 246, 0.9);
+  background: rgba(59, 130, 246, 0.15);
+  box-shadow: 0 0 15px rgba(59, 130, 246, 0.3);
+}
+
+.segment-drop-zone.permanent span {
+  color: #e0e0e0;
+  font-weight: 600;
+}
+
+.segment-drop-zone.permanent.start span {
+  color: rgba(34, 197, 94, 0.9);
+}
+
+.segment-drop-zone.permanent.between span {
+  color: rgba(59, 130, 246, 0.9);
+}
+
+.segment-drop-zone:hover span {
+  color: white;
+}
+
+.segment-drop-zone {
+  height: 40px;
+  margin: 0.25rem 0;
+  border: 2px dashed transparent;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  background: rgba(42, 42, 46, 0.3);
+  opacity: 0;
+  transform: scaleY(0);
+  animation: slideInDropZone 0.3s ease forwards;
+}
+
+@keyframes slideInDropZone {
+  to {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+
+.segment-drop-zone.start {
+  border-color: rgba(34, 197, 94, 0.5);
+  background: rgba(34, 197, 94, 0.05);
+}
+
+.segment-drop-zone.between {
+  border-color: rgba(59, 130, 246, 0.5);
+  background: rgba(59, 130, 246, 0.05);
+}
+
+.segment-drop-zone:hover {
+  border-style: solid;
+  transform: scaleY(1.1);
+}
+
+.segment-drop-zone.start:hover {
+  border-color: rgba(34, 197, 94, 0.8);
+  background: rgba(34, 197, 94, 0.1);
+  box-shadow: 0 0 15px rgba(34, 197, 94, 0.2);
+}
+
+.segment-drop-zone.between:hover {
+  border-color: rgba(59, 130, 246, 0.8);
+  background: rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 15px rgba(59, 130, 246, 0.2);
+}
+
+.segment-drop-zone span {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #a0a0a0;
+  margin-left: 0.5rem;
+}
+
+.segment-drop-zone.start span {
+  color: rgba(34, 197, 94, 0.8);
+}
+
+.segment-drop-zone.between span {
+  color: rgba(59, 130, 246, 0.8);
+}
+
+/* Reorganize Mode Styles */
+.scene-card.reorganize-mode {
+  cursor: grab;
+  user-select: none;
+  transition: all 0.2s ease;
+}
+
+.scene-card.reorganize-mode:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.scene-card.reorganize-mode:active {
+  cursor: grabbing;
+  transform: rotate(3deg) scale(1.02);
+  opacity: 0.8;
+  z-index: 1000;
+}
+
+.drag-handle {
+  position: absolute;
+  left: -30px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(255, 107, 53, 0.8);
+  color: white;
+  padding: 0.5rem 0.25rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: bold;
+  cursor: grab;
+  box-shadow: 0 2px 8px rgba(255, 107, 53, 0.3);
+  transition: all 0.2s ease;
+}
+
+.drag-handle:hover {
+  background: rgba(255, 107, 53, 1);
+  transform: translateY(-50%) scale(1.1);
+}
+
+.scene-card.reorganize-mode .scene-title-input {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.scene-card.reorganize-mode .scene-actions button {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Drop Zone Styles */
+.drop-zone {
+  height: 60px;
+  margin: 0.5rem 0;
+  border: 2px dashed transparent;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  background: rgba(42, 42, 46, 0.3);
+  opacity: 0;
+  transform: scaleY(0);
+  animation: slideIn 0.3s ease forwards;
+}
+
+@keyframes slideIn {
+  to {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+
+.drop-zone.same-segment {
+  border-color: rgba(34, 197, 94, 0.5);
+  background: rgba(34, 197, 94, 0.05);
+}
+
+.drop-zone.next-segment {
+  border-color: rgba(59, 130, 246, 0.5);
+  background: rgba(59, 130, 246, 0.05);
+}
+
+.drop-zone.active {
+  border-color: rgba(255, 107, 53, 0.8);
+  background: rgba(255, 107, 53, 0.1);
+  transform: scaleY(1.1);
+  box-shadow: 0 0 20px rgba(255, 107, 53, 0.3);
+}
+
+.drop-zone:hover {
+  border-style: solid;
+  transform: scaleY(1.05);
+}
+
+.drop-zone.same-segment:hover {
+  border-color: rgba(34, 197, 94, 0.8);
+  background: rgba(34, 197, 94, 0.1);
+  box-shadow: 0 0 15px rgba(34, 197, 94, 0.2);
+}
+
+.drop-zone.next-segment:hover {
+  border-color: rgba(59, 130, 246, 0.8);
+  background: rgba(59, 130, 246, 0.1);
+  box-shadow: 0 0 15px rgba(59, 130, 246, 0.2);
+}
+
+.drop-zone-content {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #a0a0a0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  transition: color 0.3s ease;
+}
+
+.drop-zone.same-segment .drop-zone-content {
+  color: rgba(34, 197, 94, 0.8);
+}
+
+.drop-zone.next-segment .drop-zone-content {
+  color: rgba(59, 130, 246, 0.8);
+}
+
+.drop-zone.active .drop-zone-content {
+  color: rgba(255, 107, 53, 1);
+}
+
+.drop-zone:hover .drop-zone-content {
+  color: white;
+}
+
+/* Mode indicator */
+.workspace-header.reorganize-active {
+  background: rgba(255, 107, 53, 0.1);
+  border: 1px solid rgba(255, 107, 53, 0.2);
+  border-radius: 12px;
+  padding: 1.5rem 2rem;
+}
+
+.workspace-header.reorganize-active::before {
+  content: "🔄 Reorganize Mode Active";
+  position: absolute;
+  top: -10px;
+  left: 20px;
+  background: rgba(255, 107, 53, 0.9);
+  color: white;
+  padding: 0.25rem 0.75rem;
+  border-radius: 15px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* All Scenes Card Styling in Main Workspace */
+.scene-card.all-scenes-card {
+  border-left: 4px solid transparent;
+  background: linear-gradient(135deg, #2e2e34 0%, #2c2c32 100%);
+}
+
+.scene-card.all-scenes-card .act-indicator {
+  margin-right: 0.5rem;
+}
+
+.scene-card.all-scenes-card .act-indicator.act-1 {
+  background: rgba(255, 107, 53, 0.2);
+  color: rgba(255, 107, 53, 1);
+  border: 1px solid rgba(255, 107, 53, 0.3);
+  border-left-color: #ff6b35;
+}
+
+.scene-card.all-scenes-card .act-indicator.act-2 {
+  background: rgba(59, 130, 246, 0.2);
+  color: rgba(59, 130, 246, 1);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.scene-card.all-scenes-card .act-indicator.act-3 {
+  background: rgba(147, 51, 234, 0.2);
+  color: rgba(147, 51, 234, 1);
+  border: 1px solid rgba(147, 51, 234, 0.3);
+}
+
+/* Set border colors based on act */
+.scene-card.all-scenes-card:has(.act-indicator.act-1) {
+  border-left-color: #ff6b35;
+}
+
+.scene-card.all-scenes-card:has(.act-indicator.act-2) {
+  border-left-color: #3b82f6;
+}
+
+.scene-card.all-scenes-card:has(.act-indicator.act-3) {
+  border-left-color: #9333ea;
+}
+
+/* Fallback for browsers that don't support :has() */
+.scene-card.all-scenes-card.act-1-card {
+  border-left-color: #ff6b35;
+}
+
+.scene-card.all-scenes-card.act-2-card {
+  border-left-color: #3b82f6;
+}
+
+.scene-card.all-scenes-card.act-3-card {
+  border-left-color: #9333ea;
+}
+
+.segment-context-badge {
+  background: rgba(0, 0, 0, 0.3);
+  color: #8888a0;
+  padding: 0.15rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  font-weight: 500;
+  margin-left: auto;
+  white-space: nowrap;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.scene-card.all-scenes-card .scene-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.scene-card.all-scenes-card .scene-title-input {
+  flex: 1;
+  min-width: 200px;
+  max-width: 300px;
+}
+
+/* Hover effects for all scenes cards */
+.scene-card.all-scenes-card:hover {
+  transform: translateX(2px) translateY(-1px);
+}
+
+.scene-card.all-scenes-card:hover .act-indicator.act-1 {
+  background: rgba(255, 107, 53, 0.3);
+  border-color: rgba(255, 107, 53, 0.5);
+}
+
+.scene-card.all-scenes-card:hover .act-indicator.act-2 {
+  background: rgba(59, 130, 246, 0.3);
+  border-color: rgba(59, 130, 246, 0.5);
+}
+
+.scene-card.all-scenes-card:hover .act-indicator.act-3 {
+  background: rgba(147, 51, 234, 0.3);
+  border-color: rgba(147, 51, 234, 0.5);
+}
+
+.scene-card.all-scenes-card:hover .segment-context-badge {
+  background: rgba(255, 255, 255, 0.1);
+  color: #a0a0a0;
+}
+
+/* Responsive Design */
+@media (max-width: 1400px) {
+  .timeline-sidebar {
+    width: 400px;
+  }
+  
+  .main-workspace {
+    padding-right: 180px; /* Adjust for smaller screens */
+    max-width: calc(100% - 180px);
+  }
+  
+  .main-workspace.full-width {
+    padding-right: 380px;
+    max-width: calc(100% - 380px);
+  }
+}
+
+@media (max-width: 1200px) {
+  .timeline-sidebar {
+    width: 350px;
+  }
+  
+  .main-workspace {
+    padding-right: 160px; /* Further adjust for smaller screens */
+    max-width: calc(100% - 160px);
+  }
+  
+  .main-workspace.full-width {
+    padding-right: 360px;
+    max-width: calc(100% - 360px);
+  }
+}
+
+@media (max-width: 1024px) {
+  .timeline-sidebar {
+    width: 320px;
+    padding: 2rem 1.5rem;
+  }
+  
+  .main-workspace {
+    padding-right: 120px; /* Smaller margin for tablets */
+    max-width: calc(100% - 120px);
+  }
+  
+  .main-workspace.full-width {
+    padding-right: 340px;
+    max-width: calc(100% - 340px);
+  }
+  
+  .workspace-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 1rem;
+  }
+  
+  .workspace-actions {
+    justify-content: flex-start;
+  }
+  
+  .scene-content {
+    padding: 0.5rem;
+  }
+  
+  .scene-textarea {
+    font-size: 0.85rem;
+    min-height: 100px;
+    padding: 0.75rem;
+  }
+}
+
+@media (max-width: 768px) {
+  .main-container {
+    flex-direction: column;
+  }
+  
+  .timeline-sidebar {
+    width: 100%;
+    max-height: 300px;
+    border-right: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  
+  .main-workspace {
+    padding-right: 2rem; /* Reset to normal padding on mobile */
+    max-width: 100%;
+  }
+  
+  .main-workspace.full-width {
+    padding-right: 2rem;
+    padding-left: 2rem; /* Reduce left padding on mobile */
+    max-width: 100%;
+  }
+  
+  /* On mobile, ensure intern panel doesn't overlap */
+  .main-workspace.full-width.intern-mode {
+    margin-bottom: 400px; /* Space for mobile intern panel */
+  }
+  
+  .timeline {
+    display: flex;
+    overflow-x: auto;
+    padding-bottom: 1rem;
+  }
+  
+  .timeline::before {
+    display: none;
+  }
+  
+  .act-section {
+    margin-right: 1rem;
+    margin-bottom: 0;
+    flex-shrink: 0;
+  }
+  
+  .segment-item {
+    margin-left: 0;
+    margin-bottom: 0.5rem;
+  }
+  
+  .segment-item::before {
+    display: none;
+  }
+  
+  .scenes-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .scene-insert-controls {
+    position: static;
+    transform: none;
+    flex-direction: row;
+    margin-top: 0.5rem;
+    justify-content: flex-start;
+  }
+  
+  .view-toggle {
+    width: 100%;
+  }
+  
+  .toggle-option {
+    flex: 1;
+    text-align: center;
+  }
+  
+  .scene-flat-info {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
+  }
+  
+  .scene-flat-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .scene-flat-meta {
+    margin-top: 0.25rem;
+    justify-content: space-between;
+  }
+}
+
+@keyframes slideInFromTop {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Delayed version for scene selection popup */
+@keyframes slideInFromTopDelayed {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+/* Add a subtle backdrop when intern mode is active */
+.main-container.intern-mode-active::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(84, 191, 219, 0.02);
+  pointer-events: none;
+  z-index: 0;
+  animation: fadeInBackdrop 0.3s ease;
+}
+
+@keyframes fadeInBackdrop {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Ensure main content stays above backdrop */
+.main-workspace.full-width {
+  position: relative;
+  z-index: 1;
+}
+
+/* Smooth transition for scene selection popup during layout changes */
+.main-container.intern-mode-active + * [style*="position: fixed"][style*="left: 50%"] {
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+/* Alternative: Create a class for the scene selection popup */
+.scene-selection-popup {
+  position: fixed !important;
+  top: 80px !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  z-index: 1002 !important;
+}
+
+/* Adjust popup position during intern mode to account for layout shift */
+.main-container.intern-mode-active .scene-selection-popup {
+  left: calc(50% - 225px) !important; /* Adjust for half of timeline width */
+}
+
+.workspace-subtitle.preview {
+    opacity: 0.6;
+    font-style: italic;
+    cursor: pointer;
+}
+
+.scene-card-drag {
+  color: #666;
+  cursor: grab;
+}
+
+.scene-card:hover .scene-card-drag {
+  color: #888;
+}
+
+.scene-card-status {
+  font-size: 10px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: #2a2a2e;
+  color: #666;
+}

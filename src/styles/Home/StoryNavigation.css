@@ -1,0 +1,359 @@
+/* StoryNavigation Component - Fixed positioning and overlap issues */
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+
+.secondary-nav-container {
+  margin: 1rem auto 2rem;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  opacity: 1;
+  transform: translateY(0);
+  position: relative;
+  /* Remove the marginTop that was causing overlap */
+  background-color: transparent !important;
+  z-index: 900 !important; /* Ensure it stays above other content */
+}
+
+/* Hide when story nav is docked in header */
+.secondary-nav-container.hidden {
+  opacity: 0;
+  transform: translateY(-20px);
+  pointer-events: none;
+  margin: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+/* Breadcrumb Navigation Styles */
+.breadcrumb-navigation {
+  position: absolute;
+  left: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  z-index: 10;
+  font-family: "Inter", sans-serif;
+}
+
+.breadcrumb-item {
+  color: rgba(255, 255, 255, 0.5);
+  transition: color 0.3s ease;
+  cursor: pointer;
+  user-select: none;
+  text-decoration: none;
+}
+
+.breadcrumb-item:hover {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.breadcrumb-separator {
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 11px;
+  margin: 0 4px;
+  user-select: none;
+}
+
+.breadcrumb-current {
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 500;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.3s ease;
+  border: 1px solid transparent;
+  position: relative;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.breadcrumb-current:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.breadcrumb-current:hover .edit-icon {
+  opacity: 0.6;
+}
+
+.edit-icon {
+  margin-left: 6px;
+  opacity: 0;
+  transition: all 0.3s ease;
+  color: rgba(255, 255, 255, 0.5);
+  display: inline-flex;
+  align-items: center;
+}
+
+.edit-icon svg {
+  width: 10px;
+  height: 10px;
+  transition: all 0.2s ease;
+}
+
+.breadcrumb-current:hover .edit-icon {
+  color: rgba(255, 107, 53, 0.8);
+}
+
+/* Edit input styling */
+.breadcrumb-input {
+  background: rgba(40, 40, 40, 0.9) !important;
+  border: 1px solid #ff6b35 !important;
+  border-radius: 4px !important;
+  padding: 4px 8px !important;
+  color: white !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  outline: none !important;
+  min-width: 120px !important;
+  max-width: 200px !important;
+  font-family: "Inter", sans-serif !important;
+}
+
+/* New Story Option Styling */
+.new-story-option {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  background: rgba(40, 40, 40, 0.95);
+  border: 1px solid rgba(255, 107, 53, 0.4);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(10px);
+  z-index: 20;
+  font-family: "Inter", sans-serif;
+  font-weight: 500;
+  user-select: none;
+  animation: slideInFromTop 0.2s ease-out;
+}
+
+.new-story-option:hover {
+  background: rgba(255, 107, 53, 0.1) !important;
+  border-color: rgba(255, 107, 53, 0.6) !important;
+  color: rgba(255, 255, 255, 1) !important;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+}
+
+.new-story-option:active {
+  transform: translateY(0);
+}
+
+/* Animation for new story option */
+@keyframes slideInFromTop {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Main navigation pills container */
+.nav-pills-container {
+  background: rgba(20, 20, 20, 0.8) !important;
+  backdrop-filter: blur(20px) !important;
+  border-radius: 16px !important;
+  padding: 0.5rem !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3),
+    0 1px 0 rgba(255, 255, 255, 0.05) inset !important;
+  width: 30rem !important;
+  max-width: 90vw;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.secondary-nav-link {
+  position: relative;
+  overflow: hidden;
+  flex: 1 !important;
+  padding: 0.75rem 1rem !important;
+  text-align: center !important;
+  border-radius: 12px !important;
+  font-weight: 500 !important;
+  font-family: "Inter", sans-serif !important;
+  text-decoration: none !important;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  background: transparent !important;
+  color: rgba(255, 255, 255, 0.6) !important;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.secondary-nav-link:hover {
+  background: rgba(255, 255, 255, 0.05) !important;
+  color: rgba(255, 255, 255, 0.9) !important;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.secondary-nav-link:active {
+  transform: translateY(0);
+}
+
+.secondary-nav-link.active {
+  background: linear-gradient(
+    135deg,
+    rgba(255, 107, 53, 0.8) 0%,
+    rgba(255, 140, 66, 0.8) 100%
+  ) !important;
+  color: #ffffff !important;
+  box-shadow: 0 4px 12px rgba(255, 107, 53, 0.3), 0 2px 4px rgba(0, 0, 0, 0.2) !important;
+  font-weight: 600 !important;
+}
+
+.secondary-nav-link.active:hover {
+  background: linear-gradient(
+    135deg,
+    rgba(255, 122, 68, 0.85) 0%,
+    rgba(255, 155, 81, 0.85) 100%
+  ) !important;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(255, 107, 53, 0.4), 0 4px 8px rgba(0, 0, 0, 0.3) !important;
+}
+
+/* Shimmer effect for non-active links */
+.secondary-nav-link:not(.active)::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.1),
+    transparent
+  );
+  transition: left 0.5s ease;
+  z-index: -1;
+}
+
+.secondary-nav-link:not(.active):hover::before {
+  left: 100%;
+}
+
+/* Animation for tab switch */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Apply this animation to the main content containers */
+.scenes-container,
+.home-container {
+  animation: fadeIn 0.4s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+/* Fix the Scenes container padding to account for nav */
+.scenes-container {
+  padding-top: 1rem !important; /* Reduced from potential larger values */
+}
+
+/* Responsive styling for smaller screens */
+@media (max-width: 1024px) {
+  .breadcrumb-navigation {
+    left: 15px;
+  }
+
+  .breadcrumb-current {
+    max-width: 150px;
+  }
+
+  .nav-pills-container {
+    width: 28rem !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .nav-pills-container {
+    width: 25rem !important;
+    padding: 0.4rem !important;
+  }
+
+  .secondary-nav-link {
+    padding: 0.6rem 0.8rem !important;
+    font-size: 0.875rem !important;
+    border-radius: 10px !important;
+  }
+
+  .breadcrumb-navigation {
+    left: 10px;
+    font-size: 12px;
+  }
+
+  .breadcrumb-current {
+    max-width: 120px;
+  }
+
+  /* Adjust new story option for smaller screens */
+  .new-story-option {
+    font-size: 11px;
+    padding: 6px 10px;
+  }
+}
+
+@media (max-width: 576px) {
+  .nav-pills-container {
+    width: 20rem !important;
+    padding: 0.3rem !important;
+  }
+
+  .secondary-nav-link {
+    padding: 0.5rem 0.6rem !important;
+    font-size: 0.8rem !important;
+    border-radius: 8px !important;
+  }
+
+  /* Hide breadcrumb on very small screens to avoid overlap */
+  .breadcrumb-navigation {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .nav-pills-container {
+    width: 18rem !important;
+  }
+
+  .secondary-nav-link {
+    padding: 0.4rem 0.5rem !important;
+    font-size: 0.75rem !important;
+  }
+}
+
+/* Ensure breadcrumb doesn't interfere with navigation pills on medium screens */
+@media (max-width: 900px) and (min-width: 577px) {
+  .breadcrumb-navigation {
+    left: 10px;
+  }
+
+  .breadcrumb-current {
+    max-width: 100px;
+  }
+}
