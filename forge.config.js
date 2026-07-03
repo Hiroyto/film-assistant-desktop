@@ -108,6 +108,7 @@ module.exports = {
           name: process.env.GITHUB_REPO_NAME || 'film-assistant-desktop',
         },
         prerelease: true, // canal beta primeiro (Fase 3)
+        draft: false,     // publica direto (não como rascunho) — necessário p/ download público + botões da web
       },
     },
   ],
