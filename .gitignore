@@ -47,6 +47,12 @@ amplifytools.xcconfig
 **.sample
 #amplify-do-not-edit-end
 
+# aws-exports.js virou um LOADER de env vars (DEC-010/AD-08) — sem segredos, e é
+# importado por 7 telas. Precisa ir para o repo/CI (senão o build quebra com
+# "Can't resolve './aws-exports'"). Re-inclui só este arquivo; qualquer outro
+# aws-exports.js gerado pelo Amplify continua ignorado pela regra acima.
+!src/aws-exports.js
+
 # Reversa
 .reversa/config.user.toml
 .agents
