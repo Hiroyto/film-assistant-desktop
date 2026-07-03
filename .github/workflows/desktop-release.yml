@@ -48,6 +48,16 @@ jobs:
           # exhaustive-deps, ==), já aceitos como não-bloqueantes na reconstrução.
           # CI=false volta ao comportamento de warning normal (não falha o build).
           CI: 'false'
+          # --- Config do app injetada no BUILD (aws-exports.js / Amplify.configure) ---
+          # Sem estas, o app sai com Cognito undefined → "Auth UserPool not configured".
+          # NÃO são segredos (vão embutidos no bundle público), por isso usam `vars`.
+          # Defina em Settings → Secrets and variables → Actions → aba "Variables".
+          REACT_APP_AWS_REGION: ${{ vars.REACT_APP_AWS_REGION }}
+          REACT_APP_COGNITO_POOL_ID: ${{ vars.REACT_APP_COGNITO_POOL_ID }}
+          REACT_APP_COGNITO_APP_CLIENT_ID: ${{ vars.REACT_APP_COGNITO_APP_CLIENT_ID }}
+          REACT_APP_URL: ${{ vars.REACT_APP_URL }}
+          REACT_APP_WEBSOCKET_URL: ${{ vars.REACT_APP_WEBSOCKET_URL }}
+          REACT_APP_WEBSOCKET_ENDPOINT: ${{ vars.REACT_APP_WEBSOCKET_ENDPOINT }}
           # Forge precisa do owner/name explícitos (forge.config.js). Aponta para ESTE repo.
           GITHUB_REPO_OWNER: ${{ github.repository_owner }}
           GITHUB_REPO_NAME: ${{ github.event.repository.name }}
