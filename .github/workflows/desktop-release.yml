@@ -43,6 +43,11 @@ jobs:
 
       - name: Publish to GitHub Releases
         env:
+          # O CRA trata warnings como ERRO quando CI=true (o Actions seta isso sozinho).
+          # Os warnings restantes são débito de lint do código LEGADO (unused-vars,
+          # exhaustive-deps, ==), já aceitos como não-bloqueantes na reconstrução.
+          # CI=false volta ao comportamento de warning normal (não falha o build).
+          CI: 'false'
           # Forge precisa do owner/name explícitos (forge.config.js). Aponta para ESTE repo.
           GITHUB_REPO_OWNER: ${{ github.repository_owner }}
           GITHUB_REPO_NAME: ${{ github.event.repository.name }}
