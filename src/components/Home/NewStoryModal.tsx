@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { motion, AnimatePresence, easeOut } from "framer-motion";
 
+export type StoryWorkflow = 'outline' | 'freeform';
+
 interface NewStoryModalAppleProps {
     isOpen: boolean;
     onClose: () => void;
@@ -9,6 +11,9 @@ interface NewStoryModalAppleProps {
         primaryGenre: string;
         secondaryGenre?: string;
         theme: string;
+        /** Which pathway this story lives in: the structured outline editor
+         *  (/home) or the freeform corkboard (/freeform/:storyId). */
+        workflow: StoryWorkflow;
     }) => void;
 }
 
@@ -27,6 +32,7 @@ export default function NewStoryModalApple({
     const [primaryGenre, setPrimaryGenre] = useState("");
     const [secondaryGenre, setSecondaryGenre] = useState("");
     const [theme, setTheme] = useState("");
+    const [workflow, setWorkflow] = useState<StoryWorkflow>('outline');
 
     useEffect(() => {
         if (isOpen) {
@@ -34,6 +40,7 @@ export default function NewStoryModalApple({
             setPrimaryGenre("");
             setSecondaryGenre("");
             setTheme("");
+            setWorkflow('outline');
         }
     }, [isOpen]);
 
@@ -44,9 +51,15 @@ export default function NewStoryModalApple({
             primaryGenre,
             secondaryGenre: secondaryGenre || undefined,
             theme,
+            workflow,
         });
         onClose();
     };
+
+    const WORKFLOWS: Array<{ id: StoryWorkflow; name: string; blurb: string }> = [
+        { id: 'outline', name: 'Outline', blurb: 'Structured story builder — beats, synopsis, then scenes.' },
+        { id: 'freeform', name: 'Corkboard', blurb: 'Freeform canvas — braindump, cards, and a writing peer.' },
+    ];
 
     const modalVariants = {
         hidden: { opacity: 0, y: 8, scale: 0.995 },
@@ -103,8 +116,39 @@ export default function NewStoryModalApple({
                                 initial="hidden"
                                 animate="visible"
                                 exit="hidden"
-                                transition={{ staggerChildren: 0.025 }} // 
+                                transition={{ staggerChildren: 0.025 }} //
                             >
+                                <motion.div variants={fieldVariants} transition={transition}>
+                                    <label className="block text-sm text-[#ff8c42] mb-2 font-medium">
+                                        Workflow
+                                    </label>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        {WORKFLOWS.map((w) => {
+                                            const active = workflow === w.id;
+                                            return (
+                                                <button
+                                                    key={w.id}
+                                                    type="button"
+                                                    onClick={() => setWorkflow(w.id)}
+                                                    className={
+                                                        'text-left rounded-xl px-4 py-3 border-2 transition-all duration-200 ' +
+                                                        (active
+                                                            ? 'border-[#ff6b35] bg-[#ff6b35]/15 shadow-[0_0_16px_rgba(255,107,53,0.18)]'
+                                                            : 'border-[#ff8c42]/25 bg-black/30 hover:border-[#ff8c42]/50')
+                                                    }
+                                                >
+                                                    <div className={'font-semibold text-sm ' + (active ? 'text-[#ff8c42]' : 'text-white/85')}>
+                                                        {w.name}
+                                                    </div>
+                                                    <div className="text-xs text-white/40 mt-1 leading-snug">
+                                                        {w.blurb}
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </motion.div>
+
                                 <motion.div variants={fieldVariants} transition={transition}>
                                     <label className="block text-sm text-[#ff8c42] mb-1 font-medium">
                                         Title <span className="text-[#ff8c42]/60">(optional)</span>

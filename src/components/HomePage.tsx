@@ -13,6 +13,11 @@ import { User } from '../models/user';
 import { ErrorModal } from './ui/ErrorModal';
 import { useError } from './Error/useError';
 import { Layers } from 'lucide-react';
+import { markStoryWorkflow, resolveStoryWorkflow } from '../lib/storyWorkflows';
+import { isDesktop } from '../lib/ipcClient';
+import { saveStory } from '../features/story-workspace/model/storySave';
+import { cacheDataToCanonical } from '../features/story-workspace/model/cacheDataAdapter';
+import { worksFromLocal } from '../features/story-workspace/model/worksFromLocal';
 
 /**
  * HOMEPAGE COMPONENT
@@ -236,6 +241,8 @@ export function HomePage(props: HomePageProps) {
 
     const payload: any = {
       event: "save", title, userId: token?.payload["cognito:username"],
+      // Which pathway this story opens in (outline editor vs corkboard).
+      workflow: data?.workflow ?? 'outline',
       M: "", T: "", G: "", CQ: "", SUM: "", BRAINSTORM: "", S1: "", S2: "", S3: "", S4: "", S5: "", S6: "", S7: "", S8: "", S9: ""
     };
     try {
@@ -307,9 +314,17 @@ export function HomePage(props: HomePageProps) {
     primaryGenre: string;
     secondaryGenre?: string;
     theme: string;
+    workflow: 'outline' | 'freeform';
   };
 
-  const handleJumpToOutline = useCallback((form: FormStoryData) => {
+  // Creates the story record then forks by workflow: outline → the structured
+  // editor at /home (existing behavior); freeform → the corkboard at
+  // /freeform/:storyId. Freeform stories live in the same works registry
+  // (same grid, same limit) — their actual story data lives in the freeform
+  // backend keyed by projectId === storyId; the work record carries the title
+  // + workflow tag. The hero brainstorm text seeds the corkboard's braindump
+  // dock via navigation state.
+  const handleJumpToOutline = useCallback(async (form: FormStoryData) => {
     if (!canCreateStory()) return;
 
     const timestamp = new Date().toLocaleString('en-US', {
@@ -326,13 +341,48 @@ export function HomePage(props: HomePageProps) {
     const newData = {
       title: form.title || `Untitled Story ${timestamp}`,
       storyId: newStoryId,
-      BRAINSTORM: pendingBrainstormRef.current,
+      workflow: form.workflow,
+      BRAINSTORM: "",
       M: "", T: "", G: "", CQ: "", SUM: "",
       S1: "", S2: "", S3: "", S4: "", S5: "",
       S6: "", S7: "", S8: "", S9: ""
     };
 
-    pendingBrainstormRef.current = "";
+    if (form.workflow === 'freeform') {
+      // The corkboard owns its own state (freeform backend, keyed by storyId),
+      // but the WORK RECORD (title + workflow tag) must land in the same store
+      // the grid reads, so a corkboard story shows up beside outline stories and
+      // survives a restart. The corkboard is reached directly (never via /home),
+      // so we register the work HERE instead of relying on the outline editor's
+      // save. `workflow` isn't a column in the local `stories` table, so the tag
+      // is kept via markStoryWorkflow (localStorage) — resolveStoryWorkflow reads
+      // that fallback for routing + the grid badge.
+      markStoryWorkflow(newStoryId, 'freeform');
+
+      if (isDesktop()) {
+        // Local-first (mirrors App.save): SQLite is the source of truth; the
+        // push queue mirrors it to /works in the background. This is what feeds
+        // worksFromLocal → the Home/Profile grid.
+        try {
+          const userId = token?.payload['cognito:username'] as string;
+          await saveStory(cacheDataToCanonical(newData), userId, { forceImmediate: true });
+          const works = await worksFromLocal(userId);
+          setUser((prev: any) => (prev ? { ...prev, works } : prev));
+        } catch (e) {
+          console.error('freeform local save failed', e);
+        }
+      } else {
+        // Web: cloud /works registry (best-effort — matches outline behavior).
+        createNewStory(newData).catch(() => { /* cloud mirror best-effort */ });
+      }
+
+      const seed = brainstormText.trim();
+      navigate(`/freeform/${newStoryId}`, {
+        state: { justCreated: true, ...(seed ? { braindump: seed } : null) },
+      });
+      toast.success(`Created corkboard story: ${newData.title}`);
+      return;
+    }
 
     setData(newData);
     debouncedSave(newData);
@@ -345,7 +395,10 @@ export function HomePage(props: HomePageProps) {
     setData,
     debouncedSave,
     createNewStory,
-    navigate
+    navigate,
+    brainstormText,
+    token,
+    setUser
   ]);
 
 
@@ -359,6 +412,13 @@ export function HomePage(props: HomePageProps) {
 
     if (!storyData) {
       toast.error('Story not found');
+      return;
+    }
+
+    // Freeform stories open on the corkboard — their state lives in the
+    // freeform backend, not the outline editor's data context.
+    if (resolveStoryWorkflow(storyData, storyId) === 'freeform') {
+      navigate(`/freeform/${storyId}`);
       return;
     }
 

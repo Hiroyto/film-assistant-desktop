@@ -12,7 +12,9 @@
   "//deps": "Only MAIN-process runtime modules belong here — electron-packager copies production deps into the app. The renderer libs (react, aws-amplify, tiptap, radix, …) are bundled into build/ by craco at build time, so they live in devDependencies and are pruned from the package.",
   "dependencies": {
     "@sentry/electron": "^5.4.0",
+    "@types/react-grid-layout": "^1.3.6",
     "better-sqlite3": "^11.10.0",
+    "react-grid-layout": "^1.5.3",
     "update-electron-app": "^3.2.0"
   },
   "devDependencies": {
