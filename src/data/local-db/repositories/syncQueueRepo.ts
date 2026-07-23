@@ -66,6 +66,20 @@ export async function depth(): Promise<number> {
   return row?.n ?? 0;
 }
 
+/**
+ * Re-arma entries que DESISTIRAM (status='failed', next_attempt_at=NULL — que o
+ * listProcessable ignora, pois `NULL <= now` é falso) para reprocessamento
+ * imediato: volta a 'pending' com next_attempt_at=now e zera attempts. Usado só
+ * pelo "Retry sync" manual — o backoff automático não ressuscita gave-ups, mas o
+ * usuário pode forçar (ex.: depois que a conectividade/CORS foi corrigida).
+ */
+export async function rearmFailed(now: string): Promise<void> {
+  await run(
+    "UPDATE sync_queue SET status='pending', attempts=0, next_attempt_at=?, failure_reason=NULL WHERE status='failed'",
+    [now],
+  );
+}
+
 export async function clear(): Promise<void> {
   await run('DELETE FROM sync_queue', []);
 }

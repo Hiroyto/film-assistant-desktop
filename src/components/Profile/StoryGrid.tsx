@@ -2,6 +2,7 @@ import React from 'react';
 import StoryCard from './StoryCard';
 import { Story } from './StoryCard.types';
 import { ChevronsRightLeft } from 'lucide-react';
+import { resolveStoryWorkflow } from '../../lib/storyWorkflows';
 
 interface StoryGridProps {
     works?: Record<string, Story>; // 👈 agora pode ser undefined
@@ -22,10 +23,14 @@ const StoryGrid: React.FC<StoryGridProps> = ({
     const getStoryDisplayData = (story: Story) => {
         if (!story) return null;
 
+        const isFreeform = resolveStoryWorkflow(story as any, story.storyId) === 'freeform';
         return {
             title: story.title || "Untitled Story",
-            genre: story.G || "No Genre",
-            summary: story.SUM || "No summary available",
+            // Freeform stories badge as Corkboard (they carry no outline genre).
+            genre: isFreeform ? 'Corkboard' : (story.G || "No Genre"),
+            summary: isFreeform
+                ? (story.SUM || "Freeform corkboard story")
+                : (story.SUM || "No summary available"),
             lastModified: story.lastModified
                 ? new Date(story.lastModified).toLocaleDateString("en-US")
                 : ""

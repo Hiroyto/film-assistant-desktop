@@ -41,6 +41,72 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Importa o certificado "Developer ID Application" num keychain temporário.
+      # SEM ESTE PASSO o codesign não encontra APPLE_IDENTITY e a assinatura falha
+      # (o forge cai para build não-assinado ou quebra). O keychain criado aqui
+      # persiste no runner para o passo de publish abaixo.
+      # Se o secret estiver vazio, é no-op: o build macOS sai NÃO-ASSINADO.
+      - name: Import Apple Developer ID certificate (macOS)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPLE_CERT_P12_BASE64:-}" ]; then
+            echo "::warning::APPLE_CERT_P12_BASE64 vazio — o build macOS sairá NÃO-ASSINADO."
+            exit 0
+          fi
+
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          CERT_PATH="$RUNNER_TEMP/apple-cert.p12"
+          B64_PATH="$RUNNER_TEMP/apple-cert.b64"
+
+          # Remove QUALQUER espaço em branco (quebras de linha, CR do Windows,
+          # espaços colados junto na hora de salvar o secret) — a causa mais comum
+          # de "error decoding base64 input stream".
+          printf '%s' "$APPLE_CERT_P12_BASE64" | tr -d '[:space:]' > "$B64_PATH"
+
+          # Diagnóstico seguro: só o TAMANHO (não o valor). Compare com o tamanho
+          # do seu apple-cert.p12.base64 local — se divergir, o secret veio truncado.
+          echo "Secret base64: $(wc -c < "$B64_PATH") caracteres (após limpar espaços)."
+
+          # openssl é mais portátil que o `base64` do BSD/macOS; -A = entrada em 1 linha.
+          if ! openssl base64 -d -A -in "$B64_PATH" -out "$CERT_PATH" 2>/dev/null; then
+            echo "::error::Falha ao decodificar APPLE_CERT_P12_BASE64. Regenere com:"
+            echo "::error::openssl base64 -A -in apple-cert.p12 -out apple-cert.p12.base64"
+            echo "::error::e cole o conteúdo INTEIRO do arquivo (uma linha só, sem quebras)."
+            exit 1
+          fi
+          rm -f "$B64_PATH"
+
+          if [ ! -s "$CERT_PATH" ]; then
+            echo "::error::O .p12 decodificado está vazio — secret incompleto."
+            exit 1
+          fi
+          echo "Certificado decodificado: $(wc -c < "$CERT_PATH") bytes."
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          # -lut: não auto-bloquear durante o build (6h) — senão o codesign falha no meio.
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+
+          security import "$CERT_PATH" -k "$KEYCHAIN" -P "$APPLE_CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          # Libera o uso da chave privada pelo codesign sem prompt de UI.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+
+          # Coloca o keychain na lista de busca (e como default) para o codesign achá-lo.
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          security default-keychain -s "$KEYCHAIN"
+
+          rm -f "$CERT_PATH"
+
+          echo "Identidades de assinatura disponíveis:"
+          security find-identity -v -p codesigning "$KEYCHAIN"
+
       - name: Publish to GitHub Releases
         env:
           # O CRA trata warnings como ERRO quando CI=true (o Actions seta isso sozinho).

@@ -65,6 +65,7 @@ function makeDeps(overrides: Partial<LifecycleDeps> = {}): {
     startSyncScheduler: startSyncScheduler as any,
     processQueue: processQueue as any,
     runPull: runPull as any,
+    rearmFailedQueue: jest.fn(async () => {}) as any,
     repos,
     ...overrides,
   };

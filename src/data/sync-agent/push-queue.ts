@@ -1,6 +1,7 @@
 // push-queue — worker que drena a sync_queue para o backend AWS (data_migration_plan
-// §Ongoing push). Usa safeApiCall com X-Request-Id (idempotência COD-008) e a política
-// de backoff (idempotency.ts). 409 -> conflict; 5xx/network -> backoff; sucesso -> remove.
+// §Ongoing push). Idempotência (COD-008) via `requestId` no BODY (não no header
+// X-Request-Id — ver nota de CORS abaixo) e política de backoff (idempotency.ts).
+// 409 -> conflict; 5xx/network -> backoff; sucesso -> remove.
 import { syncQueueRepo } from '../local-db/repositories';
 import { safeApiCall } from '../../models/apiHelpers';
 import { nextAttemptAt, shouldGiveUp } from './idempotency';
@@ -49,18 +50,21 @@ export async function processQueue(deps: PushDeps): Promise<void> {
     } catch {
       /* payload inválido tratado como erro permanente abaixo */
     }
-    // COD-008: o request_id também viaja no BODY (campo `requestId`), porque a Lambda
-    // /works roda em integração non-proxy e não recebe o header X-Request-Id. O header
-    // (idempotencyKey) é mantido para endpoints/integrações proxy.
+    // COD-008: o request_id viaja no BODY (campo `requestId`) — a Lambda /works roda
+    // em integração non-proxy e lê a idempotência daqui, não do header X-Request-Id.
     if (body && typeof body === 'object') {
       (body as Record<string, unknown>).requestId = row.request_id;
     }
 
     // Ordem em que o backend recebe a mutation (spec 03 @ordem). No-op fora de teste.
     recordPush(row.request_id);
+    // CORS (desktop): NÃO enviamos o header X-Request-Id. Ele obrigaria o preflight a
+    // exigir `x-request-id` em Access-Control-Allow-Headers, que a API Gateway não
+    // libera para a origem do desktop (file://null / localhost) — o POST virava
+    // "CORS error" (enquanto chamadas sem esse header, como o delete, passam). A
+    // idempotência não depende do header: o request_id já vai no BODY (acima).
     // noRetry: o retry é controlado pela FILA (backoff persistente), não pelo safeApiCall.
     const res = await safeApiCall(endpoint, body, token, {
-      idempotencyKey: row.request_id,
       noRetry: true,
     });
 

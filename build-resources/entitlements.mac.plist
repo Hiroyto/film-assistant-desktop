@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements do hardened runtime (exigido pela notarização — RISK-005 / AD-06).
+
+  Por que cada um:
+  - allow-jit / allow-unsigned-executable-memory: o V8 do Electron compila JS em
+    tempo de execução; sem isso o app assinado crasha no boot.
+  - disable-library-validation: carregamos o .node nativo do better-sqlite3 a
+    partir de app.asar.unpacked (plugin auto-unpack-natives). Sem isso o dlopen
+    é bloqueado pelo hardened runtime e o SQLite não abre (BR-04).
+  - allow-dyld-environment-variables: necessário para o Electron/electron-rebuild
+    resolver bibliotecas nativas em alguns cenários de empacotamento.
+
+  NÃO é sandbox da Mac App Store — esta é a rota Developer ID (fora da loja).
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+</dict>
+</plist>

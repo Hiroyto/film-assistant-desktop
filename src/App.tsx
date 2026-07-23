@@ -39,7 +39,7 @@ import { FetchUserAttributesOutput } from 'aws-amplify/auth';
 import type { WithAuthenticatorProps } from '@aws-amplify/ui-react';
 import { withAuthenticator } from '@aws-amplify/ui-react';
 import { useAuthenticator, Authenticator } from '@aws-amplify/ui-react';
-import { BrowserRouter, HashRouter, Routes, Route, useLocation } from 'react-router-dom';
+import { BrowserRouter, HashRouter, Routes, Route, useLocation, Navigate } from 'react-router-dom';
 import { debounce } from "lodash";
 import { Cache } from 'aws-amplify/utils';
 import { useNavigate } from 'react-router-dom';
@@ -63,6 +63,9 @@ import { Scripts } from './components/Scripts/Scripts';
 import { Event, EventStatus, Winner, Submission } from './models/event';
 import Landing from './components/landing';
 import Scenes from './components/scenes';
+import FreeformDemo from './pages/app/freeform-demo';
+import FreeformCorkboard from './pages/app/freeform-corkboard';
+import FreeformScript from './pages/app/freeform-script';
 import HomePage from './components/HomePage';
 import { AIModelProvider } from './components/AIModelContext';
 import { GlobalErrorModal } from './components/Error/GlobalErrorModal';
@@ -272,10 +275,14 @@ const LoginRoute = ({ children }: { children: React.ReactNode }) => {
 
 /**
  * LandingRoute
- * 
+ *
  * Wrapper for the public landing page. Authenticated users are redirected
- * to /home since they don't need to see the marketing page.
- * 
+ * to /dashboard since they don't need to see the marketing page.
+ *
+ * NOTE (codebase única web+desktop): a landing só existe na WEB. No desktop a
+ * rota "/" redireciona direto para /login (ver estrutura de rotas abaixo), então
+ * este guarda nunca é montado no shell Electron.
+ *
  * USAGE: <LandingRoute><Landing /></LandingRoute>
  */
 const LandingRoute = ({ children }: { children: React.ReactNode }) => {
@@ -1859,13 +1866,13 @@ function AppContent() {
    * This eliminates prop drilling and allows any component to access app state.
    * 
    * ROUTE STRUCTURE:
-   * - Public: / (landing), /login
+   * - Public: / (landing na WEB; no DESKTOP redireciona para /login), /login
    * - Protected: /home, /profile, /prices, /community, /scenes, /scripts
    * - Admin-only: /events
    * - Fallback: * (404 page)
-   * 
+   *
    * ROUTE GUARDS:
-   * - LandingRoute: Redirects authenticated users to /home
+   * - LandingRoute: Redirects authenticated users to /dashboard (só na web)
    * - LoginRoute: Redirects authenticated users to /home
    * - ProtectedRoute: Requires authentication
    * - AdminRoute: Requires admin role
@@ -1937,10 +1944,15 @@ function AppContent() {
                 {/* ========================================
                 PUBLIC ROUTES
                 ======================================== */}
+                {/* Codebase única web+desktop: a WEB mantém a landing em "/".
+                    O DESKTOP não tem landing — a raiz vai direto para /login (e a
+                    LoginRoute leva usuários já autenticados a /dashboard). */}
                 <Route path="/" element={
-                  <LandingRoute>
-                    <Landing />
-                  </LandingRoute>
+                  isDesktop()
+                    ? <Navigate to="/login" replace />
+                    : <LandingRoute>
+                        <Landing />
+                      </LandingRoute>
                 } />
                 <Route path="/login" element={
                   <LoginRoute>
@@ -1984,6 +1996,31 @@ function AppContent() {
                 <Route path="/scripts" element={
                   <ProtectedRoute>
                     <Scripts attributes={attributes} user={user} signOut={handleSignOut} />
+                  </ProtectedRoute>
+                } />
+
+                {/* ========================================
+                FREEFORM PEER (A1 demo / FIL-476)
+                ======================================== */}
+                <Route path="/freeform-demo" element={
+                  <ProtectedRoute>
+                    <FreeformDemo />
+                  </ProtectedRoute>
+                } />
+
+                {/* ========================================
+                FREEFORM CORKBOARD (FIL-496) — real /freeform/:storyId surface
+                ======================================== */}
+                <Route path="/freeform/:storyId" element={
+                  <ProtectedRoute>
+                    <FreeformCorkboard />
+                  </ProtectedRoute>
+                } />
+                {/* Freeform script document view — scenes in spine order,
+                    per-scene screenwriting editor (script-editor design v1). */}
+                <Route path="/freeform/:storyId/script" element={
+                  <ProtectedRoute>
+                    <FreeformScript />
                   </ProtectedRoute>
                 } />
 

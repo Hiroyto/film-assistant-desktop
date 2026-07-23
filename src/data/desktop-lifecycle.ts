@@ -35,6 +35,7 @@ import { startSyncScheduler as defaultStartScheduler } from './sync-agent/schedu
 import { processQueue as defaultProcessQueue } from './sync-agent/push-queue';
 import { runPull as defaultRunPull } from './sync-agent/pull-strategy';
 import { initialPullRepos as defaultRepos } from './local-db/repositories';
+import { rearmFailed as defaultRearmFailed } from './local-db/repositories/syncQueueRepo';
 import type { RawStory, RawUser } from './sync-agent/transforms';
 
 // --- Injectable collaborators ------------------------------------------------
@@ -49,6 +50,8 @@ export interface LifecycleDeps {
   startSyncScheduler: typeof defaultStartScheduler;
   processQueue: typeof defaultProcessQueue;
   runPull: typeof defaultRunPull;
+  /** Re-arma gave-ups da fila (Retry sync manual). @see syncQueueRepo.rearmFailed */
+  rearmFailedQueue: (now: string) => Promise<void>;
   repos: InitialPullRepos;
 }
 
@@ -62,6 +65,7 @@ const PROD_DEPS: LifecycleDeps = {
   startSyncScheduler: defaultStartScheduler,
   processQueue: defaultProcessQueue,
   runPull: defaultRunPull,
+  rearmFailedQueue: defaultRearmFailed,
   repos: defaultRepos,
 };
 
@@ -193,10 +197,14 @@ export function startDesktopDataLifecycle(opts: DesktopLifecycleOptions): Deskto
     }
   };
 
-  // Pull + push manual (Retry sync). Pull primeiro (puxa deltas do backend),
-  // depois empurra a fila local. Não-destrutivo.
+  // Pull + push manual (Retry sync). Re-arma primeiro as entries que desistiram
+  // (o "Retry" do usuário é um pedido explícito de reprocessar tudo, inclusive
+  // gave-ups que o backoff automático não ressuscita — ex.: depois que a
+  // conectividade/CORS foi corrigida). Depois pull (deltas do backend) e push.
+  // Não-destrutivo.
   const syncNow = async (): Promise<void> => {
     try {
+      await deps.rearmFailedQueue(new Date().toISOString());
       await deps.runPull({ userId, getWorks: getWorksOngoing, since: null, onConflict: opts.onConflict });
       await deps.processQueue({ getToken });
     } catch (e) {

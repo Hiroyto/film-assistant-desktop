@@ -11,6 +11,7 @@ import { toast } from 'react-hot-toast';
 import { User } from '../../models/user'
 import { useAuthenticator } from '@aws-amplify/ui-react';
 import { useNavigate } from 'react-router-dom';
+import { resolveStoryWorkflow } from '../../lib/storyWorkflows';
 import { Settings, CreditCard } from "lucide-react";
 import Footer from "../../components/footer";
 import { isDesktop, openExternal } from "../../lib/ipcClient";
@@ -163,6 +164,11 @@ export default function Profile(props: any) {
     // };
 
     const loadWork = async (storyId: string) => {
+        // Corkboard stories always reopen on the corkboard.
+        if (resolveStoryWorkflow(user?.works?.[storyId], storyId) === 'freeform') {
+            navigate(`/freeform/${storyId}`);
+            return;
+        }
         try {
             // Auto-save current work if it has any content
             if (data.title && data.storyId && Object.values(data).some(value =>
