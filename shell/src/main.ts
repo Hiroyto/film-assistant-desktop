@@ -5,7 +5,7 @@
 // (resume/before-quit — AD-03), auto-update (AD-09). A camada de dados (SQLite via
 // IPC db:query) é plugada na Tarefa 07; as telas novas do shell, na Tarefa 15.
 
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, session } from 'electron';
 import * as path from 'path';
 import { IPC } from './ipc/channels';
 import { registerIpcHandlers, sendToRenderer } from './ipc/bridge';
@@ -20,6 +20,42 @@ import { registerTestBridge } from './test/testBridge';
 const isDev = !app.isPackaged;
 
 let mainWindow: BrowserWindow | null = null;
+
+// CORS bypass para a API Gateway AWS. O renderer roda numa origem que o backend
+// não libera (dev: http://localhost:3000; empacotado: file:// → Origin null), e
+// a integração /works é non-proxy sem ACAO na resposta real — então todo POST de
+// sync falhava CORS e a fila nunca drenava (app "offline"). Aqui, no processo
+// main, injetamos os headers de CORS APENAS nas respostas do host da API Gateway
+// (escopo mínimo), o que também cobre o preflight OPTIONS. Auth é por header
+// Authorization (sem cookies), então ACAO '*' é seguro (sem Allow-Credentials).
+const AWS_API_HOST = /\.execute-api\.[a-z0-9-]+\.amazonaws\.com$/i;
+
+function installApiCorsBypass(): void {
+  const ses = session.defaultSession;
+  // Log de boot — confirma no terminal do desktop:start que o main NOVO carregou.
+  console.log('[cors-bypass] ativo para *.execute-api.*.amazonaws.com');
+  ses.webRequest.onHeadersReceived((details, callback) => {
+    let host = '';
+    try {
+      host = new URL(details.url).hostname;
+    } catch {
+      /* url inválida — não mexe */
+    }
+    if (!AWS_API_HOST.test(host)) {
+      callback({ responseHeaders: details.responseHeaders });
+      return;
+    }
+    const headers = { ...(details.responseHeaders ?? {}) };
+    // Remove variantes existentes (case-insensitive) pra não duplicar o header.
+    for (const key of Object.keys(headers)) {
+      if (/^access-control-allow-(origin|headers|methods)$/i.test(key)) delete headers[key];
+    }
+    headers['Access-Control-Allow-Origin'] = ['*'];
+    headers['Access-Control-Allow-Headers'] = ['Authorization, Content-Type, X-Request-Id, *'];
+    headers['Access-Control-Allow-Methods'] = ['GET, POST, PUT, DELETE, OPTIONS'];
+    callback({ responseHeaders: headers });
+  });
+}
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -82,6 +118,7 @@ if (!gotSingleInstanceLock) {
     registerDbHandlers(); // abre SQLite + roda migrations + registra db:query/db:batch
     registerIpcHandlers();
     registerDeepLinkProtocol();
+    installApiCorsBypass(); // headers de CORS p/ a API Gateway (antes de carregar a janela)
     createWindow();
     buildAppMenu(() => mainWindow, { isDev }); // SCR-0027 menu nativo
     registerTestBridge(() => mainWindow); // no-op fora de ELECTRON_IS_TEST=1
