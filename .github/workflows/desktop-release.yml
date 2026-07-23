@@ -29,6 +29,10 @@ jobs:
           - os: windows-latest   # gera FilmAssistantSetup.exe (Squirrel)
           - os: macos-latest     # gera .dmg (Apple Silicon / arm64)
     runs-on: ${{ matrix.os }}
+    # Rede de segurança: assinatura/notarização podem TRAVAR (codesign esperando
+    # autorização de keychain, ou notarytool aguardando a Apple indefinidamente).
+    # Sem isto o job fica horas pendurado. Tempo normal: ~15-30 min no total.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -139,4 +143,8 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Logs verbosos de assinatura/notarização. Sem isto o Forge fica mudo em
+          # "Finalizing package" e não dá para saber se travou no codesign ou se está
+          # apenas aguardando a Apple analisar o upload da notarização.
+          DEBUG: '@electron/osx-sign*,@electron/notarize*,electron-osx-sign*,electron-notarize*'
         run: npm run desktop:publish
