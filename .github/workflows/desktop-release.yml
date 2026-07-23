@@ -61,8 +61,31 @@ jobs:
           KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
           KEYCHAIN_PASSWORD="$(uuidgen)"
           CERT_PATH="$RUNNER_TEMP/apple-cert.p12"
+          B64_PATH="$RUNNER_TEMP/apple-cert.b64"
 
-          echo "$APPLE_CERT_P12_BASE64" | base64 --decode > "$CERT_PATH"
+          # Remove QUALQUER espaço em branco (quebras de linha, CR do Windows,
+          # espaços colados junto na hora de salvar o secret) — a causa mais comum
+          # de "error decoding base64 input stream".
+          printf '%s' "$APPLE_CERT_P12_BASE64" | tr -d '[:space:]' > "$B64_PATH"
+
+          # Diagnóstico seguro: só o TAMANHO (não o valor). Compare com o tamanho
+          # do seu apple-cert.p12.base64 local — se divergir, o secret veio truncado.
+          echo "Secret base64: $(wc -c < "$B64_PATH") caracteres (após limpar espaços)."
+
+          # openssl é mais portátil que o `base64` do BSD/macOS; -A = entrada em 1 linha.
+          if ! openssl base64 -d -A -in "$B64_PATH" -out "$CERT_PATH" 2>/dev/null; then
+            echo "::error::Falha ao decodificar APPLE_CERT_P12_BASE64. Regenere com:"
+            echo "::error::openssl base64 -A -in apple-cert.p12 -out apple-cert.p12.base64"
+            echo "::error::e cole o conteúdo INTEIRO do arquivo (uma linha só, sem quebras)."
+            exit 1
+          fi
+          rm -f "$B64_PATH"
+
+          if [ ! -s "$CERT_PATH" ]; then
+            echo "::error::O .p12 decodificado está vazio — secret incompleto."
+            exit 1
+          fi
+          echo "Certificado decodificado: $(wc -c < "$CERT_PATH") bytes."
 
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
           # -lut: não auto-bloquear durante o build (6h) — senão o codesign falha no meio.
