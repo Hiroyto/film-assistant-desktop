@@ -5,6 +5,7 @@ import 'react-resizable/css/styles.css';
 import { hexToRgba } from '../../../components/Freeform/entityColors';
 import RGL, { WidthProvider, type Layout } from 'react-grid-layout';
 import { liftColor, useThemeMode } from './theme';
+import { HoverTip } from './tooltip';
 
 // =====================================================================
 // Bento section-tile system (card-surface rework).
@@ -41,6 +42,8 @@ export type SectionTileDef = {
   defaultExpanded?: boolean;
   /** Accent stripe color (entity color, or a section-specific hue). */
   accent?: string;
+  /** One-line explanation shown via the header "i" hover tooltip. */
+  hint?: string;
   content: React.ReactNode;
 };
 
@@ -122,7 +125,7 @@ export const buildCharacterBentoLayout = makeDesignedBentoLayout(
 // knowledge + arcs, then the structural tiles.
 export const buildEventBentoLayout = makeDesignedBentoLayout(
   'summary', 'working',
-  ['subevents', 'knowledge', 'arcs', 'throughline', 'causality', 'established', 'cast', 'location'],
+  ['subevents', 'knowledge', 'arcs', 'throughline', 'sequence', 'causality', 'established', 'cast', 'location'],
 );
 
 // Arc + Relationship have no peer workspace, so the centerId (the tile beside
@@ -136,6 +139,14 @@ export const buildArcBentoLayout = makeDesignedBentoLayout(
 export const buildRelationshipBentoLayout = makeDesignedBentoLayout(
   'identity', 'shared',
   ['endpoints', 'opendims'],
+);
+
+// A Sequence is a development surface: Summary (the broad movement) beside Open
+// Questions (the peer decomposing/pressure-testing it), then its member scenes,
+// the sequence throughline, and the arcs threading through it.
+export const buildSequenceBentoLayout = makeDesignedBentoLayout(
+  'summary', 'questions',
+  ['scenes', 'throughline', 'arcs'],
 );
 
 // --- Bento layout persistence (per-card, localStorage) ---
@@ -373,18 +384,22 @@ export function BentoSheet({
   return (
     <div className="cb-scroll" style={{ height: '100%', overflowY: 'auto', padding: '8px 12px' }}>
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
-        <button
-          type="button"
-          onClick={resetLayout}
-          title="Discard this card's saved tile arrangement and restore the default layout"
-          style={{
-            border: 'none', background: 'none', cursor: 'pointer',
-            fontSize: 10, letterSpacing: 0.5, textTransform: 'uppercase',
-            color: '#94a3b8', padding: '2px 4px',
-          }}
+        <HoverTip
+          text="Discard this card's saved tile arrangement and restore the default layout."
+          placement="bottom-left"
         >
-          ↺ reset layout
-        </button>
+          <button
+            type="button"
+            onClick={resetLayout}
+            style={{
+              border: 'none', background: 'none', cursor: 'pointer',
+              fontSize: 10, letterSpacing: 0.5, textTransform: 'uppercase',
+              color: '#94a3b8', padding: '2px 4px',
+            }}
+          >
+            ↺ reset layout
+          </button>
+        </HoverTip>
       </div>
       {/* Styling for library-injected elements (placeholder + resize handles)
           that have no inline-style hook. Not a stylesheet file — a co-located
@@ -444,7 +459,7 @@ export function BentoSheet({
         resizeHandles={['e', 'w']}
       >
         {tiles.map((t) => (
-          <div key={t.id}>
+          <div key={t.id} data-tour={`bento-${t.id}`}>
             <SectionTile
               def={t}
               expanded={!collapsed.has(t.id)}
@@ -521,44 +536,70 @@ export function SectionTile({
           borderBottom: expanded ? (dark ? '1px solid #222228' : '1px solid #f1f5f9') : 'none',
         }}
       >
-        <span
-          className="bento-grip"
-          title="Drag to move"
-          onClick={(e) => e.stopPropagation()}
-          style={{ cursor: 'grab', color: dark ? '#4a4a52' : '#cbd5e1', fontSize: 13, lineHeight: 1, userSelect: 'none', flexShrink: 0, padding: '0 2px', position: 'relative', zIndex: 10 }}
-        >
-          ⠿
-        </span>
-        <span
-          style={{
-            flex: 1,
-            minWidth: 0,
-            fontSize: 10,
-            fontWeight: 600,
-            letterSpacing: 0.4,
-            textTransform: 'uppercase',
-            color: dark ? '#8c8c96' : '#475569',
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-          }}
-        >
-          {def.label}
-        </span>
-        {onCenter && (
-          <button
-            className="bento-no-drag"
-            type="button"
-            onClick={(e) => { e.stopPropagation(); onCenter(); }}
-            title={centered ? 'Restore layout' : 'Center this tile'}
+        <HoverTip text="Drag to move this tile." placement="bottom-right" width={150} wrapStyle={{ flexShrink: 0 }}>
+          <span
+            className="bento-grip"
+            onClick={(e) => e.stopPropagation()}
+            style={{ cursor: 'grab', color: dark ? '#4a4a52' : '#cbd5e1', fontSize: 13, lineHeight: 1, userSelect: 'none', flexShrink: 0, padding: '0 2px', position: 'relative', zIndex: 10 }}
+          >
+            ⠿
+          </span>
+        </HoverTip>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 5 }}>
+          <span
             style={{
-              border: 'none', background: 'transparent', cursor: 'pointer',
-              color: centered ? accent : '#cbd5e1', fontSize: 12, lineHeight: 1,
-              padding: '0 2px', flexShrink: 0,
+              minWidth: 0,
+              fontSize: 10,
+              fontWeight: 600,
+              letterSpacing: 0.4,
+              textTransform: 'uppercase',
+              color: dark ? '#8c8c96' : '#475569',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
             }}
           >
-            {centered ? '⤡' : '⤢'}
-          </button>
+            {def.label}
+          </span>
+          {def.hint && (
+            <HoverTip text={def.hint} placement="bottom-right" accent={accent} width={210} wrapStyle={{ flexShrink: 0 }}>
+              <span
+                aria-label={`About ${def.label}`}
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  width: 14, height: 14, borderRadius: '50%', boxSizing: 'border-box',
+                  border: `1px solid ${dark ? '#3a3a42' : '#d0d5dd'}`,
+                  color: dark ? '#82828c' : '#98a2b3',
+                  fontSize: 9, fontWeight: 700, fontStyle: 'italic',
+                  fontFamily: 'Georgia, "Times New Roman", serif', lineHeight: 1, cursor: 'help',
+                }}
+              >
+                i
+              </span>
+            </HoverTip>
+          )}
+        </div>
+        {onCenter && (
+          <HoverTip
+            text={centered ? 'Restore the previous layout.' : 'Center this tile: full width at the top, the rest two per row below.'}
+            placement="bottom-left"
+            accent={centered ? accent : undefined}
+            wrapStyle={{ flexShrink: 0 }}
+          >
+            <button
+              className="bento-no-drag"
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onCenter(); }}
+              style={{
+                border: 'none', background: 'transparent', cursor: 'pointer',
+                color: centered ? accent : '#cbd5e1', fontSize: 12, lineHeight: 1,
+                padding: '0 2px', flexShrink: 0,
+              }}
+            >
+              {centered ? '⤡' : '⤢'}
+            </button>
+          </HoverTip>
         )}
         <span style={{ fontSize: 11, color: dark ? '#6e6e78' : '#94a3b8', whiteSpace: 'nowrap', flexShrink: 0 }}>
           {expanded ? '–' : def.summary ?? '+'}

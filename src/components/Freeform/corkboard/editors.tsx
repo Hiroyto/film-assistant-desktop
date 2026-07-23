@@ -1,5 +1,6 @@
 // components/Freeform/corkboard/editors.tsx — split out of freeform-corkboard.tsx (FIL-496).
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { getEntityColor, hexToRgba } from '../../../components/Freeform/entityColors';
 import { EVOKES_TRANSITIONS, EVOKES_TRANSITIONS_BY_NARRATIVE_STATUS, createInformation, setInformationIrony, setKnowledge, tagArcInvolvesCharacter, tagEventEvokes, tagEventPrecedes, unlinkInformation, untagArcInvolvesCharacter, untagEventEvokes, untagEventPrecedes, updateInformation, type ArcKind, type EvokesTransition, type ProjectEdges, type ProjectEntity } from '../../../lib/freeformApi';
 import { EditableDescription } from './cards';
@@ -171,6 +172,147 @@ export function ArcEvokesEditor({
   );
 }
 
+// Custom EVOKES-transition dropdown. Replaces a native <select> whose open
+// option list renders as unstyled OS chrome (no dark-mode control). The menu is
+// portaled to <body> so it escapes the bento tile's overflow:hidden, and is
+// theme-aware + accent-tinted to match the rest of the corkboard.
+export function TransitionSelect({
+  value,
+  allowed,
+  disabled,
+  accent,
+  dark,
+  backstory,
+  onChange,
+}: {
+  value: EvokesTransition | '';
+  allowed: Set<string>;
+  disabled: boolean;
+  accent: string;
+  dark: boolean;
+  backstory: boolean;
+  onChange: (v: EvokesTransition | '') => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number; minWidth: number }>({
+    top: 0, left: 0, minWidth: 160,
+  });
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (triggerRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const openMenu = () => {
+    const el = triggerRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const margin = 8;
+    const minWidth = Math.max(r.width, 168);
+    const left = Math.max(margin, Math.min(r.left, window.innerWidth - minWidth - margin));
+    setMenuPos({ top: r.bottom + 4, left, minWidth });
+    setOpen(true);
+  };
+
+  const itemStyle = (active: boolean, isDisabled: boolean): React.CSSProperties => ({
+    display: 'flex', alignItems: 'center', gap: 7, width: '100%',
+    padding: '6px 9px', borderRadius: 5, border: 'none', background: 'transparent',
+    fontSize: 10.5, fontWeight: 600, letterSpacing: 0.3, textTransform: 'uppercase',
+    fontFamily: 'system-ui, sans-serif',
+    color: isDisabled ? (dark ? '#55555c' : '#bbb') : active ? accent : dark ? '#c2c2ca' : '#444',
+    cursor: isDisabled ? 'not-allowed' : 'pointer',
+    whiteSpace: 'nowrap', textAlign: 'left',
+  });
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        disabled={disabled}
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => { e.stopPropagation(); if (!disabled) (open ? setOpen(false) : openMenu()); }}
+        title={backstory ? 'Backstory events permit only "touches" (Q7 rule)' : 'EVOKES transition'}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 4,
+          fontSize: 10, padding: '2px 6px',
+          border: `1px solid ${hexToRgba(accent, 0.3)}`,
+          borderRadius: 3,
+          background: value ? hexToRgba(accent, dark ? 0.14 : 0.08) : dark ? '#1d1d22' : '#fff',
+          color: value ? accent : dark ? '#9a9aa4' : '#666',
+          textTransform: 'uppercase', letterSpacing: 0.3, fontWeight: 600,
+          cursor: disabled ? 'default' : 'pointer',
+          fontFamily: 'system-ui, sans-serif',
+        }}
+      >
+        {value ? transitionLabel(value) : 'transition'}
+        <span style={{ fontSize: 7, opacity: 0.7, lineHeight: 1 }}>▾</span>
+      </button>
+      {open && createPortal(
+        <div
+          ref={menuRef}
+          onMouseDown={(e) => e.stopPropagation()}
+          style={{
+            position: 'fixed', top: menuPos.top, left: menuPos.left, minWidth: menuPos.minWidth,
+            background: dark ? '#1d1d22' : '#fff',
+            border: `1px solid ${dark ? '#33333b' : '#e3e5ea'}`,
+            borderRadius: 8,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+            padding: 4, zIndex: 9999,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => { onChange(''); setOpen(false); }}
+            style={itemStyle(!value, false)}
+            onMouseEnter={(e) => (e.currentTarget.style.background = dark ? '#26262c' : '#f4f5f7')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          >
+            <span style={{ width: 12, flexShrink: 0, color: accent }}>{!value ? '✓' : ''}</span>
+            <span style={{ fontStyle: 'italic', textTransform: 'none', fontWeight: 500, color: dark ? '#82828c' : '#999' }}>clear</span>
+          </button>
+          {EVOKES_TRANSITIONS.map((t) => {
+            const isDisabled = !allowed.has(t);
+            const active = value === t;
+            return (
+              <button
+                key={t}
+                type="button"
+                disabled={isDisabled}
+                onClick={() => { if (!isDisabled) { onChange(t); setOpen(false); } }}
+                style={itemStyle(active, isDisabled)}
+                onMouseEnter={(e) => { if (!isDisabled) e.currentTarget.style.background = dark ? '#26262c' : '#f4f5f7'; }}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                title={isDisabled ? 'Not allowed for backstory events (Q7 rule)' : undefined}
+              >
+                <span style={{ width: 12, flexShrink: 0, color: accent }}>{active ? '✓' : ''}</span>
+                {transitionLabel(t)}
+                {isDisabled && (
+                  <span style={{ marginLeft: 'auto', fontSize: 8.5, opacity: 0.7, textTransform: 'none', letterSpacing: 0 }}>backstory</span>
+                )}
+              </button>
+            );
+          })}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
 export function ArcEvokesRow({
   index,
   row,
@@ -258,41 +400,15 @@ export function ArcEvokesRow({
         >
           {narrativeStatusLabel(ns)}
         </span>
-        <select
+        <TransitionSelect
           value={row.transition || ''}
+          allowed={allowedSet}
           disabled={disabled}
-          onChange={(e) =>
-            onUpdate({ transition: (e.target.value || '') as EvokesTransition | '' })
-          }
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={(e) => e.stopPropagation()}
-          style={{
-            fontSize: 10,
-            padding: '2px 4px',
-            border: `1px solid ${hexToRgba(arcColor, 0.3)}`,
-            borderRadius: 3,
-            background: row.transition ? hexToRgba(arcColor, dark ? 0.14 : 0.08) : dark ? '#1d1d22' : '#fff',
-            color: row.transition ? hexToRgba(arcColor, 1) : dark ? '#9a9aa4' : '#666',
-            textTransform: 'uppercase',
-            letterSpacing: 0.3,
-            fontWeight: 600,
-            cursor: disabled ? 'default' : 'pointer',
-            fontFamily: 'system-ui, sans-serif',
-          }}
-          title={
-            ns === 'backstory'
-              ? 'Backstory events permit only "touches" (Q7 rule)'
-              : 'EVOKES transition'
-          }
-        >
-          <option value="">— transition —</option>
-          {EVOKES_TRANSITIONS.map((t) => (
-            <option key={t} value={t} disabled={!allowedSet.has(t)}>
-              {transitionLabel(t)}
-              {!allowedSet.has(t) ? ' (backstory)' : ''}
-            </option>
-          ))}
-        </select>
+          accent={arcColor}
+          dark={dark}
+          backstory={ns === 'backstory'}
+          onChange={(v) => onUpdate({ transition: v })}
+        />
         <button
           type="button"
           onClick={onUntag}
@@ -395,6 +511,7 @@ export function InlineStateAtEvent({
         style={{
           fontSize: 12,
           color: dark ? '#e6e6ea' : '#222',
+          background: dark ? '#16171c' : '#fff',
           lineHeight: 1.5,
           padding: '5px 7px',
           border: `1px solid ${hexToRgba(accentColor, 0.4)}`,
@@ -423,7 +540,7 @@ export function InlineStateAtEvent({
       title="Click to edit state at this event (⌘/Ctrl+Enter to save, Esc to cancel)"
       style={{
         fontSize: 12,
-        color: isEmpty ? '#aaa' : '#555',
+        color: isEmpty ? (dark ? '#6e6e78' : '#aaa') : (dark ? '#c2c2ca' : '#555'),
         fontStyle: isEmpty ? 'italic' : 'normal',
         lineHeight: 1.5,
         cursor: disabled ? 'default' : 'text',
@@ -431,7 +548,7 @@ export function InlineStateAtEvent({
         marginLeft: -4,
         marginRight: -4,
         borderRadius: 3,
-        background: hovered && !disabled ? 'rgba(0,0,0,0.04)' : 'transparent',
+        background: hovered && !disabled ? (dark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)') : 'transparent',
         whiteSpace: 'pre-wrap',
         minHeight: 16,
       }}
@@ -1244,7 +1361,7 @@ export function KnowledgeEditor({
             }}
           >
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 7 }}>
-              <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#1a1a1a', lineHeight: 1.4 }}>{f.summary}</div>
+              <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: dark ? '#e6e6ea' : '#1a1a1a', lineHeight: 1.4 }}>{f.summary}</div>
               <button
                 type="button"
                 className="bento-no-drag"
@@ -1808,43 +1925,15 @@ export function EventEvokesEditor({
             </button>
           </div>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
-            <select
+            <TransitionSelect
               value={row.transition || ''}
+              allowed={allowedSet}
               disabled={busy}
-              onChange={(e) =>
-                updateRow(row.arc_id, {
-                  transition: (e.target.value || '') as EvokesTransition | '',
-                })
-              }
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={(e) => e.stopPropagation()}
-              style={{
-                fontSize: 10,
-                padding: '2px 4px',
-                border: `1px solid ${hexToRgba(arcColor, 0.3)}`,
-                borderRadius: 3,
-                background: row.transition ? hexToRgba(arcColor, dark ? 0.14 : 0.08) : dark ? '#1d1d22' : '#fff',
-                color: row.transition ? arcColor : dark ? '#9a9aa4' : '#666',
-                textTransform: 'uppercase',
-                letterSpacing: 0.3,
-                fontWeight: 600,
-                cursor: busy ? 'default' : 'pointer',
-                fontFamily: 'system-ui, sans-serif',
-              }}
-              title={
-                eventNarrativeStatus === 'backstory'
-                  ? 'Backstory events permit only "touches" (Q7 rule)'
-                  : 'EVOKES transition'
-              }
-            >
-              <option value="">— transition —</option>
-              {EVOKES_TRANSITIONS.map((t) => (
-                <option key={t} value={t} disabled={!allowedSet.has(t)}>
-                  {transitionLabel(t)}
-                  {!allowedSet.has(t) ? ' (backstory)' : ''}
-                </option>
-              ))}
-            </select>
+              accent={arcColor}
+              dark={dark}
+              backstory={eventNarrativeStatus === 'backstory'}
+              onChange={(v) => updateRow(row.arc_id, { transition: v })}
+            />
           </div>
           <InlineStateAtEvent
             value={row.state_at_event}

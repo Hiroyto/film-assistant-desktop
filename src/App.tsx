@@ -65,6 +65,7 @@ import Landing from './components/landing';
 import Scenes from './components/scenes';
 import FreeformDemo from './pages/app/freeform-demo';
 import FreeformCorkboard from './pages/app/freeform-corkboard';
+import FreeformScript from './pages/app/freeform-script';
 import HomePage from './components/HomePage';
 import { AIModelProvider } from './components/AIModelContext';
 import { GlobalErrorModal } from './components/Error/GlobalErrorModal';
@@ -2013,6 +2014,13 @@ function AppContent() {
                 <Route path="/freeform/:storyId" element={
                   <ProtectedRoute>
                     <FreeformCorkboard />
+                  </ProtectedRoute>
+                } />
+                {/* Freeform script document view — scenes in spine order,
+                    per-scene screenwriting editor (script-editor design v1). */}
+                <Route path="/freeform/:storyId/script" element={
+                  <ProtectedRoute>
+                    <FreeformScript />
                   </ProtectedRoute>
                 } />
 

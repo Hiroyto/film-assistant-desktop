@@ -1353,8 +1353,8 @@ const [brainstormEstimate, setBrainstormEstimate] =
   const handleNewStory = useCallback((form: FormStoryData) => {
     // ✅ CHECK STORY LIMIT BEFORE CREATING
     const currentCount = user?.works ? Object.keys(user.works).length : 0;
-    if (currentCount >= 5) {
-      toast.error("You've reached the maximum of 5 stories. Please delete one first.");
+    if (currentCount >= 10) {
+      toast.error("You've reached the maximum of 10 stories. Please delete one first.");
       return;
     }
   

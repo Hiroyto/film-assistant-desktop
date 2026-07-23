@@ -2,8 +2,8 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { getEntityColor, hexToRgba } from '../../../components/Freeform/entityColors';
 import { PEER_BLUE } from '../../../components/Freeform/tokens';
-import { listCardQuestions, tagCauses, tagEventInvolvesCharacter, tagEventOccursIn, untagCauses, untagEventInvolvesCharacter, untagEventOccursIn, updateArc, updateCardDescription, updateEventSubEvents, updateRelationshipKind, type ArcKind, type NarrativeStatus, type PersistedQuestion, type ProjectEdges, type ProjectEntity, type ProjectInformation, type SubEvent } from '../../../lib/freeformApi';
-import { BentoSheet, buildArcBentoLayout, buildCharacterBentoLayout, buildEventBentoLayout, buildRelationshipBentoLayout, type SectionTileDef } from './bento';
+import { listCardQuestions, setSequenceColor, tagCauses, tagEventInvolvesCharacter, tagEventOccursIn, tagSequenceContains, untagCauses, untagEventInvolvesCharacter, untagEventOccursIn, untagSequenceContains, updateArc, updateCardDescription, updateEventSubEvents, updateRelationshipKind, type ArcKind, type NarrativeStatus, type PersistedQuestion, type ProjectEdges, type ProjectEntity, type ProjectInformation, type SubEvent } from '../../../lib/freeformApi';
+import { BentoSheet, buildArcBentoLayout, buildCharacterBentoLayout, buildEventBentoLayout, buildRelationshipBentoLayout, buildSequenceBentoLayout, type SectionTileDef } from './bento';
 import { EditableDescription, EditableName, NarrativeStatusToggle } from './cards';
 import { ARC_THREAD_PALETTE } from './connectors';
 import { ArcEvokesEditor, ArcInvolvesEditor, EdgeChips, EstablishedHereEditor, EventEvokesEditor, EventThroughlineEditor, InlineText, KnowledgeEditor, type ChipCandidate } from './editors';
@@ -121,6 +121,7 @@ export function CharacterSheet({
   const tiles: SectionTileDef[] = [
     {
       id: 'identity', label: 'Summary', accent: color, defaultW: 2, defaultExpanded: true,
+      hint: "The character's description, established traits, and the evidence behind them.",
       content: (
         <div>
           {entity.description && (
@@ -147,6 +148,7 @@ export function CharacterSheet({
     },
     {
       id: 'knowledge', label: 'Knowledge', accent: color, defaultW: 2,
+      hint: 'What this character knows, suspects, or is in the dark about.',
       defaultExpanded: knowsList.length > 0,
       summary: knowsList.length > 0 ? `${knowsList.length} fact${knowsList.length === 1 ? '' : 's'}` : 'none',
       content: knowsList.length === 0 ? (
@@ -171,6 +173,7 @@ export function CharacterSheet({
     },
     {
       id: 'arcs', label: 'Arcs', accent: getEntityColor('arc'), defaultW: 2,
+      hint: 'Arcs this character is involved in. Click one to open its sheet.',
       defaultExpanded: charArcs.length > 0,
       summary: charArcs.length > 0 ? `${charArcs.length}` : 'none',
       content: charArcs.length === 0 ? (
@@ -185,7 +188,7 @@ export function CharacterSheet({
               style={{ cursor: 'pointer', padding: '7px 9px', border: dark ? '1px solid #2a2a30' : '1px solid #eee', borderRadius: 6, background: dark ? '#1a1a1e' : '#fff' }}
             >
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 13, color: '#1a1a1a', fontWeight: 500 }}>{arc.working_name ?? arc.id}</span>
+                <span style={{ fontSize: 13, color: dark ? '#e6e6ea' : '#1a1a1a', fontWeight: 500 }}>{arc.working_name ?? arc.id}</span>
                 {arc.kind && (
                   <span style={{ fontSize: 9, letterSpacing: 0.4, textTransform: 'uppercase', color: getEntityColor('arc'), background: hexToRgba(getEntityColor('arc'), 0.1), padding: '1px 6px', borderRadius: 8 }}>
                     {String(arc.kind).replace(/_/g, ' ')}
@@ -202,6 +205,7 @@ export function CharacterSheet({
     },
     {
       id: 'relationships', label: 'Relationships', accent: getEntityColor('relationship'), defaultW: 2,
+      hint: 'Reified relationships and structural ties to other characters.',
       defaultExpanded: relCount > 0,
       summary: relCount > 0 ? `${relCount}` : 'none',
       content: relCount === 0 ? (
@@ -218,7 +222,7 @@ export function CharacterSheet({
                 style={{ cursor: 'pointer', padding: '7px 9px', border: dark ? '1px solid #2a2a30' : '1px solid #eee', borderRadius: 6, background: dark ? '#1a1a1e' : '#fff' }}
               >
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 13, color: '#1a1a1a', fontWeight: 500 }}>{other ?? '?'}</span>
+                  <span style={{ fontSize: 13, color: dark ? '#e6e6ea' : '#1a1a1a', fontWeight: 500 }}>{other ?? '?'}</span>
                   {rel.kind && (
                     <span style={{ fontSize: 9, letterSpacing: 0.4, textTransform: 'uppercase', color: getEntityColor('relationship'), background: hexToRgba(getEntityColor('relationship'), 0.12), padding: '1px 6px', borderRadius: 8 }}>
                       {String(rel.kind).replace(/_/g, ' ')}
@@ -252,6 +256,7 @@ export function CharacterSheet({
     {
       id: 'appears-in', label: `Appears in${appearsIn.length > 0 ? ` · ${appearsIn.length}` : ''}`,
       accent: color, defaultW: 2, defaultExpanded: true,
+      hint: 'Scenes this character appears in, in story order.',
       summary: appearsIn.length > 0 ? `${appearsIn.length} event${appearsIn.length === 1 ? '' : 's'}` : 'none',
       content: appearsIn.length === 0 ? (
         <div style={{ color: dark ? '#6e6e78' : '#aaa', fontSize: 12 }}>Not yet in any events.</div>
@@ -265,6 +270,7 @@ export function CharacterSheet({
     },
     {
       id: 'working', label: 'Open Questions', accent: PEER_BLUE, defaultW: 2, defaultExpanded: true,
+      hint: 'Ask the peer about this card, answer inline, or open a chat thread.',
       summary: questions == null ? '…' : `${byStatus.open.length} open`,
       content: (
         <OpenQuestionsPanel
@@ -326,7 +332,7 @@ export function CharacterSheet({
           >
             CHARACTER
           </span>
-          <span style={{ fontSize: 22, fontWeight: 500, color: '#1a1a1a', lineHeight: 1 }}>
+          <span style={{ fontSize: 22, fontWeight: 500, color: dark ? '#e6e6ea' : '#1a1a1a', lineHeight: 1 }}>
             {entity.working_name ?? entity.id}
           </span>
         </div>
@@ -350,6 +356,232 @@ export function CharacterSheet({
       {/* Bento section tiles (card-surface rework) */}
       <div style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
         <BentoSheet tiles={orderedTiles} columns={4} persistKey={`character:${entity.id}`} buildDefaultLayout={buildCharacterBentoLayout} />
+      </div>
+    </div>
+  );
+}
+
+// =====================================================================
+// SequenceSheet — level-3 full sequence view. A development surface: the
+// broad movement beside the peer (decomposition / relational), its member
+// scenes, the sequence throughline, and the arcs threading through it.
+// =====================================================================
+export function SequenceSheet({
+  entity,
+  allEntities,
+  edges,
+  auth,
+  projectId,
+  completedResponseIds,
+  onClose,
+  onEntitiesChanged,
+  onOpenCard,
+  onUpdateDescription,
+}: {
+  entity: ProjectEntity;
+  allEntities: ProjectEntity[];
+  edges: ProjectEdges;
+  auth: { userId: string; token: string };
+  projectId: string;
+  completedResponseIds: Set<string>;
+  onClose: () => void;
+  onEntitiesChanged: () => void;
+  onOpenCard: (cardId: string) => void;
+  onUpdateDescription: (d: string) => void;
+}) {
+  const dark = useThemeMode() === 'dark';
+  const [questions, setQuestions] = useState<PersistedQuestion[] | null>(null);
+
+  const refetchQuestions = useCallback(async () => {
+    try {
+      const res = await listCardQuestions(
+        { cardId: entity.id, withResponses: true, withOpenThreads: true },
+        auth.token,
+      );
+      setQuestions(res.questions);
+    } catch (err) {
+      console.warn('[sheet] fetch failed:', err);
+    }
+  }, [entity.id, auth.token]);
+
+  useEffect(() => { refetchQuestions(); }, [refetchQuestions]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const color = getEntityColor('sequence');
+  const byId = useMemo(() => new Map(allEntities.map((e) => [e.id, e])), [allEntities]);
+
+  // Member scenes — the Events this sequence CONTAINS.
+  const memberScenes = (edges.contains ?? [])
+    .filter((c) => c.from === entity.id)
+    .map((c) => byId.get(c.to))
+    .filter((e): e is ProjectEntity => !!e && !e.deleted_at);
+  // Sequence throughline neighbors (via the auto-chained sequence_precedes).
+  const prevSeqs = (edges.sequence_precedes ?? [])
+    .filter((e) => e.to === entity.id).map((e) => byId.get(e.from))
+    .filter((s): s is ProjectEntity => !!s && !s.deleted_at);
+  const nextSeqs = (edges.sequence_precedes ?? [])
+    .filter((e) => e.from === entity.id).map((e) => byId.get(e.to))
+    .filter((s): s is ProjectEntity => !!s && !s.deleted_at);
+  // Arcs threading through the member scenes (EVOKES on a contained event).
+  const memberIds = new Set(memberScenes.map((e) => e.id));
+  const threadArcs = Array.from(
+    new Set((edges.evokes ?? []).filter((e) => memberIds.has(e.event_id)).map((e) => e.arc_id)),
+  ).map((aid) => byId.get(aid)).filter((a): a is ProjectEntity => !!a && a.type === 'arc' && !a.deleted_at);
+
+  const openCount = (questions ?? []).filter((q) => q.status === 'open' || q.status === 'stashed').length;
+
+  const rowBtn: React.CSSProperties = {
+    textAlign: 'left', width: '100%', padding: '7px 10px', borderRadius: 8,
+    border: `1px solid ${dark ? '#2a2a30' : '#e6e6ea'}`, background: dark ? '#1d1d23' : '#fff',
+    color: dark ? '#dcdce2' : '#333', fontSize: 12.5, cursor: 'pointer',
+  };
+
+  const tiles: SectionTileDef[] = [
+    {
+      id: 'summary', label: 'Summary', accent: color, defaultW: 2, defaultExpanded: true,
+      hint: 'The broad movement this sequence describes. Edit inline; the writer owns this prose.',
+      content: (
+        <div>
+          <EditableDescription
+            value={entity.summary ?? entity.description ?? ''}
+            onSave={async (d) => { onUpdateDescription(d); }}
+            placeholder="Describe this movement…"
+          />
+          <SequenceColorRow
+            sequenceId={entity.id}
+            current={entity.color}
+            auth={auth}
+            projectId={projectId}
+            onChanged={onEntitiesChanged}
+          />
+        </div>
+      ),
+    },
+    {
+      id: 'questions', label: 'Open Questions', accent: PEER_BLUE, defaultW: 2, defaultExpanded: true,
+      hint: 'Ask the peer to help you see the scenes inside this movement (decomposition), or pressure-test the scenes it already holds.',
+      summary: questions == null ? '…' : `${openCount} open`,
+      content: (
+        <OpenQuestionsPanel
+          entity={entity}
+          projectId={projectId}
+          auth={auth}
+          completedResponseIds={completedResponseIds}
+          questions={questions}
+          onCardQuestionsChanged={refetchQuestions}
+          onEntitiesChanged={onEntitiesChanged}
+          accentColor={PEER_BLUE}
+        />
+      ),
+    },
+    {
+      id: 'scenes', label: 'Member scenes', accent: color, defaultW: 2,
+      defaultExpanded: memberScenes.length > 0,
+      summary: `${memberScenes.length}`,
+      hint: "The scenes this sequence contains. Empty means it's still broad — the peer's decomposition questions turn it into scenes.",
+      content: memberScenes.length === 0 ? (
+        <p style={{ fontSize: 12.5, lineHeight: 1.55, color: dark ? '#9a9aa2' : '#777', margin: 0 }}>
+          No scenes yet. This is still a broad movement. Ask the peer to help you break it into the scenes inside it.
+        </p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {memberScenes.map((s) => (
+            <button key={s.id} style={rowBtn} onClick={() => onOpenCard(s.id)}>
+              {s.working_title ?? s.id}
+            </button>
+          ))}
+        </div>
+      ),
+    },
+    {
+      id: 'throughline', label: 'Sequence throughline', accent: color, defaultW: 2,
+      defaultExpanded: prevSeqs.length + nextSeqs.length > 0,
+      summary: `${prevSeqs.length}←  →${nextSeqs.length}`,
+      hint: 'Where this movement sits in the plot — the sequences before and after it.',
+      content: (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {[{ label: '← Preceded by', list: prevSeqs }, { label: '→ Precedes', list: nextSeqs }].map((grp) => (
+            <div key={grp.label}>
+              <div style={{ fontSize: 10, letterSpacing: 0.4, textTransform: 'uppercase', color: dark ? '#82828c' : '#999', marginBottom: 4 }}>
+                {grp.label}
+              </div>
+              {grp.list.length === 0 ? (
+                <div style={{ fontSize: 12, color: dark ? '#6a6a72' : '#aaa' }}>—</div>
+              ) : (
+                grp.list.map((s) => (
+                  <button key={s.id} style={{ ...rowBtn, marginBottom: 4 }} onClick={() => onOpenCard(s.id)}>
+                    {s.working_title ?? s.working_name ?? s.id}
+                  </button>
+                ))
+              )}
+            </div>
+          ))}
+        </div>
+      ),
+    },
+    {
+      id: 'arcs', label: 'Arcs threading', accent: getEntityColor('arc'), defaultW: 2,
+      defaultExpanded: threadArcs.length > 0,
+      summary: `${threadArcs.length}`,
+      hint: 'Threads (arcs) that run through this sequence via its scenes.',
+      content: threadArcs.length === 0 ? (
+        <p style={{ fontSize: 12.5, color: dark ? '#9a9aa2' : '#777', margin: 0 }}>No arcs thread through this sequence yet.</p>
+      ) : (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {threadArcs.map((a) => (
+            <button key={a.id} style={{ ...rowBtn, width: 'auto' }} onClick={() => onOpenCard(a.id)}>
+              {a.working_name ?? a.working_title ?? a.id}
+            </button>
+          ))}
+        </div>
+      ),
+    },
+  ];
+
+  const SEQ_TILE_ORDER = ['summary', 'questions', 'scenes', 'throughline', 'arcs'];
+  const orderedTiles = [
+    ...SEQ_TILE_ORDER.map((id) => tiles.find((t) => t.id === id)).filter((t): t is SectionTileDef => !!t),
+    ...tiles.filter((t) => !SEQ_TILE_ORDER.includes(t.id)),
+  ];
+
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, background: dark ? '#101013' : '#fafafa',
+        zIndex: 200, display: 'flex', flexDirection: 'column', fontFamily: 'system-ui, sans-serif',
+      }}
+    >
+      <div
+        style={{
+          padding: '16px 28px', background: dark ? '#1a1a1e' : '#fff',
+          borderBottom: `3px solid ${dark ? hexToRgba(liftColor(color, 0.2), 0.55) : color}`,
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexShrink: 0,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+          <span style={{ fontSize: 10, letterSpacing: 0.6, textTransform: 'uppercase', color, fontWeight: 600 }}>
+            SEQUENCE
+          </span>
+          <span style={{ fontSize: 22, fontWeight: 500, color: dark ? '#e6e6ea' : '#1a1a1a', lineHeight: 1 }}>
+            {entity.working_title ?? entity.working_name ?? entity.id}
+          </span>
+        </div>
+        <button
+          onClick={onClose}
+          style={{ background: 'transparent', border: 'none', fontSize: 20, color: dark ? '#82828c' : '#888', cursor: 'pointer', padding: 4 }}
+          aria-label="Close sequence sheet (Esc)"
+          title="Close (Esc)"
+        >
+          ✕
+        </button>
+      </div>
+
+      <div style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
+        <BentoSheet tiles={orderedTiles} columns={4} persistKey={`sequence:${entity.id}`} buildDefaultLayout={buildSequenceBentoLayout} />
       </div>
     </div>
   );
@@ -574,6 +806,7 @@ export function EventSheet({
   const tiles: SectionTileDef[] = [
     {
       id: 'summary', label: 'Summary', accent: color, defaultW: 2, defaultExpanded: true,
+      hint: "The scene's summary and description. Editable inline.",
       content: (
         <div>
           <InlineText
@@ -596,18 +829,30 @@ export function EventSheet({
     },
     {
       id: 'throughline', label: 'Throughline', accent: color, defaultW: 1, defaultExpanded: true,
+      hint: 'Where this scene sits in the PRECEDES chain: what comes before and after.',
       content: (
         <EventThroughlineEditor focal={entity} allEntities={allEntities} edges={edges} auth={auth} projectId={projectId} accentColor={color} onOpenCard={onOpenCard} onChanged={onEntitiesChanged} />
       ),
     },
     {
+      id: 'sequence', label: 'Sequence', accent: getEntityColor('sequence'), defaultW: 1,
+      defaultExpanded: (edges.contains ?? []).some((c) => c.to === entity.id),
+      summary: (edges.contains ?? []).some((c) => c.to === entity.id) ? '1' : '0',
+      hint: 'The sequence (container) this scene belongs to. A scene belongs to at most one; assigning to a new one moves it.',
+      content: (
+        <EventSequenceAssign event={entity} allEntities={allEntities} edges={edges} auth={auth} projectId={projectId} onChanged={onEntitiesChanged} />
+      ),
+    },
+    {
       id: 'arcs', label: 'Evokes arcs', summary: `${signal.evokesArcEntries?.length ?? 0}`, accent: '#a855f7', defaultW: 1, defaultExpanded: (signal.evokesArcEntries?.length ?? 0) > 0,
+      hint: 'Arcs this scene evokes, with the transition each one makes here.',
       content: (
         <EventEvokesEditor eventId={entity.id} eventNarrativeStatus={(entity.narrative_status as string) ?? 'on_screen'} arcsEvoked={signal.evokesArcEntries ?? []} allEntities={allEntities} auth={auth} projectId={projectId} onOpenCard={onOpenCard} onChanged={onEntitiesChanged} />
       ),
     },
     {
       id: 'knowledge', label: 'Knowledge', summary: `${sceneKnowledge.length}`, accent: '#0ea5e9', defaultW: 2, defaultExpanded: sceneKnowledge.length > 0,
+      hint: "What's known, suspected, or hidden as of this scene.",
       content: (
         <KnowledgeEditor
           eventId={entity.id}
@@ -624,6 +869,7 @@ export function EventSheet({
     },
     {
       id: 'established', label: 'Established here', summary: `${infoHere.length}`, accent: '#64748b', defaultW: 2, defaultExpanded: infoHere.length > 0,
+      hint: 'Story facts first established in this scene.',
       content: (
         <EstablishedHereEditor
           eventId={entity.id}
@@ -645,6 +891,7 @@ export function EventSheet({
     },
     {
       id: 'causality', label: 'Causality', summary: `${causesIn.length + causesOut.length}`, accent: '#e8833a', defaultW: 2, defaultExpanded: (causesIn.length + causesOut.length) > 0,
+      hint: 'CAUSES links into and out of this scene, layered over sequence.',
       content: (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div>
@@ -680,6 +927,7 @@ export function EventSheet({
     },
     {
       id: 'cast', label: 'Cast', summary: `${castIds.length}`, accent: getEntityColor('character'), defaultW: 1, defaultExpanded: castIds.length > 0,
+      hint: 'Characters involved in this scene, including its subjects.',
       content: (
         <EdgeChips
           accent={getEntityColor('character')}
@@ -694,6 +942,7 @@ export function EventSheet({
     },
     {
       id: 'location', label: 'Location', summary: `${occursInIds.length}`, accent: getEntityColor('location'), defaultW: 1, defaultExpanded: occursInIds.length > 0,
+      hint: 'Where this scene takes place.',
       content: (
         <EdgeChips
           accent={getEntityColor('location')}
@@ -708,12 +957,14 @@ export function EventSheet({
     },
     {
       id: 'subevents', label: 'Sub-events', summary: `${entity.sub_events?.length ?? 0}`, accent: color, defaultW: 2, defaultExpanded: (entity.sub_events?.length ?? 0) > 0,
+      hint: 'Beat-level breakdown (sluglines) for this scene. Writer-authored.',
       content: (
         <SubEventSubcards entity={entity} auth={auth} projectId={projectId} accentColor={color} onChanged={onEntitiesChanged} />
       ),
     },
     {
       id: 'working', label: 'Open Questions', summary: questions == null ? '…' : `${byStatus.open.length} open`, accent: PEER_BLUE, defaultW: 2, defaultExpanded: true,
+      hint: 'Ask the peer about this card, answer inline, or open a chat thread.',
       content: (
         <OpenQuestionsPanel
           entity={entity}
@@ -755,7 +1006,7 @@ export function EventSheet({
           >
             EVENT
           </span>
-          <span style={{ fontSize: 22, fontWeight: 500, color: '#1a1a1a', lineHeight: 1 }}>
+          <span style={{ fontSize: 22, fontWeight: 500, color: dark ? '#e6e6ea' : '#1a1a1a', lineHeight: 1 }}>
             {entity.working_title ?? entity.id}
           </span>
           <NarrativeStatusToggle
@@ -1127,7 +1378,7 @@ export function LocationSheet({
           >
             LOCATION
           </span>
-          <span style={{ fontSize: 22, fontWeight: 500, color: '#1a1a1a', lineHeight: 1 }}>
+          <span style={{ fontSize: 22, fontWeight: 500, color: dark ? '#e6e6ea' : '#1a1a1a', lineHeight: 1 }}>
             {entity.working_name ?? entity.id}
           </span>
           {entity.int_ext && (
@@ -1307,6 +1558,7 @@ export function RelationshipSheet({
   const tiles: SectionTileDef[] = [
     {
       id: 'identity', label: 'Summary', accent: color, defaultExpanded: true,
+      hint: "The relationship's kind and description. Editable inline.",
       content: (
         <div>
           <div style={{ marginBottom: 12 }}>
@@ -1352,6 +1604,7 @@ export function RelationshipSheet({
     },
     {
       id: 'shared', label: 'Shared events', summary: `${sharedEvents.length}`, accent: narrativeStatusFg('on_screen'),
+      hint: 'Scenes both characters appear in together.',
       defaultExpanded: true,
       content: sharedEvents.length === 0 ? (
         <p style={{ fontSize: 12, color: dark ? '#6e6e78' : '#aaa', margin: 0 }}>No events involve both characters yet.</p>
@@ -1377,6 +1630,7 @@ export function RelationshipSheet({
     },
     {
       id: 'endpoints', label: 'Endpoints', accent: getEntityColor('character'), defaultExpanded: true,
+      hint: 'The two characters this relationship connects.',
       content: (
         <div>
           {[{ name: charA, ent: charAEntity }, { name: charB, ent: charBEntity }].map(({ name, ent }, i) => (
@@ -1404,6 +1658,7 @@ export function RelationshipSheet({
     },
     {
       id: 'opendims', label: 'Open dimensions', summary: `${openDims.length}`, accent: color,
+      hint: 'Unresolved tensions in this relationship that still need to land.',
       defaultExpanded: openDims.length > 0,
       content: openDims.length === 0 ? (
         <div style={{ color: dark ? '#6e6e78' : '#aaa', fontSize: 12 }}>None yet.</div>
@@ -1447,7 +1702,7 @@ export function RelationshipSheet({
           >
             RELATIONSHIP
           </span>
-          <span style={{ fontSize: 22, fontWeight: 500, color: '#1a1a1a', lineHeight: 1 }}>
+          <span style={{ fontSize: 22, fontWeight: 500, color: dark ? '#e6e6ea' : '#1a1a1a', lineHeight: 1 }}>
             {charA} ↔ {charB}
           </span>
           {entity.kind && (
@@ -1550,6 +1805,167 @@ export function ArcColorRow({
   );
 }
 
+// Sequence container color — mirrors ArcColorRow. Default is the sequence green;
+// the writer can pick any palette hue (drives the canvas container box + label).
+const SEQUENCE_PALETTE = ['#22c55e', ...ARC_THREAD_PALETTE.filter((c) => c.toLowerCase() !== '#22c55e')];
+export function SequenceColorRow({
+  sequenceId,
+  current,
+  auth,
+  projectId,
+  onChanged,
+}: {
+  sequenceId: string;
+  current?: string;
+  auth: { userId: string; token: string };
+  projectId: string;
+  onChanged: () => void;
+}) {
+  const dark = useThemeMode() === 'dark';
+  const [busy, setBusy] = useState(false);
+  const sel = current && current.trim() ? current.trim().toLowerCase() : '';
+  const pick = async (c: string) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await setSequenceColor({ sequenceId, projectId, color: c }, auth.token);
+      onChanged();
+    } catch (e) {
+      console.warn('[sequence-color] update failed', e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ fontSize: 10, letterSpacing: 0.5, textTransform: 'uppercase', color: dark ? '#82828c' : '#888', fontWeight: 600, marginBottom: 6 }}>
+        Container color
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 7, opacity: busy ? 0.5 : 1 }}>
+        {SEQUENCE_PALETTE.map((c) => {
+          const active = sel === c.toLowerCase() || (sel === '' && c === '#22c55e');
+          return (
+            <button
+              key={c}
+              onClick={() => pick(c === '#22c55e' ? '' : c)}
+              title={c}
+              aria-label={`Set sequence color ${c}`}
+              style={{
+                width: 22, height: 22, borderRadius: '50%', background: c,
+                cursor: busy ? 'default' : 'pointer', padding: 0,
+                border: active ? '2px solid #1f2937' : '2px solid #fff',
+                boxShadow: active ? `0 0 0 2px ${c}` : '0 0 0 1px rgba(0,0,0,0.12)',
+              }}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Assign an Event to a Sequence (its container). Disjoint — an event belongs to
+// at most one sequence; assigning to a new one moves it. Used in the EventSheet.
+export function EventSequenceAssign({
+  event,
+  allEntities,
+  edges,
+  auth,
+  projectId,
+  onChanged,
+}: {
+  event: ProjectEntity;
+  allEntities: ProjectEntity[];
+  edges: ProjectEdges;
+  auth: { userId: string; token: string };
+  projectId: string;
+  onChanged: () => void;
+}) {
+  const dark = useThemeMode() === 'dark';
+  const [busy, setBusy] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const currentSeqId = (edges.contains ?? []).find((c) => c.to === event.id)?.from;
+  const currentSeq = currentSeqId
+    ? allEntities.find((e) => e.id === currentSeqId && e.type === 'sequence' && !e.deleted_at)
+    : undefined;
+  const sequences = allEntities
+    .filter((e) => e.type === 'sequence' && !e.deleted_at)
+    .sort((a, b) => (a.working_title ?? '').localeCompare(b.working_title ?? ''));
+  const color = getEntityColor('sequence');
+
+  const assign = async (sequenceId: string) => {
+    if (busy) return;
+    setBusy(true);
+    setPicking(false);
+    try {
+      await tagSequenceContains({ sequenceId, eventId: event.id, projectId }, auth.token);
+      onChanged();
+    } catch (e) {
+      console.warn('[event-sequence] assign failed', e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const remove = async () => {
+    if (busy || !currentSeqId) return;
+    setBusy(true);
+    try {
+      await untagSequenceContains({ sequenceId: currentSeqId, eventId: event.id, projectId }, auth.token);
+      onChanged();
+    } catch (e) {
+      console.warn('[event-sequence] remove failed', e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const chip: React.CSSProperties = {
+    display: 'inline-flex', alignItems: 'center', gap: 6, height: 24, padding: '0 10px',
+    borderRadius: 12, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+    border: `1px solid ${hexToRgba(color, 0.4)}`, background: hexToRgba(color, 0.14), color,
+  };
+  return (
+    <div style={{ opacity: busy ? 0.5 : 1 }}>
+      {currentSeq ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={chip}>{currentSeq.working_title ?? 'Sequence'}</span>
+          <button onClick={remove} title="Remove from sequence"
+            style={{ background: 'transparent', border: 'none', color: dark ? '#82828c' : '#999', fontSize: 12, cursor: 'pointer' }}>
+            remove
+          </button>
+          <button onClick={() => setPicking((p) => !p)}
+            style={{ background: 'transparent', border: 'none', color, fontSize: 12, cursor: 'pointer', fontWeight: 600 }}>
+            change
+          </button>
+        </div>
+      ) : (
+        <button onClick={() => setPicking((p) => !p)} style={{ ...chip, borderStyle: 'dashed' }}>
+          + assign to sequence
+        </button>
+      )}
+      {picking && (
+        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
+          {sequences.length === 0 ? (
+            <span style={{ fontSize: 12, color: dark ? '#82828c' : '#999' }}>No sequences yet.</span>
+          ) : (
+            sequences.map((s) => (
+              <button key={s.id} onClick={() => assign(s.id)} disabled={s.id === currentSeqId}
+                style={{
+                  textAlign: 'left', padding: '6px 9px', borderRadius: 7, fontSize: 12.5,
+                  border: `1px solid ${dark ? '#2a2a30' : '#e6e6ea'}`,
+                  background: s.id === currentSeqId ? hexToRgba(color, 0.12) : (dark ? '#1d1d23' : '#fff'),
+                  color: dark ? '#dcdce2' : '#333', cursor: s.id === currentSeqId ? 'default' : 'pointer',
+                }}>
+                {s.working_title ?? s.id}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // =====================================================================
 // ArcSheet (FIL-504 / D'-6) — level-3 view of a reified Arc vertex.
 //
@@ -1610,6 +2026,7 @@ export function ArcSheet({
   const tiles: SectionTileDef[] = [
     {
       id: 'identity', label: 'Summary', accent: color, defaultExpanded: true,
+      hint: "The arc's name, description, color, and any former names.",
       content: (
         <div>
           <div style={{ marginBottom: 12 }}>
@@ -1643,6 +2060,7 @@ export function ArcSheet({
     },
     {
       id: 'timeline', label: 'Timeline', summary: `${evokes.length} event${evokes.length === 1 ? '' : 's'}`, accent: color,
+      hint: 'The scenes this arc passes through, in story order, with each transition.',
       defaultExpanded: true,
       content: (
         <ArcEvokesEditor
@@ -1659,6 +2077,7 @@ export function ArcSheet({
     },
     {
       id: 'involves', label: 'Involves', summary: `${involvedCharNames.length}`, accent: getEntityColor('character'),
+      hint: 'Characters this arc involves.',
       defaultExpanded: involvedCharNames.length > 0,
       content: (
         <ArcInvolvesEditor
@@ -1675,6 +2094,7 @@ export function ArcSheet({
     },
     {
       id: 'opendims', label: 'Open dimensions', summary: `${openDimensions.length}`, accent: color,
+      hint: 'Unresolved tensions in this arc that still need to land.',
       defaultExpanded: openDimensions.length > 0,
       content: openDimensions.length === 0 ? (
         <div style={{ color: dark ? '#6e6e78' : '#aaa', fontSize: 12 }}>None yet.</div>
@@ -1693,6 +2113,7 @@ export function ArcSheet({
     },
     {
       id: 'crossrefs', label: 'Cross-refs', accent: '#94a3b8', defaultExpanded: false,
+      hint: 'Causality and other cross-links from this arc.',
       content: (
         <p style={{ fontSize: 11, color: dark ? '#6e6e78' : '#aaa', margin: 0, lineHeight: 1.5 }}>
           CAUSES connections and Light :Question links will surface here when

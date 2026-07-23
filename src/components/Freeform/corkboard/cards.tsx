@@ -5,7 +5,7 @@ import InternIcon from '../../../components/Freeform/InternIcon';
 import { PEER_BLUE } from '../../../components/Freeform/tokens';
 import { type EntityType } from '../../../components/Freeform/types';
 import { type ArcKind, type NarrativeStatus, type PersistedQuestion, type ProjectEntity } from '../../../lib/freeformApi';
-import { ARC_BALL_H, ARC_BALL_W, ARC_DOT, BALL_TRANSITION_MS, COLLAPSED_H, COLLAPSED_W, EXPANDED_W, REL_BALL_COLOR, REL_COLLAPSED_H, REL_COLLAPSED_W, type Pos } from './constants';
+import { ARC_BALL_H, ARC_BALL_W, ARC_DOT, BALL_TRANSITION_MS, CHAR_PILL_H, CHAR_PILL_W, COLLAPSED_H, COLLAPSED_W, EVENT_CARD_W, EXPANDED_W, REL_BALL_COLOR, REL_COLLAPSED_H, REL_COLLAPSED_W, type Pos } from './constants';
 import { arcKindLabel, narrativeStatusBg, narrativeStatusFg, narrativeStatusLabel, tieLabel, transitionLabel, truncate } from './labels';
 import { FloatingPeerCard, WorkingSectionsBlock } from './peer';
 import { type CardSignal } from './signals';
@@ -23,16 +23,22 @@ export function AskPeerButton({
   disabled,
   label = 'Ask peer',
   title,
+  tourId,
 }: {
   onClick: (e: React.MouseEvent) => void;
   disabled?: boolean;
   label?: string;
   title?: string;
+  /** Per-instance anchor for the wow coachmark. Defaults to the shared
+   *  'ask-peer'; the canvas card footer passes a card-scoped id so the wow
+   *  targets exactly that button (not the peer panel's). */
+  tourId?: string;
 }) {
   const dark = useThemeMode() === 'dark';
   const [hovered, setHovered] = useState(false);
   return (
     <button
+      data-tour={tourId ?? 'ask-peer'}
       onMouseDown={(e) => e.stopPropagation()}
       onClick={(e) => {
         e.stopPropagation();
@@ -94,7 +100,10 @@ export function CardBox({
   animatePosition,
   ballColor,
   ballCompact,
+  processing,
   onMouseDown,
+  onHoverChange,
+  sceneNo,
   onLinkHandleMouseDown,
   isLinkSource,
   isLinkTarget,
@@ -130,7 +139,17 @@ export function CardBox({
   ballColor?: string;
   /** Arc ball while scrolling: render as a small solid dot (no label). */
   ballCompact?: boolean;
+  /** True while extraction is still generating this card's edges / metadata —
+   *  pulses a soft accent ring around the card so the writer sees it's still
+   *  being wired up. Cleared the moment the run completes. */
+  processing?: boolean;
   onMouseDown: (e: React.MouseEvent) => void;
+  /** Hover in/out on the card — the page tracks the hovered node so demoted
+   *  connectors (structural ties) light up while the pointer is on an endpoint. */
+  onHoverChange?: (hovering: boolean) => void;
+  /** Event's position in the PRECEDES (story) order — renders as the "SC n"
+   *  kicker in place of the EVENT type label, notecard-style. */
+  sceneNo?: number;
   /** Event-only: drag-to-connect handle's mousedown. Initiates a link drag
    *  for a new PRECEDES edge. Stops propagation so card drag doesn't fire. */
   onLinkHandleMouseDown?: (e: React.MouseEvent) => void;
@@ -165,9 +184,9 @@ export function CardBox({
       ? `${entity.character_a} ↔ ${entity.character_b}`
       : entity.id);
   const isCharacter = type === 'character';
-  // Ask peer supports character + event focal types (slice loader extended).
-  // Location/Relationship still pending.
-  const peerSupported = type === 'character' || type === 'event';
+  // Ask peer supports character + event + sequence focal types (slice loaders
+  // extended). Location/Relationship still pending.
+  const peerSupported = type === 'character' || type === 'event' || type === 'sequence';
   const sig = signal ?? {};
   // Focus mode: dim + blur non-focal cards; focal stays sharp at higher
   // z-index. Pointer-events disabled on non-focal so they can't be
@@ -184,6 +203,12 @@ export function CardBox({
   const isArcBall = type === 'arc' && !!ballColor && !expanded;
   const isBall = isRelBall || isArcBall;
   const isArcDot = isArcBall && !!ballCompact; // small dot while sliding
+  // Characters collapse to a NAME PILL (constellation-node look): same drag /
+  // collision / expansion flow as any card, just a compact default shape.
+  const isCharPill = type === 'character' && !expanded;
+  // Pill-shaped collapsed states share the ball layout (flex-centered label,
+  // no header/body); colors stay per-kind.
+  const isPillShape = isBall || isCharPill;
   const ballAccent = isArcBall ? (ballColor as string) : REL_BALL_COLOR;
   const ballW = isArcDot ? ARC_DOT : isArcBall ? ARC_BALL_W : REL_COLLAPSED_W;
   const ballMinH = isArcDot ? ARC_DOT : isArcBall ? ARC_BALL_H : REL_COLLAPSED_H;
@@ -191,37 +216,62 @@ export function CardBox({
   // Dark accents are LIFTED toward white — the light palette reads muddy on
   // the near-black stage; lifted hues pop cleanly (the reference's look).
   const accent = dark ? liftColor(color, 0.3) : color;
+  // Link-handle hover — drives the orb's bloom (glow + scale).
+  const [handleHover, setHandleHover] = useState(false);
+  // "Still wiring this up" cue — pulse an accent ring while extraction generates
+  // edges/metadata. Not on transient chrome (balls/dots), the focal card, or
+  // while dragging (those have their own treatment).
+  // Shimmer applies to real cards INCLUDING the character name pill (it's a
+  // card, just compact); only transient chrome (rel/arc balls, dots) skips it.
+  const shimmerOn = !!processing && !isBall && !isFocal && !isDragging;
   return (
     <div
       ref={cardRef}
+      // Stable anchor for the wow-flow spotlight coachmark (FIL-506). Attribute
+      // selector (not #id) so entity ids with special chars need no escaping.
+      data-tour={`card-${entity.id}`}
       onMouseDown={onMouseDown}
+      onMouseEnter={onHoverChange ? () => onHoverChange(true) : undefined}
+      onMouseLeave={onHoverChange ? () => onHoverChange(false) : undefined}
+      // Rel/arc balls show a kind/label, so the native tooltip supplies the
+      // name. The character pill IS the full name — no tooltip (it reads as
+      // noise popping over the board).
       title={isBall ? name : undefined}
       style={{
         position: 'absolute',
         left: pos.x,
         top: pos.y,
-        width: expanded ? EXPANDED_W : isBall ? ballW : COLLAPSED_W,
-        minHeight: expanded ? 200 : isBall ? ballMinH : COLLAPSED_H,
-        // Collapsed ball grows to fit its (wrapping) label and flex-centers it.
-        height: expanded || isBall ? 'auto' : COLLAPSED_H,
-        ...(isBall ? { display: 'flex', alignItems: 'center', justifyContent: 'center' } : {}),
+        width: expanded ? EXPANDED_W : isBall ? ballW : isCharPill ? CHAR_PILL_W : type === 'event' ? EVENT_CARD_W : COLLAPSED_W,
+        minHeight: expanded ? 200 : isBall ? ballMinH : isCharPill ? CHAR_PILL_H : COLLAPSED_H,
+        // Collapsed pill grows to fit its (wrapping) label and flex-centers it.
+        height: expanded || isPillShape ? 'auto' : COLLAPSED_H,
+        ...(isPillShape ? { display: 'flex', alignItems: 'center', justifyContent: 'center' } : {}),
         // Opaque fill so the thread passing behind the ball is hidden. The
-        // sliding dot is a solid colored circle.
+        // sliding dot is a solid colored circle. Character pill: warm
+        // accent-tinted node (the constellation look).
         background: isArcDot
           ? ballAccent
           : isRelBall
           ? dark ? '#251618' : '#fbe9e9'
+          : isCharPill
+          ? dark ? '#221d12' : '#fdf6e8'
           : dark ? '#1a1a1e' : '#fff',
         border: isBall
           ? `1px solid ${hexToRgba(ballAccent, isArcDot ? 0.9 : 0.6)}`
+          : isCharPill
+          ? `1px solid ${hexToRgba(accent, 0.55)}`
           : `${expanded ? 2 : 1}px solid ${
               expanded
                 ? dark ? hexToRgba(accent, 0.65) : color
                 : dark ? '#2a2a30' : hexToRgba(color, 0.4)
             }`,
-        borderLeft: isBall ? `1px solid ${hexToRgba(ballAccent, isArcDot ? 0.9 : 0.6)}` : `4px solid ${accent}`,
-        borderRadius: isArcDot ? 999 : isBall ? 13 : expanded ? 10 : 6,
-        padding: expanded ? '16px 18px' : isArcDot ? 0 : isBall ? '4px 12px' : '10px 12px',
+        borderLeft: isBall
+          ? `1px solid ${hexToRgba(ballAccent, isArcDot ? 0.9 : 0.6)}`
+          : isCharPill
+          ? `1px solid ${hexToRgba(accent, 0.55)}`
+          : `4px solid ${accent}`,
+        borderRadius: isArcDot ? 999 : isCharPill ? 999 : isBall ? 13 : expanded ? 10 : 6,
+        padding: expanded ? '16px 18px' : isArcDot ? 0 : isCharPill ? '6px 16px' : isBall ? '4px 12px' : '10px 12px',
         boxSizing: 'border-box',
         boxShadow: isLinkTarget
           ? `0 4px 14px rgba(0,0,0,${dark ? 0.5 : 0.10}), 0 0 0 3px rgba(59,130,246,0.7)`
@@ -242,7 +292,13 @@ export function CardBox({
         // Focal in peer-focus mode sits above the board-scoped focus scrim
         // (100) but BELOW the toolbar (140), so the pair scrolls under the
         // chrome like real board content.
-        zIndex: isDragging ? 10 : isFocal ? 120 : expanded ? 20 : 1,
+        // A dragging card floats ABOVE sequence-container chrome (box z0, label
+        // z32, hover header z33) so you can drag it freely over an expanded
+        // container; stays below the focal pair (120) / popovers (130) / toolbar.
+        // An EXPANDED card also rides above the container chrome + every other
+        // card: it opens IN PLACE over whatever is around its node, never
+        // clipped or shoved by neighbors.
+        zIndex: isDragging ? 110 : isFocal ? 120 : expanded ? 60 : 1,
         // Focus mode is board-native — neighbors move aside and the scrim
         // (z144) dims everything once, so the per-card dim stays light: the
         // board should still read as the board, not vanish behind an overlay.
@@ -250,6 +306,17 @@ export function CardBox({
         filter: dimmed ? 'blur(1px) saturate(0.7)' : 'none',
         pointerEvents: dimmed ? 'none' : 'auto',
         transform: 'none',
+        // Entrance: content cards fade + settle in once on first mount (board
+        // load + cascade landings). Skipped for balls/dots (transient chrome)
+        // and the focal card (it glides to center; an entrance would re-fire
+        // when it re-mounts into the focus slot).
+        // Carry the card's accent into the shimmer keyframe as a translucent ring.
+        ['--cb-sheen' as any]: hexToRgba(accent, 0.55),
+        animation: shimmerOn
+          ? 'cb-shimmer 1.5s ease-in-out infinite'
+          : isBall || isFocal
+          ? undefined
+          : 'cb-card-in 300ms cubic-bezier(0.22, 1, 0.36, 1)',
         transition: isDragging
           ? 'none'
           : `box-shadow 200ms ease-out, border-color 120ms, width 140ms, opacity 280ms ease-out, filter 280ms ease-out, transform 320ms cubic-bezier(0.22, 1, 0.36, 1)${
@@ -261,19 +328,22 @@ export function CardBox({
         fontFamily: 'system-ui, sans-serif',
       }}
     >
-      {/* Header chips (hidden on the collapsed ball pill) */}
-      {!isBall && (
+      {/* Header chips (hidden on collapsed pills: ball + character node) */}
+      {!isPillShape && (
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
         <span
           style={{
-            fontSize: 9,
+            fontSize: type === 'event' && sceneNo ? 10 : 9,
             letterSpacing: 0.6,
             textTransform: 'uppercase',
             color: accent,
-            fontWeight: 600,
+            fontWeight: type === 'event' && sceneNo ? 800 : 600,
+            fontFamily: type === 'event' && sceneNo ? 'ui-monospace, "SF Mono", Menlo, monospace' : undefined,
           }}
         >
-          {type}
+          {/* Events wear their story-order number, notecard-style, instead of
+              a type label (the card's shape/color already says "event"). */}
+          {type === 'event' && sceneNo ? `SC ${String(sceneNo).padStart(2, '0')}` : type}
         </span>
         {type === 'event' && expanded ? (
           <NarrativeStatusToggle
@@ -329,17 +399,34 @@ export function CardBox({
           fontSize={15}
           marginBottom={8}
         />
-      ) : isArcDot ? null : isBall ? (
+      ) : isArcDot ? null : isCharPill ? (
+        <span
+          style={{
+            fontSize: 12.5,
+            fontWeight: 650,
+            color: dark ? '#f0e2c4' : '#7a5a18',
+            letterSpacing: 0.1,
+            lineHeight: 1.25,
+            textAlign: 'center',
+            wordBreak: 'break-word',
+          }}
+        >
+          {name}
+        </span>
+      ) : isBall ? (
         <span style={{ fontSize: 10, fontWeight: 600, color: ballAccent, letterSpacing: 0.2, lineHeight: 1.2, textAlign: 'center', wordBreak: 'break-word' }}>
           {isArcBall ? name : (entity.kind ? String(entity.kind).replace(/_/g, ' ') : '↔')}
         </span>
       ) : (
         <div
           style={{
-            fontSize: expanded ? 15 : 13,
-            fontWeight: 500,
+            // Collapsed EVENT cards are title-forward (the notecard read): the
+            // title IS the card, so it gets real size and weight; other types
+            // keep the quieter 13px with their compact body below.
+            fontSize: expanded ? 15 : type === 'event' ? 15 : 13,
+            fontWeight: expanded ? 500 : type === 'event' ? 650 : 500,
             color: dark ? '#e8e8ec' : '#222',
-            lineHeight: 1.25,
+            lineHeight: type === 'event' && !expanded ? 1.32 : 1.25,
             marginBottom: expanded ? 8 : 4,
           }}
         >
@@ -360,7 +447,7 @@ export function CardBox({
           onQuestionsChanged={onQuestionsChanged}
           onUpdateDescription={onUpdateDescription}
         />
-      ) : isBall ? null : (
+      ) : isPillShape ? null : (
         <CompactBody entity={entity} signal={sig} accentColor={accent} />
       )}
 
@@ -401,6 +488,7 @@ export function CardBox({
             <DeleteCardLink onConfirm={onDelete} entityType={type} />
           </div>
           <AskPeerButton
+            tourId={`ask-peer-${entity.id}`}
             onClick={() => onAskPeer()}
             disabled={!peerSupported || hasPeerOpen}
             title={
@@ -414,27 +502,40 @@ export function CardBox({
         </div>
       )}
 
-      {/* D'-7 follow-up: drag-to-connect handle on Event cards. Drag the
-          handle onto another Event card → writes a PRECEDES edge.
-          Pointer events on the handle don't trigger card drag because the
-          mousedown stops propagation. */}
-      {type === 'event' && onLinkHandleMouseDown && !isFocusMode && (
+      {/* D'-7 follow-up: drag-to-connect handle. A small glowing orb in the
+          card's accent (quiet at rest, blooms on hover / while dragging a link)
+          instead of the old flat white dot. Vertically centered on the character
+          pill; bottom-right corner on regular cards. Pointer events on the
+          handle don't trigger card drag because the mousedown stops propagation. */}
+      {(type === 'event' || type === 'character') && onLinkHandleMouseDown && !isFocusMode && (
         <div
           onMouseDown={onLinkHandleMouseDown}
-          title="Drag to connect this event to another event (PRECEDES)"
+          onMouseEnter={() => setHandleHover(true)}
+          onMouseLeave={() => setHandleHover(false)}
+          title={type === 'character'
+            ? 'Drag to connect: to another character (relationship), to an event (adds to cast)'
+            : 'Drag to connect: to an event (PRECEDES / Alt=CAUSES), an arc (EVOKES), a character (cast), or a sequence (member)'}
           style={{
             position: 'absolute',
-            right: 6,
-            bottom: 6,
-            width: 14,
-            height: 14,
-            borderRadius: 7,
-            background: isLinkSource ? color : '#fff',
-            border: `2px solid ${color}`,
+            right: isCharPill ? 9 : 6,
+            ...(isCharPill
+              ? { top: '50%', marginTop: -6 }
+              : { bottom: 6 }),
+            width: 12,
+            height: 12,
+            borderRadius: 999,
+            // A lit orb: accent core with an off-center highlight, soft outer
+            // glow. Bloom + brighten on hover / while the link drag is live.
+            background: `radial-gradient(circle at 35% 32%, ${hexToRgba('#ffffff', handleHover || isLinkSource ? 0.9 : 0.55)}, ${accent} 58%, ${hexToRgba(accent, 0.85)})`,
+            border: `1px solid ${hexToRgba(accent, 0.8)}`,
+            boxShadow: handleHover || isLinkSource
+              ? `0 0 10px ${hexToRgba(accent, 0.85)}, 0 0 22px ${hexToRgba(accent, 0.4)}`
+              : `0 0 6px ${hexToRgba(accent, dark ? 0.45 : 0.3)}`,
+            opacity: handleHover || isLinkSource ? 1 : 0.8,
             cursor: 'crosshair',
             zIndex: 3,
-            transition: 'background 120ms ease-out, transform 120ms ease-out',
-            transform: isLinkSource ? 'scale(1.2)' : 'scale(1)',
+            transition: 'box-shadow 140ms ease-out, transform 140ms ease-out, opacity 140ms ease-out',
+            transform: handleHover || isLinkSource ? 'scale(1.35)' : 'scale(1)',
           }}
         />
       )}
@@ -866,11 +967,30 @@ export function CompactBody({
   const dark = useThemeMode() === 'dark';
   const type = entity.type as EntityType;
   if (type === 'character') return <CharacterCompact entity={entity} signal={signal} accentColor={accentColor} />;
-  if (type === 'event') return <EventCompact entity={entity} signal={signal} />;
+  // Events are title-forward notecards: SC number + big title, nothing else.
+  // Cast/meta live on the expanded card; the throughline is drawn by the spine.
+  if (type === 'event') return null;
   if (type === 'location') return <LocationCompact entity={entity} signal={signal} />;
   if (type === 'relationship') return <RelationshipCompact entity={entity} signal={signal} accentColor={accentColor} />;
   if (type === 'arc') return <ArcCompact entity={entity} signal={signal} accentColor={accentColor} />;
+  if (type === 'sequence') return <SequenceCompact entity={entity} />;
   return null;
+}
+
+export function SequenceCompact({ entity }: { entity: ProjectEntity }) {
+  const dark = useThemeMode() === 'dark';
+  const body = entity.summary ?? entity.description ?? '';
+  return (
+    <div style={{ fontSize: 11, color: dark ? '#9a9aa4' : '#666', lineHeight: 1.4 }}>
+      {body ? (
+        <div style={{ overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+          {body}
+        </div>
+      ) : (
+        <span style={{ fontStyle: 'italic', opacity: 0.7 }}>Broad movement. Ask peer to break it into scenes.</span>
+      )}
+    </div>
+  );
 }
 
 export function CharacterCompact({
@@ -1088,6 +1208,9 @@ export function SignalRow({ items }: { items: Array<string | false | undefined |
         gap: 8,
         flexWrap: 'wrap',
         marginTop: 2,
+        // Fades in when the metadata row first appears (e.g. when a streamed
+        // card's counts/links fill in after the write lands).
+        animation: 'cb-fade-in 320ms ease-out',
       }}
     >
       {filtered.map((s, i) => (
@@ -1136,7 +1259,7 @@ export function ExpandedBody({
   // Relationship. The backend handler gates by label.
   const descriptionEditable =
     type === 'character' || type === 'event' || type === 'location'
-      || type === 'arc' || type === 'relationship';
+      || type === 'arc' || type === 'relationship' || type === 'sequence';
 
   return (
     <div style={{ fontSize: 12, color: dark ? '#c2c2ca' : '#444', lineHeight: 1.45 }}>
@@ -1147,6 +1270,7 @@ export function ExpandedBody({
           placeholder={
             type === 'event' ? 'What happens in this event…'
               : type === 'arc' ? 'What this arc is about…'
+              : type === 'sequence' ? 'What this movement covers…'
               : type === 'location' ? 'Describe this place…'
               : type === 'relationship' ? 'Describe this relationship…'
               : 'Describe this character…'
@@ -1268,32 +1392,12 @@ export function ExpandedBody({
         </Section>
       )}
 
-      {/* Event: involves chars + occurs in + precedes chain */}
+      {/* Event: SUMMARY + CAST only — the expanded card is a reading surface.
+          Occurs-in, throughline, sub-events, and the origin quote all live on
+          the full sheet; the spine already draws the throughline on the board. */}
       {type === 'event' && (signal.involvesCharNames?.length ?? 0) > 0 && (
-        <Section label="Involves">{signal.involvesCharNames!.join(' · ')}</Section>
+        <Section label="Cast">{signal.involvesCharNames!.join(' · ')}</Section>
       )}
-      {type === 'event' && (signal.occursInLocNames?.length ?? 0) > 0 && (
-        <Section label="Occurs in">{signal.occursInLocNames!.join(' · ')}</Section>
-      )}
-      {type === 'event' &&
-        ((signal.precededByTitles?.length ?? 0) > 0 || (signal.precedesNextTitles?.length ?? 0) > 0) && (
-          <Section label="Throughline">
-            <div style={{ fontSize: 11, color: dark ? '#9a9aa4' : '#666' }}>
-              {(signal.precededByTitles ?? []).map((t, i) => (
-                <div key={`p${i}`}>
-                  <span style={{ color: dark ? '#6e6e78' : '#aaa' }}>← </span>
-                  {t}
-                </div>
-              ))}
-              {(signal.precedesNextTitles ?? []).map((t, i) => (
-                <div key={`n${i}`}>
-                  <span style={{ color: dark ? '#6e6e78' : '#aaa' }}>→ </span>
-                  {t}
-                </div>
-              ))}
-            </div>
-          </Section>
-        )}
 
       {/* Location: appears in events */}
       {type === 'location' && (signal.appearsInEventTitles?.length ?? 0) > 0 && (
@@ -1494,8 +1598,9 @@ export function ExpandedBody({
           duplicative. Available via Ask peer + the slice's open_dimensions
           field. Will surface again at level 3 (full character sheet). */}
 
-      {/* Sub-events (Event only) */}
-      {subEvents.length > 0 && (
+      {/* Sub-events moved to the full sheet for events (the expanded card is
+          summary + cast only). Kept for any other type that carries them. */}
+      {type !== 'event' && subEvents.length > 0 && (
         <Section label="Sub-events">
           {subEvents.map((s, i) => (
             <div key={i} style={{ marginBottom: 6, fontSize: 11 }}>
@@ -1506,7 +1611,9 @@ export function ExpandedBody({
         </Section>
       )}
 
-      {entity.evidence_quote && (
+      {/* Origin quote: dropped from the expanded EVENT card (read it on the
+          sheet); other types keep their provenance line. */}
+      {type !== 'event' && entity.evidence_quote && (
         <div
           style={{
             marginTop: 8,

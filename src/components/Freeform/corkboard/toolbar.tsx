@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { hexToRgba } from '../../../components/Freeform/entityColors';
 import { BALL_H, BALL_W, type Pos } from './constants';
 import { useThemeMode } from './theme';
+import { HoverTip } from './tooltip';
 
 export function BallChip({
   label,
@@ -97,14 +98,18 @@ export function BallChip({
 export function ToolbarButton({
   label,
   icon,
+  trailing,
   onClick,
   disabled,
   accent,
   active,
   title,
+  tourId,
 }: {
   label: string;
   icon?: React.ReactNode;
+  /** Optional element rendered AFTER the label (e.g. a dropdown caret). */
+  trailing?: React.ReactNode;
   onClick: () => void;
   disabled?: boolean;
   /** Tint color — used for badge/active states (e.g. pending suggestions). */
@@ -112,6 +117,8 @@ export function ToolbarButton({
   /** Pressed/open look (e.g. while its slide-out is open). */
   active?: boolean;
   title?: string;
+  /** Anchor for the wow coachmark (FIL-506). */
+  tourId?: string;
 }) {
   const [hover, setHover] = useState(false);
   const dark = useThemeMode() === 'dark';
@@ -137,11 +144,11 @@ export function ToolbarButton({
     : tinted
     ? accent!
     : dark ? '#c8c8d0' : '#3d4250';
-  return (
+  const btn = (
     <button
+      data-tour={tourId}
       onClick={onClick}
       disabled={disabled}
-      title={title}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
@@ -165,7 +172,16 @@ export function ToolbarButton({
     >
       {icon && <span style={{ fontSize: 13, lineHeight: 1 }}>{icon}</span>}
       {label}
+      {trailing && <span style={{ display: 'inline-flex', lineHeight: 1, marginLeft: 1 }}>{trailing}</span>}
     </button>
+  );
+  // Styled hover tooltip (lifted from the canvas) in place of the native one.
+  return title ? (
+    <HoverTip text={title} placement="bottom" accent={accent}>
+      {btn}
+    </HoverTip>
+  ) : (
+    btn
   );
 }
 
@@ -232,6 +248,7 @@ export function BraindumpDock({
 
   return (
     <div
+      data-tour="braindump-dock"
       style={{
         ...(floating
           ? {
@@ -266,7 +283,7 @@ export function BraindumpDock({
           onKeyDown={onKeyDown}
           disabled={busy}
           placeholder="This is a space to write freely about your story. Characters, scenes, conflicts, vibes, anything goes…"
-          rows={7}
+          rows={1}
           style={{
             width: '100%',
             boxSizing: 'border-box',

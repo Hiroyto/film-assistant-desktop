@@ -26,6 +26,8 @@ export function getEntityColorClass(type: EntityType): string {
       return 'entityInformation';
     case 'arc':
       return 'entityArc';
+    case 'sequence':
+      return 'entitySequence';
   }
 }
 

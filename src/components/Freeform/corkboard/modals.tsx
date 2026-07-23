@@ -4,7 +4,8 @@ import { getEntityColor, hexToRgba } from '../../../components/Freeform/entityCo
 import { ARC_KINDS, clearProject, createArc, createArcFromEvents, createCard, type ArcKind, type CreateCardKind, type EvokesTransition, type SupersessionRequiredResponse } from '../../../lib/freeformApi';
 import { DeleteCardLink } from './cards';
 import { arcKindLabel, narrativeStatusBg, narrativeStatusFg, narrativeStatusLabel, transitionLabel } from './labels';
-import { useThemeMode } from './theme';
+import { SearchSelect } from './selects';
+import { liftColor, useThemeMode } from './theme';
 
 /** D'-5 — superset of CreateCardKind including 'arc' for the modal flow.
  *  Backend dispatches via createCard (Character/Event/Location) or createArc.
@@ -628,6 +629,56 @@ export function CreateCardModal({
   };
 
   const label = kind.charAt(0).toUpperCase() + kind.slice(1);
+  const accent = getEntityColor(kind);
+
+  const labelStyle: React.CSSProperties = {
+    fontSize: 11,
+    fontWeight: 600,
+    letterSpacing: 0.2,
+    color: dark ? '#9a9aa4' : '#888',
+    display: 'block',
+    marginBottom: 5,
+  };
+  const fieldStyle: React.CSSProperties = {
+    width: '100%',
+    boxSizing: 'border-box',
+    padding: '8px 11px',
+    fontSize: 13,
+    borderRadius: 8,
+    outline: 'none',
+    marginBottom: 13,
+    fontFamily: 'system-ui, sans-serif',
+    border: `1px solid ${dark ? '#2c2c33' : '#e0e0e0'}`,
+    background: dark ? '#121216' : '#fff',
+    color: dark ? '#e6e6ea' : '#1d2230',
+    transition: 'border-color 140ms ease, box-shadow 140ms ease',
+  };
+  const ghostBtn: React.CSSProperties = {
+    padding: '8px 14px',
+    fontSize: 12.5,
+    fontWeight: 600,
+    border: `1px solid ${dark ? '#2e2e35' : '#ddd'}`,
+    background: 'transparent',
+    borderRadius: 8,
+    color: dark ? '#b2b2bc' : '#555',
+    cursor: 'pointer',
+    fontFamily: 'system-ui, sans-serif',
+  };
+  const primaryBtn = (enabled: boolean): React.CSSProperties => ({
+    padding: '8px 16px',
+    fontSize: 12.5,
+    fontWeight: 600,
+    border: 'none',
+    borderRadius: 8,
+    background: enabled
+      ? `linear-gradient(135deg, ${accent} 0%, ${liftColor(accent, 0.18)} 100%)`
+      : dark ? '#222227' : '#eceef2',
+    color: enabled ? '#fff' : dark ? '#6a6a74' : '#9aa0ad',
+    cursor: enabled ? 'pointer' : 'not-allowed',
+    boxShadow: enabled ? `0 4px 14px ${hexToRgba(accent, 0.3)}` : 'none',
+    fontFamily: 'system-ui, sans-serif',
+    transition: 'box-shadow 120ms ease, filter 120ms ease',
+  });
 
   return (
     <div
@@ -638,34 +689,51 @@ export function CreateCardModal({
         position: 'fixed',
         inset: 0,
         zIndex: 200,
-        background: 'rgba(20, 20, 20, 0.32)',
+        background: 'rgba(10, 10, 12, 0.5)',
+        backdropFilter: 'blur(3px)',
+        WebkitBackdropFilter: 'blur(3px)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         fontFamily: 'system-ui, sans-serif',
       }}
     >
+      <style>{`
+        .cb-cc-field:focus { border-color: ${accent} !important; box-shadow: 0 0 0 3px ${hexToRgba(accent, 0.18)}; }
+        .cb-cc-field::placeholder { color: ${dark ? '#5a5a63' : '#aaa'}; }
+      `}</style>
       <div
         onKeyDown={onKeyDown}
         style={{
-          width: 360,
-          background: dark ? '#1a1a1e' : '#fff',
-          borderRadius: 6,
-          boxShadow: '0 12px 32px rgba(0, 0, 0, 0.18)',
-          padding: 18,
+          width: 400,
+          background: dark ? '#17171b' : '#fff',
+          borderRadius: 14,
+          border: `1px solid ${dark ? hexToRgba(accent, 0.3) : hexToRgba(accent, 0.35)}`,
+          boxShadow: dark
+            ? `0 24px 64px rgba(0,0,0,0.6), 0 0 0 1px ${hexToRgba(accent, 0.12)}, 0 0 40px ${hexToRgba(accent, 0.1)}`
+            : `0 18px 48px rgba(0,0,0,0.18), 0 0 28px ${hexToRgba(accent, 0.12)}`,
+          overflow: 'hidden',
         }}
       >
         <div
           style={{
-            fontSize: 13,
-            fontWeight: 600,
-            color: dark ? '#e6e6ea' : '#222',
-            marginBottom: 14,
+            padding: '15px 20px 13px',
+            borderBottom: `2px solid ${dark ? hexToRgba(liftColor(accent, 0.2), 0.55) : accent}`,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 9,
           }}
         >
-          New {label}
+          <span style={{ width: 9, height: 9, borderRadius: '50%', background: accent, flexShrink: 0, boxShadow: `0 0 8px ${hexToRgba(accent, 0.6)}` }} />
+          <span style={{ fontSize: 9.5, letterSpacing: 0.6, textTransform: 'uppercase', fontWeight: 700, color: accent }}>
+            New
+          </span>
+          <span style={{ fontSize: 15, fontWeight: 600, color: dark ? '#ededf1' : '#1d2230' }}>
+            {label}
+          </span>
         </div>
 
+        <div style={{ padding: '16px 20px 18px' }}>
         {collision ? (
           <div>
             <div style={{ fontSize: 12, color: dark ? '#b2b2bc' : '#555', lineHeight: 1.5, marginBottom: 12 }}>
@@ -673,7 +741,7 @@ export function CreateCardModal({
                 <>
                   <strong>{collision.name}</strong> was previously deleted but
                   still exists in this project. Restoring it brings back its
-                  description, traits, and edges — anything you wrote in this
+                  description, traits, and edges; anything you wrote in this
                   form will be ignored.
                 </>
               ) : (
@@ -684,32 +752,10 @@ export function CreateCardModal({
               )}
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button
-                onClick={onCancel}
-                style={{
-                  padding: '6px 12px',
-                  fontSize: 12,
-                  border: dark ? '1px solid #2e2e35' : '1px solid #ddd',
-                  background: dark ? '#1a1a1e' : '#fff',
-                  borderRadius: 4,
-                  color: dark ? '#b2b2bc' : '#555',
-                  cursor: 'pointer',
-                }}
-              >
+              <button onClick={onCancel} style={ghostBtn}>
                 Cancel
               </button>
-              <button
-                onClick={onOpenCollision}
-                style={{
-                  padding: '6px 12px',
-                  fontSize: 12,
-                  border: 'none',
-                  background: '#3b82f6',
-                  borderRadius: 4,
-                  color: '#fff',
-                  cursor: 'pointer',
-                }}
-              >
+              <button onClick={onOpenCollision} style={primaryBtn(true)}>
                 {collision.deleted ? 'Restore' : 'Open it'}
               </button>
             </div>
@@ -718,39 +764,21 @@ export function CreateCardModal({
           <>
             {kind === 'arc' && (
               <>
-                <label style={{ fontSize: 11, color: dark ? '#82828c' : '#888', display: 'block', marginBottom: 4 }}>
-                  Kind
-                </label>
-                <select
+                <label style={labelStyle}>Kind</label>
+                <SearchSelect
                   value={arcKind}
-                  onChange={(e) => setArcKind(e.target.value as ArcKind)}
+                  onChange={(id) => setArcKind(id as ArcKind)}
                   disabled={submitting}
-                  style={{
-                    width: '100%',
-                    padding: '7px 9px',
-                    fontSize: 13,
-                    border: dark ? '1px solid #2a2a30' : '1px solid #e0e0e0',
-                    borderRadius: 4,
-                    outline: 'none',
-                    marginBottom: 12,
-                    boxSizing: 'border-box',
-                    fontFamily: 'system-ui, sans-serif',
-                    background: dark ? '#1a1a1e' : '#fff',
-                  }}
-                >
-                  {ARC_KINDS.map((k) => (
-                    <option key={k} value={k}>
-                      {arcKindLabel(k)}
-                    </option>
-                  ))}
-                </select>
+                  accent={accent}
+                  placeholder="Select a kind"
+                  options={ARC_KINDS.map((k) => ({ id: k, label: arcKindLabel(k) }))}
+                />
               </>
             )}
-            <label style={{ fontSize: 11, color: dark ? '#82828c' : '#888', display: 'block', marginBottom: 4 }}>
-              Name
-            </label>
+            <label style={labelStyle}>Name</label>
             <input
               ref={nameRef}
+              className="cb-cc-field"
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -764,114 +792,65 @@ export function CreateCardModal({
                   ? 'e.g. The click subplot'
                   : 'e.g. the apartment'
               }
-              style={{
-                width: '100%',
-                padding: '7px 9px',
-                fontSize: 13,
-                border: dark ? '1px solid #2a2a30' : '1px solid #e0e0e0',
-                borderRadius: 4,
-                outline: 'none',
-                marginBottom: 12,
-                boxSizing: 'border-box',
-                fontFamily: 'system-ui, sans-serif',
-              }}
+              style={fieldStyle}
             />
 
             {kind === 'event' && eventOptions.length > 0 && (
               <>
-                <label style={{ fontSize: 11, color: dark ? '#82828c' : '#888', display: 'block', marginBottom: 4 }}>
-                  Follows <span style={{ color: dark ? '#63636d' : '#bbb' }}>(optional)</span>
+                <label style={labelStyle}>
+                  Follows <span style={{ color: dark ? '#63636d' : '#bbb', fontWeight: 400 }}>(optional)</span>
                 </label>
-                <select
+                <SearchSelect
                   value={precededBy}
-                  onChange={(e) => setPrecededBy(e.target.value)}
+                  onChange={setPrecededBy}
                   disabled={submitting}
-                  style={{
-                    width: '100%',
-                    padding: '7px 9px',
-                    fontSize: 13,
-                    border: dark ? '1px solid #2a2a30' : '1px solid #e0e0e0',
-                    borderRadius: 4,
-                    outline: 'none',
-                    marginBottom: 12,
-                    boxSizing: 'border-box',
-                    fontFamily: 'system-ui, sans-serif',
-                    background: dark ? '#1a1a1e' : '#fff',
-                  }}
-                  title="Which existing event should this one come after in story-time"
-                >
-                  <option value="">(unconnected — no predecessor)</option>
-                  {eventOptions.map((o) => (
-                    <option key={o.id} value={o.id}>
-                      {o.label}
-                      {o.narrativeStatus && o.narrativeStatus !== 'on_screen'
-                        ? ` · ${o.narrativeStatus}`
-                        : ''}
-                    </option>
-                  ))}
-                </select>
+                  accent={accent}
+                  placeholder="(unconnected, no predecessor)"
+                  searchPlaceholder="Search events…"
+                  options={[
+                    { id: '', label: '(unconnected, no predecessor)' },
+                    ...eventOptions.map((o) => ({
+                      id: o.id,
+                      label: o.label,
+                      sublabel:
+                        o.narrativeStatus && o.narrativeStatus !== 'on_screen'
+                          ? o.narrativeStatus
+                          : undefined,
+                    })),
+                  ]}
+                />
               </>
             )}
 
-            <label style={{ fontSize: 11, color: dark ? '#82828c' : '#888', display: 'block', marginBottom: 4 }}>
-              Description <span style={{ color: dark ? '#63636d' : '#bbb' }}>(optional)</span>
+            <label style={labelStyle}>
+              Description <span style={{ color: dark ? '#63636d' : '#bbb', fontWeight: 400 }}>(optional)</span>
             </label>
             <textarea
+              className="cb-cc-field"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               disabled={submitting}
-              placeholder="A short description — leave blank to fill in later via prose."
+              placeholder="A short description. Leave blank to fill in later via prose."
               rows={3}
-              style={{
-                width: '100%',
-                padding: '7px 9px',
-                fontSize: 13,
-                border: dark ? '1px solid #2a2a30' : '1px solid #e0e0e0',
-                borderRadius: 4,
-                outline: 'none',
-                resize: 'vertical',
-                minHeight: 60,
-                marginBottom: 12,
-                boxSizing: 'border-box',
-                fontFamily: 'system-ui, sans-serif',
-                lineHeight: 1.45,
-              }}
+              style={{ ...fieldStyle, resize: 'vertical', minHeight: 64, lineHeight: 1.45 }}
             />
 
             {error && (
               <div style={{ fontSize: 11, color: 'crimson', marginBottom: 10 }}>{error}</div>
             )}
 
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
               <button
                 onClick={onCancel}
                 disabled={submitting}
-                style={{
-                  padding: '6px 12px',
-                  fontSize: 12,
-                  border: dark ? '1px solid #2e2e35' : '1px solid #ddd',
-                  background: dark ? '#1a1a1e' : '#fff',
-                  borderRadius: 4,
-                  color: dark ? '#b2b2bc' : '#555',
-                  cursor: submitting ? 'not-allowed' : 'pointer',
-                }}
+                style={{ ...ghostBtn, cursor: submitting ? 'not-allowed' : 'pointer' }}
               >
                 Cancel
               </button>
               <button
                 onClick={onSubmit}
                 disabled={submitting || name.trim().length === 0}
-                style={{
-                  padding: '6px 12px',
-                  fontSize: 12,
-                  border: 'none',
-                  background:
-                    submitting || name.trim().length === 0 ? '#eee' : '#3b82f6',
-                  color: submitting || name.trim().length === 0 ? '#999' : '#fff',
-                  borderRadius: 4,
-                  cursor:
-                    submitting || name.trim().length === 0 ? 'not-allowed' : 'pointer',
-                }}
+                style={primaryBtn(!submitting && name.trim().length > 0)}
                 title="⌘+Enter"
               >
                 {submitting ? 'Creating…' : 'Create'}
@@ -879,6 +858,7 @@ export function CreateCardModal({
             </div>
           </>
         )}
+        </div>
       </div>
     </div>
   );

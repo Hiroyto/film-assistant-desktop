@@ -91,6 +91,12 @@ interface ScriptEditorProps {
   /** FIL-302: Update baseline hash after generation/accept so navigation trigger doesn't redundantly re-extract */
   markSceneExtracted?: (sceneId: string) => void;
   charactersOpen?: () => void;
+  /** Freeform host: hide the inline-AI rail + selection popup + CMD+J (the
+   *  outline's suggest/revise/generate surface). Default true (outline). */
+  showAIRail?: boolean;
+  /** Extra TipTap extensions appended to the page editors (freeform host
+   *  registers its scene-skeleton attributes here). */
+  extraExtensions?: Extension[];
 }
 
 const calculateScenePositions = (editor: Editor): ScenePosition[] => {
@@ -146,7 +152,8 @@ const ScriptEditor: React.FC<ScriptEditorProps> = ({
   onEditorReady, editorTheme, onThemeToggle, isGenerating, isFullscreen,
   onFullscreen, onMinimize, onScenePositionsUpdate, characters,
   onAddCharacter, onUpdateCharacter, onDeleteCharacter,
-  token, storyData, storyId, setUser, onSave, initialContent, isSceneDirty, getSceneTaggedContent, markSceneExtracted, getAllHTMLRef, getAllEditorsRef, onImportExport, charactersOpen
+  token, storyData, storyId, setUser, onSave, initialContent, isSceneDirty, getSceneTaggedContent, markSceneExtracted, getAllHTMLRef, getAllEditorsRef, onImportExport, charactersOpen,
+  showAIRail = true, extraExtensions
 }) => {
   const [activeEditor, setActiveEditor] = useState<Editor | null>(null);
   const [, setEditorVersion] = useState(0);
@@ -173,7 +180,10 @@ const ScriptEditor: React.FC<ScriptEditorProps> = ({
   const activePanelRef = useRef(activePanel);
   activePanelRef.current = activePanel;
 
-  const editorExtensions = useMemo(() => [InlineAIDecorations], []);
+  const editorExtensions = useMemo(
+    () => [InlineAIDecorations, ...(extraExtensions ?? [])],
+    [extraExtensions],
+  );
 
   // ── Cross-page autofill sources ──────────────────────────────────────────
   // CharacterAutoFill needs to see character names from every page, not just
@@ -281,6 +291,7 @@ const ScriptEditor: React.FC<ScriptEditorProps> = ({
   });
 
   useEffect(() => {
+    if (!showAIRail) return;
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "j") {
         e.preventDefault();
@@ -289,7 +300,7 @@ const ScriptEditor: React.FC<ScriptEditorProps> = ({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, []);
+  }, [showAIRail]);
 
   const cleanupPanel = useCallback(
     (prev: "suggest" | "revise" | "generate" | "characters" | null) => {
@@ -497,15 +508,18 @@ const ScriptEditor: React.FC<ScriptEditorProps> = ({
             extensions={editorExtensions}
           />
 
-          <SelectionPopup
-            editor={activeEditor}
-            panelOpen={activePanel !== null}
-            onRevise={handlePopupRevise}
-            onSuggest={handlePopupSuggest}
-          />
+          {showAIRail && (
+            <SelectionPopup
+              editor={activeEditor}
+              panelOpen={activePanel !== null}
+              onRevise={handlePopupRevise}
+              onSuggest={handlePopupSuggest}
+            />
+          )}
         </div>
       </div>
 
+      {showAIRail && (
       <div
         style={{
           position: "sticky",
@@ -555,6 +569,7 @@ const ScriptEditor: React.FC<ScriptEditorProps> = ({
           currentSceneId={guidedGen.currentSceneId}
         />
       </div>
+      )}
 
       <OverwriteConfirmModal
         isOpen={showCrossSceneWarning}

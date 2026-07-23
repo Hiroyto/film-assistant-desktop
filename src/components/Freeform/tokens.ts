@@ -18,6 +18,7 @@ export const ENTITY_COLORS: Record<EntityType, string> = {
   location: '#5eead4',
   information: '#71717a',
   arc: '#a855f7', // violet — distinct conceptual layer (threads, not entities)
+  sequence: '#22c55e', // green — a movement/container spanning scenes
 };
 
 export const PEER_BLUE = '#54bfdb';

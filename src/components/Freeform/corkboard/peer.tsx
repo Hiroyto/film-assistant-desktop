@@ -5,7 +5,7 @@ import { getEntityColor, hexToRgba } from '../../../components/Freeform/entityCo
 import InternIcon from '../../../components/Freeform/InternIcon';
 import { PEER_BLUE } from '../../../components/Freeform/tokens';
 import { type EntityType, type PeerQuestion } from '../../../components/Freeform/types';
-import { buildSlice, closePeerThread, createWriterQuestion, enqueuePeerFirstPass, peerContinue, saveCardResponseDraft, startPeerThread, submitCardResponse, updateQuestionStatus as updateQuestionStatusApi, type GraphSlice, type PersistedQuestion, type ProjectEntity } from '../../../lib/freeformApi';
+import { buildSlice, checkSceneStaleness, closePeerThread, createWriterQuestion, enqueuePeerFirstPass, enqueueSceneExtraction, peerContinue, saveCardResponseDraft, startPeerThread, submitCardResponse, updateQuestionStatus as updateQuestionStatusApi, type GraphSlice, type PersistedQuestion, type ProjectEntity } from '../../../lib/freeformApi';
 import { useStreamingPeer } from '../../../lib/useStreamingPeer';
 import { AskPeerButton, Section } from './cards';
 import { EXPANDED_W, PEER_CARD_W, PEER_GAP, PEER_PROSE_COL_W, type Pos } from './constants';
@@ -24,6 +24,16 @@ import { liftColor, useThemeMode } from './theme';
 
 let responseChain: Promise<unknown> = Promise.resolve();
 const extractionWaiters = new Map<string, () => void>();
+
+// Write gate: the corkboard sets `active` true while a braindump's extraction +
+// graph write is in flight. The peer reads/builds its slice FROM Neptune, so
+// asking before the write settles would ground it on a half-written graph (the
+// focal card may not even exist yet). `ask()` holds until this clears. The
+// corkboard keeps it in sync with the braindump phase (see setPeerWriteActive).
+export const peerWriteGate = { active: false };
+export function setPeerWriteActive(active: boolean) {
+  peerWriteGate.active = active;
+}
 
 /** Called by the corkboard page when cascade_complete lands for a response —
  *  releases the queue for the next pending submission. */
@@ -86,8 +96,8 @@ export function usePeerSession({
   onCascadeFallbackRefresh: () => void;
 }) {
   const cardId = entity.id;
-  const focalType = entity.type as 'character' | 'event' | 'relationship';
-  const focalSupported = focalType === 'character' || focalType === 'event';
+  const focalType = entity.type as 'character' | 'event' | 'relationship' | 'sequence';
+  const focalSupported = focalType === 'character' || focalType === 'event' || focalType === 'sequence';
 
   const streaming = useStreamingPeer({
     userId,
@@ -120,16 +130,68 @@ export function usePeerSession({
     }
     try {
       setSetupError(null);
+      // Hold off while a braindump's extraction + graph write is still in flight.
+      // Building the slice mid-write reads a half-written graph and grounds the
+      // peer on partial context (the focal card may not be persisted yet). Poll
+      // until the write settles; fail-open after a generous cap so a lost
+      // braindump_complete can never hard-block the peer.
+      if (peerWriteGate.active) {
+        setStatusLine('Finishing saving your story…');
+        const start = Date.now();
+        while (peerWriteGate.active && Date.now() - start < 35000) {
+          await new Promise((r) => setTimeout(r, 250));
+        }
+        if (!aliveRef.current) return;
+      }
+      // Step 7 — the STALE-GATE (design doc §3): a peer ask on a scene whose
+      // pages moved past their last extraction extracts FIRST (from the
+      // stored pages, server-side), then slices, then asks — the peer never
+      // gives notes on an outline behind the pages. The backend verdict is
+      // ledger-based, so this also catches the cross-session hole (a scene
+      // edited-then-closed before its extraction fired looks clean to the
+      // FE's session baseline). Fail-open at every step; boards never gate.
+      if (focalType === 'event' && (entity as ProjectEntity & { has_script_text?: string }).has_script_text && userId) {
+        try {
+          const verdict = await checkSceneStaleness({ projectId, eventId: cardId }, token);
+          if (!aliveRef.current) return;
+          if (verdict.stale) {
+            setStatusLine('Catching your outline up to your pages…');
+            await enqueueSceneExtraction(
+              { projectId, eventId: cardId, userId, fromStorage: true },
+              token,
+            );
+            // The catch-up lands in ~12-20s; poll until fresh, cap 75s, then
+            // proceed regardless (a stuck catch-up must not block the ask).
+            const t0 = Date.now();
+            while (Date.now() - t0 < 75000) {
+              await new Promise((r) => setTimeout(r, 4000));
+              if (!aliveRef.current) return;
+              const v = await checkSceneStaleness({ projectId, eventId: cardId }, token);
+              if (!v.stale) break;
+            }
+          }
+        } catch (e) {
+          console.warn('[peer] stale-gate failed open', e);
+        }
+        if (!aliveRef.current) return;
+      }
       setStatusLine('Building slice from Neptune…');
-      // Character focals key off working_name; Event focals key off
-      // working_title. focalSeed shape differs accordingly — backend
+      // Character focals key off working_name; Event AND Sequence focals key off
+      // working_title (the backend looks the sequence up by title in
+      // sliceForSequence). focalSeed shape differs accordingly — backend
       // dispatches by focalType.
-      const focalId =
-        focalType === 'event'
-          ? entity.working_title ?? entity.working_name ?? cardId
-          : entity.working_name ?? entity.working_title ?? cardId;
+      const keysOffTitle = focalType === 'event' || focalType === 'sequence';
+      const focalId = keysOffTitle
+        ? entity.working_title ?? entity.working_name ?? cardId
+        : entity.working_name ?? entity.working_title ?? cardId;
       const focalSeed =
-        focalType === 'event'
+        focalType === 'sequence'
+          ? {
+              working_title: focalId,
+              summary: entity.summary ?? entity.description ?? '',
+              open_dimensions: entity.open_dimensions ?? [],
+            }
+          : focalType === 'event'
           ? {
               working_title: focalId,
               summary: entity.summary ?? '',
@@ -267,6 +329,7 @@ export function FloatingPeerCard({
   completedResponseIds,
   onCardQuestionsChanged,
   onCascadeFallbackRefresh,
+  onResponseSubmitted,
 }: {
   entity: ProjectEntity;
   projectId: string;
@@ -281,6 +344,8 @@ export function FloatingPeerCard({
   /** Fallback entity refetch hook. Called from response-submit fallback timers
    *  to guard against missed cascade_complete WS events. */
   onCascadeFallbackRefresh: () => void;
+  /** Fired immediately when the writer submits a response (before cascade). */
+  onResponseSubmitted?: () => void;
 }) {
   const dark = useThemeMode() === 'dark';
   const {
@@ -462,7 +527,7 @@ export function FloatingPeerCard({
             <div style={{ width: proseW - 28, whiteSpace: 'pre-wrap' }}>
               {streaming.prose || (streaming.state === 'loading' ? '…' : '')}
               {streaming.state === 'streaming' && (
-                <span style={{ color: PEER_BLUE, marginLeft: 2 }}>▍</span>
+                <span style={{ color: PEER_BLUE, marginLeft: 2, animation: 'cb-blink 1s step-end infinite' }}>▍</span>
               )}
             </div>
           </div>
@@ -545,7 +610,7 @@ export function FloatingPeerCard({
                       completedResponseIds={completedResponseIds}
                       onStatusChange={(s) => setStatusOverride(q.orderIndex, s)}
                       onChatOpenChange={(open) => handleChatOpenChange(q.orderIndex, open)}
-                      onResponseSubmitted={handleResponseSubmitted}
+                      onResponseSubmitted={() => { handleResponseSubmitted(); onResponseSubmitted?.(); }}
                     />
                   </div>
                 );

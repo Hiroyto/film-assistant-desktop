@@ -32,7 +32,7 @@ export default function NewStoryModalApple({
     const [primaryGenre, setPrimaryGenre] = useState("");
     const [secondaryGenre, setSecondaryGenre] = useState("");
     const [theme, setTheme] = useState("");
-    const [workflow, setWorkflow] = useState<StoryWorkflow>('outline');
+    const [workflow, setWorkflow] = useState<StoryWorkflow>('freeform');
 
     useEffect(() => {
         if (isOpen) {
@@ -40,7 +40,7 @@ export default function NewStoryModalApple({
             setPrimaryGenre("");
             setSecondaryGenre("");
             setTheme("");
-            setWorkflow('outline');
+            setWorkflow('freeform');
         }
     }, [isOpen]);
 
@@ -56,9 +56,9 @@ export default function NewStoryModalApple({
         onClose();
     };
 
-    const WORKFLOWS: Array<{ id: StoryWorkflow; name: string; blurb: string }> = [
-        { id: 'outline', name: 'Outline', blurb: 'Structured story builder — beats, synopsis, then scenes.' },
-        { id: 'freeform', name: 'Corkboard', blurb: 'Freeform canvas — braindump, cards, and a writing peer.' },
+    const WORKFLOWS: Array<{ id: StoryWorkflow; name: string; blurb: string; recommended?: boolean }> = [
+        { id: 'freeform', name: 'Corkboard', blurb: 'Freeform canvas: braindump, cards, and a writing peer.', recommended: true },
+        { id: 'outline', name: 'Outline Template', blurb: 'A fixed story outline surface for writers looking for structure.' },
     ];
 
     const modalVariants = {
@@ -137,8 +137,15 @@ export default function NewStoryModalApple({
                                                             : 'border-[#ff8c42]/25 bg-black/30 hover:border-[#ff8c42]/50')
                                                     }
                                                 >
-                                                    <div className={'font-semibold text-sm ' + (active ? 'text-[#ff8c42]' : 'text-white/85')}>
-                                                        {w.name}
+                                                    <div className="flex items-center gap-2">
+                                                        <div className={'font-semibold text-sm ' + (active ? 'text-[#ff8c42]' : 'text-white/85')}>
+                                                            {w.name}
+                                                        </div>
+                                                        {w.recommended && (
+                                                            <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-[#ff6b35]/20 text-[#ff8c42] border border-[#ff6b35]/40">
+                                                                Recommended
+                                                            </span>
+                                                        )}
                                                     </div>
                                                     <div className="text-xs text-white/40 mt-1 leading-snug">
                                                         {w.blurb}

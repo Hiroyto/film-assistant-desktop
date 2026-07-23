@@ -40,7 +40,7 @@ async function freshApiCall(endpoint: string, data: any, token: string) {
 export interface PeerFirstPassRequest {
   projectId: string;
   cardId: string;
-  focalType: 'character' | 'event' | 'relationship';
+  focalType: 'character' | 'event' | 'relationship' | 'sequence';
   focalId: string;
   slice: GraphSlice;
   /** FIL-477: when supplied along with clientRequestId, backend streams via WS. */
@@ -56,7 +56,7 @@ export interface PeerFirstPassRequest {
  * See freeform-workflow-app/lib/peer-slice.mjs for the canonical shape.
  */
 export interface GraphSlice {
-  focal_type: 'character' | 'event' | 'relationship';
+  focal_type: 'character' | 'event' | 'relationship' | 'sequence';
   focal_entity: Record<string, any>;
   events_involving?: Record<string, any>[];
   co_characters?: Record<string, any>[];
@@ -90,7 +90,7 @@ export interface GraphSlice {
 export interface BuildSliceRequest {
   projectId: string;
   cardId: string;
-  focalType: 'character' | 'event' | 'relationship';
+  focalType: 'character' | 'event' | 'relationship' | 'sequence';
   /** working_name for character/relationship focal; working_title for event. */
   focalId: string;
   /** Used when Neptune doesn't have the focal vertex yet. Shape varies by
@@ -213,6 +213,12 @@ export interface ExtractBraindumpJobFields {
   braindumpId: string;
   prose: string;
   reprocess?: boolean;
+  /** Set to 'screenplay' for PDF/script imports so the backend applies the
+   *  screenplay-specific segmentation prompt. Omitted for prose braindumps. */
+  sourceFormat?: 'screenplay';
+  /** Dev-only: stream entities over WS as they extract (card-by-card reveal).
+   *  Set by the dev FE; prod leaves it unset and runs the batch path. */
+  streaming?: boolean;
 }
 
 export interface EnqueueExtractionJobResponse {
@@ -419,7 +425,7 @@ export interface CloseThreadRequest {
 
 // FIL-496 — corkboard read (all renderable entities + connecting edges).
 
-export type ProjectEntityType = 'character' | 'event' | 'location' | 'relationship' | 'arc';
+export type ProjectEntityType = 'character' | 'event' | 'location' | 'relationship' | 'arc' | 'sequence';
 
 /** FIL-504 / D' — Arc vertex kind enum. Audience-question is one shape;
  *  the others cover transformation, promise, belief, thematic arcs.
@@ -486,6 +492,12 @@ export interface ProjectEntity {
   narrative_status?: 'on_screen' | 'backstory' | 'offstage' | string;
   int_ext?: string;
   evidence_quote?: string;
+  /** Sequence-specific: plot-order index stamped at extraction time (sequences
+   *  emit in story order). Canvas orders sequences by (created_at, seq_order). */
+  seq_order?: number;
+  /** Vertex creation timestamp (ISO), present on all entities via elementMap.
+   *  Tie-breaks sequence order across braindumps (one timestamp per braindump). */
+  created_at?: string;
   /** §9 soft-delete tombstone. Absent / falsy = alive. FE renders canvas from
    *  alive entities, Trash overlay from deleted ones. */
   deleted_at?: string;
@@ -514,6 +526,9 @@ export interface ProjectEdges {
   occurs_in: Array<{ from: string; to: string }>;
   /** Event → Event (forward only) */
   precedes: Array<{ from: string; to: string }>;
+  /** Sequence → Sequence (forward only) — the sequence throughline, auto-chained
+   *  in plot order at extraction time. Same edge label as precedes, Sequence ends. */
+  sequence_precedes: Array<{ from: string; to: string }>;
   /** Character → Character custom predicate (MARRIED_TO, HIRED, etc.) */
   structural: Array<{
     from: string;
@@ -559,6 +574,10 @@ export interface ProjectEdges {
     to: string;
     evidence_quote?: string;
   }>;
+  /** Sequence → Event containment (the granularity-fix container's member
+   *  scenes). Membership is disjoint server-side: a scene is in at most one
+   *  sequence. */
+  contains: Array<{ from: string; to: string }>;
 }
 
 export interface ProjectInformation {
@@ -1270,6 +1289,91 @@ export async function updateCardDescription(
   return (result.data?.body ?? result.data) as UpdateCardDescriptionResponse;
 }
 
+// Script editor — per-scene screenplay text. Saved pages live on a SceneText
+// vertex; an imported scene with no saved pages falls back to its source span
+// sliced from the import's stored window prose (kind: 'imported').
+export interface GetSceneTextResponse {
+  kind: 'saved' | 'imported' | 'empty';
+  html?: string;
+  text?: string;
+  updatedAt?: string;
+  /** Ledger versions (design doc §2a): current from the last save, extracted
+   *  from the last successful scene extraction. Absent on older saves. */
+  ledgerCurrent?: SceneLedgerBlock[];
+  ledgerExtracted?: SceneLedgerBlock[];
+}
+export async function getSceneText(
+  req: { projectId: string; eventId: string },
+  token: string,
+): Promise<GetSceneTextResponse> {
+  if (useMock) return Promise.resolve({ kind: 'empty' });
+  const result = await freshApiCall(apiPath!, { event: 'get-scene-text', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'get-scene-text failed');
+  return (result.data?.body ?? result.data) as GetSceneTextResponse;
+}
+/** Ledger block (design doc §2a): ordered per-region paragraph identity —
+ *  block id (may be '' until minted), normalized content hash, text length. */
+export type SceneLedgerBlock = { b: string; h: string; l: number };
+
+export async function saveSceneText(
+  req: { projectId: string; eventId: string; html: string; ledger?: SceneLedgerBlock[] },
+  token: string,
+): Promise<{ saved: true; eventId: string; updatedAt: string }> {
+  if (useMock) {
+    return Promise.resolve({ saved: true, eventId: req.eventId, updatedAt: new Date().toISOString() });
+  }
+  const result = await freshApiCall(apiPath!, { event: 'save-scene-text', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'save-scene-text failed');
+  return (result.data?.body ?? result.data) as { saved: true; eventId: string; updatedAt: string };
+}
+
+/** Bulk read of every saved scene's pages — loads the whole script document
+ *  in one round trip. Imported-span fallbacks are resolved client-side from
+ *  list-braindumps prose. */
+export async function listSceneTexts(
+  req: { projectId: string },
+  token: string,
+): Promise<{ projectId: string; sceneTexts: Array<{ eventId: string; html: string; updatedAt: string }> }> {
+  if (useMock) return Promise.resolve({ projectId: req.projectId, sceneTexts: [] });
+  const result = await freshApiCall(apiPath!, { event: 'list-scene-texts', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'list-scene-texts failed');
+  return (result.data?.body ?? result.data) as { projectId: string; sceneTexts: Array<{ eventId: string; html: string; updatedAt: string }> };
+}
+
+/** Scene-exit extraction trigger — async (202 + messageId); the worker gates,
+ *  hash-dedups, extracts the pages' implications anchored at the focal scene. */
+export async function enqueueSceneExtraction(
+  req: {
+    projectId: string; eventId: string; userId: string;
+    /** Omitted on fromStorage catch-up jobs (the worker reads S3 instead). */
+    sceneText?: string; ledger?: SceneLedgerBlock[];
+    /** Step 7 catch-up: extract from the scene's STORED pages (peer stale-gate,
+     *  which runs without a loaded document). */
+    fromStorage?: boolean;
+    /** Highlight-extract: the writer's selected passage as an attention hint. */
+    attentionHint?: string;
+  },
+  token: string,
+): Promise<{ queued?: boolean; skipped?: boolean; messageId?: string; eventId?: string }> {
+  if (useMock) return Promise.resolve({ queued: true, eventId: req.eventId });
+  const result = await freshApiCall(apiPath!, { event: 'enqueue-scene-extraction', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'enqueue-scene-extraction failed');
+  return (result.data?.body ?? result.data) as { queued?: boolean; skipped?: boolean; messageId?: string; eventId?: string };
+}
+
+/** Step 7 — is a scene's graph behind its stored pages? Ledger diff on the
+ *  backend (current vs extracted block versions), timestamp fallback. The
+ *  peer's stale-gate polls this; board views never gate on it. */
+export async function checkSceneStaleness(
+  req: { projectId: string; eventId: string },
+  token: string,
+): Promise<{ eventId: string; stale: boolean; reason: string; changedChars?: number }> {
+  if (useMock) return Promise.resolve({ eventId: req.eventId, stale: false, reason: 'mock' });
+  const result = await freshApiCall(apiPath!, { event: 'check-scene-staleness', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'check-scene-staleness failed');
+  return (result.data?.body ?? result.data) as { eventId: string; stale: boolean; reason: string; changedChars?: number };
+}
+
 // R2 — edit a reified Relationship's `kind` label.
 export interface UpdateRelationshipKindRequest {
   cardId: string;
@@ -1520,6 +1624,17 @@ export async function updateArc(
   return (result.data?.body ?? result.data) as UpdateArcResponse;
 }
 
+/** Set a Sequence's writer-chosen container color (6-digit hex, or '' to clear). */
+export async function setSequenceColor(
+  req: { sequenceId: string; projectId: string; color: string },
+  token: string,
+): Promise<{ sequenceId: string; color: string }> {
+  if (useMock) return Promise.resolve({ sequenceId: req.sequenceId, color: req.color });
+  const result = await freshApiCall(apiPath!, { event: 'set-sequence-color', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'set-sequence-color failed');
+  return (result.data?.body ?? result.data) as { sequenceId: string; color: string };
+}
+
 /**
  * D'-1 — Soft-delete an Arc. Adjacent EVOKES + Arc-INVOLVES edges stay in
  * place; reads filter the deleted_at flag.
@@ -1711,6 +1826,113 @@ export async function untagArcInvolvesCharacter(
   const result = await freshApiCall(apiPath!, { event: 'untag-arc-involves-character', ...req }, token);
   if (!result.success) throw new Error(result.error || 'untag-arc-involves-character failed');
   return (result.data?.body ?? result.data) as UntagArcInvolvesCharacterResponse;
+}
+
+// ============================================
+// Sequence containers (event-granularity fix)
+// ============================================
+
+export interface CreateSequenceRequest {
+  projectId: string;
+  userId: string;
+  workingName: string;
+  description?: string;
+  position?: { x: number; y: number };
+  memberEventIds?: string[];
+}
+
+export type CreateSequenceResponse =
+  | { created: true; entity: ProjectEntity }
+  | { exists: true; cardId: string; type: string; deleted: boolean };
+
+export interface TagSequenceContainsRequest {
+  sequenceId: string;
+  eventId: string;
+  projectId: string;
+}
+export interface TagSequenceContainsResponse {
+  tagged: true;
+  sequenceId: string;
+  eventId: string;
+}
+export interface UntagSequenceContainsRequest {
+  sequenceId: string;
+  eventId: string;
+  projectId: string;
+}
+export interface UntagSequenceContainsResponse {
+  untagged: true;
+  sequenceId: string;
+  eventId: string;
+  dropped: number;
+}
+
+/** Create a :Sequence container card. 409 on slug collision (mirror create-arc). */
+export async function createSequence(
+  req: CreateSequenceRequest,
+  token: string,
+): Promise<CreateSequenceResponse> {
+  if (useMock) {
+    return Promise.resolve({
+      created: true,
+      entity: {
+        id: `seq_${slugForMock(req.workingName)}_${slugForMock(req.projectId)}`,
+        type: 'sequence',
+        working_name: req.workingName,
+        working_title: req.workingName,
+        summary: req.description ?? '',
+        description: req.description ?? '',
+        open_dimensions: [],
+        project_id: req.projectId,
+        created_at: new Date().toISOString(),
+      } as ProjectEntity,
+    });
+  }
+  const { default: axios } = await import('axios');
+  try {
+    const response = await axios.post(
+      `${process.env.REACT_APP_URL}/${apiPath!}`,
+      { event: 'create-sequence', ...req },
+      {
+        headers: { Authorization: await liveToken(token), 'Content-Type': 'application/json' },
+        timeout: 30000,
+        validateStatus: (s) => s === 200 || s === 409,
+      },
+    );
+    const payload = response.data?.body ?? response.data;
+    if (response.status === 409) {
+      return { exists: true, cardId: payload.cardId, type: payload.type, deleted: !!payload.deleted };
+    }
+    return { created: true, entity: payload.entity };
+  } catch (err: any) {
+    throw new Error(err?.response?.data?.error || err?.message || 'create-sequence failed');
+  }
+}
+
+/** Add an Event to a Sequence (CONTAINS; disjoint membership enforced server-side). */
+export async function tagSequenceContains(
+  req: TagSequenceContainsRequest,
+  token: string,
+): Promise<TagSequenceContainsResponse> {
+  if (useMock) {
+    return Promise.resolve({ tagged: true, sequenceId: req.sequenceId, eventId: req.eventId });
+  }
+  const result = await freshApiCall(apiPath!, { event: 'tag-sequence-contains', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'tag-sequence-contains failed');
+  return (result.data?.body ?? result.data) as TagSequenceContainsResponse;
+}
+
+/** Remove an Event from a Sequence. */
+export async function untagSequenceContains(
+  req: UntagSequenceContainsRequest,
+  token: string,
+): Promise<UntagSequenceContainsResponse> {
+  if (useMock) {
+    return Promise.resolve({ untagged: true, sequenceId: req.sequenceId, eventId: req.eventId, dropped: 1 });
+  }
+  const result = await freshApiCall(apiPath!, { event: 'untag-sequence-contains', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'untag-sequence-contains failed');
+  return (result.data?.body ?? result.data) as UntagSequenceContainsResponse;
 }
 
 // ============================================
@@ -1914,6 +2136,11 @@ export interface BraindumpLogEntry {
   braindumpId: string;
   prose: string;
   createdAt: string;
+  /** Continuation stamp (script editor §2c): present on scratch generations
+   *  whose opening extends an existing scene. */
+  continuationScene?: string;
+  continuationCut?: number;
+  continuationBlocks?: number;
 }
 export interface ListBraindumpsResponse { projectId: string; braindumps: BraindumpLogEntry[]; }
 
@@ -2613,6 +2840,7 @@ function mockListProjectEntities(
     precedes: [
       { from: eId('the_detective_is_pushed_out_of_the_force'), to: eId('the_husband_hires_the_detective') },
     ],
+    sequence_precedes: [],
     structural: [
       {
         from: cId('the_husband'),
@@ -2625,6 +2853,7 @@ function mockListProjectEntities(
     evokes: [],
     arc_involves: [],
     causes: [],
+    contains: [],
   };
 
   return new Promise((resolve) =>

@@ -25,22 +25,53 @@ import CascadeToast from '../../components/Freeform/CascadeToast';
 import RecentUpdatesTray from '../../components/Freeform/RecentUpdatesTray';
 import { getEntityColor, hexToRgba } from '../../components/Freeform/entityColors';
 import { PEER_BLUE } from '../../components/Freeform/tokens';
-import { SupersessionRequiredError, acceptArcSuggestion, createArc, createArcFromEvents, createCard, createInformation, deleteArc, deleteCard, deleteStructuralEdge, dismissArcSuggestion, enqueueCardExtraction, enqueueExtractionJob, getCardLayouts, isMockMode, listArcSuggestions, listCardQuestions, listProjectEntities, promoteStructuralToRelationship, resolveNarrativeStatusFlip, restoreArc, restoreCard, setStructuralEdge, slugForCard, tagCauses, tagEventEvokes, tagEventPrecedes, untagCauses, untagEventPrecedes, updateArc, updateCardDescription, updateCardName, updateCardNarrativeStatus, updateCardPosition, type ArcKind, type ArcSuggestion, type CardLayout, type EvokesTransition, type ListProjectEntitiesResponse, type NarrativeStatus, type PersistedQuestion, type ProjectEntity, type SupersessionRequiredResponse } from '../../lib/freeformApi';
+import { SupersessionRequiredError, acceptArcSuggestion, createArc, createArcFromEvents, createCard, createInformation, deleteArc, deleteCard, deleteStructuralEdge, dismissArcSuggestion, enqueueCardExtraction, enqueueExtractionJob, getCardLayouts, isMockMode, listArcSuggestions, listCardQuestions, listProjectEntities, promoteStructuralToRelationship, resolveNarrativeStatusFlip, restoreArc, restoreCard, setStructuralEdge, slugForCard, tagCauses, tagEventEvokes, tagEventInvolvesCharacter, tagEventPrecedes, tagSequenceContains, untagCauses, untagEventPrecedes, updateArc, updateCardDescription, updateCardName, updateCardNarrativeStatus, updateCardPosition, type ArcKind, type ArcSuggestion, type CardLayout, type EvokesTransition, type ListProjectEntitiesResponse, type NarrativeStatus, type PersistedQuestion, type ProjectEntity, type SupersessionRequiredResponse } from '../../lib/freeformApi';
 import { useCascadeEvents } from '../../lib/useCascadeEvents';
 import { fetchAuthSession } from 'aws-amplify/auth';
+import axios from 'axios';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { UserContext } from '../../App';
 import { CardBox, EditableDescription, EditableName } from '../../components/Freeform/corkboard/cards';
-import { ARC_THREAD_PALETTE, ConnectorLayer, buildArcThread, computeAutoLayout, computePeerPosition, type ThreadRect } from '../../components/Freeform/corkboard/connectors';
-import { ARC_BALL_H, ARC_BALL_W, ARC_DOT, BALL_DISPLACE_GAP, BALL_H, BALL_ID_ARCS, BALL_ID_BACKSTORY, BALL_ID_CHARACTERS, BALL_RAIL_PAD, BALL_ROW_GAP, BALL_STACK_GAP, BALL_TRANSITION_MS, BALL_W, CANVAS_PAD, CLUSTER_META, CLUSTER_ORDER, COLLAPSED_H, COLLAPSED_W, DRAG_THRESHOLD_PX, EXPANDED_W, PEER_CARD_W, PEER_GAP, REL_COLLAPSED_H, REL_COLLAPSED_W, ROW_GAP, type Pos } from '../../components/Freeform/corkboard/constants';
+import { ARC_THREAD_PALETTE, ConnectorLayer, buildArcThread, computeAutoLayout, computePeerPosition, topoSortEventsByPrecedes, type ThreadRect } from '../../components/Freeform/corkboard/connectors';
+import { ARC_BALL_H, ARC_BALL_W, ARC_DOT, BALL_DISPLACE_GAP, BALL_H, BALL_ID_ARCS, BALL_ID_BACKSTORY, BALL_ID_CHARACTERS, BALL_RAIL_PAD, BALL_ROW_GAP, BALL_STACK_GAP, BALL_TRANSITION_MS, BALL_W, CANVAS_PAD, CHAR_PILL_H, CHAR_PILL_W, CLUSTER_META, CLUSTER_ORDER, COL_GAP, COLLAPSED_H, COLLAPSED_W, DRAG_THRESHOLD_PX, EXPANDED_W, PEER_CARD_W, PEER_GAP, EVENT_CARD_W, REL_COLLAPSED_H, REL_COLLAPSED_W, ROW_GAP, collapsedSizeOf, type Pos } from '../../components/Freeform/corkboard/constants';
 import { CreateArcFromEventsModal, CreateCardModal, ResetProjectButton, SupersessionModal, type CreateModalKind } from '../../components/Freeform/corkboard/modals';
 import { INFO_ACCENT, RightPanel, TrashOverlay } from '../../components/Freeform/corkboard/panels';
-import { FloatingPeerCard, QuestionComposer, notifyResponseExtracted } from '../../components/Freeform/corkboard/peer';
-import { ArcSheet, CharacterSheet, EventSheet, LocationSheet, RelationshipSheet } from '../../components/Freeform/corkboard/sheets';
-import { Shell } from '../../components/Freeform/corkboard/shell';
+import { FloatingPeerCard, QuestionComposer, notifyResponseExtracted, setPeerWriteActive } from '../../components/Freeform/corkboard/peer';
+import { ArcSheet, CharacterSheet, EventSheet, LocationSheet, RelationshipSheet, SequenceSheet } from '../../components/Freeform/corkboard/sheets';
+import { BraindumpMeter, CorkboardLoading, Shell } from '../../components/Freeform/corkboard/shell';
+import type { WinPhase } from '../../components/Freeform/corkboard/shell';
 import { computeCardSignals } from '../../components/Freeform/corkboard/signals';
 import { MoonIcon, SunIcon, THEME_STORE_KEY, ThemeCtx, type ThemeMode } from '../../components/Freeform/corkboard/theme';
 import { BallChip, BraindumpDock, ToolbarButton } from '../../components/Freeform/corkboard/toolbar';
+import WowFlow from '../../components/Freeform/corkboard/WowFlow';
+import { markWowSeen } from '../../components/Freeform/corkboard/wowShared';
+
+// Total edge count across the edge buckets that a braindump produces — the
+// "graph assembled" signal (used as a lost-WS belt to flip a braindump to done
+// when its edges land even if the braindump_complete WS was missed).
+const edgeCountOf = (d: ListProjectEntitiesResponse | null): number =>
+  (d?.edges?.precedes?.length ?? 0) +
+  (d?.edges?.involves?.length ?? 0) +
+  (d?.edges?.occurs_in?.length ?? 0) +
+  (d?.edges?.contains?.length ?? 0) +
+  (d?.edges?.knowledge?.length ?? 0);
+
+// Outline of a throughline-grid sequence region: vertically stacked row spans
+// (y-contiguous within a run) traced down the right side and back up the left,
+// text-selection style, so wrapped member rows fuse into one shape.
+function gridRegionPath(spans: Array<{ x0: number; y0: number; x1: number; y1: number }>): string {
+  if (spans.length === 0) return '';
+  const p: string[] = [`M ${spans[0].x0} ${spans[0].y0}`, `L ${spans[0].x1} ${spans[0].y0}`];
+  for (let i = 0; i < spans.length - 1; i++) {
+    p.push(`L ${spans[i].x1} ${spans[i].y1}`, `L ${spans[i + 1].x1} ${spans[i + 1].y0}`);
+  }
+  const last = spans[spans.length - 1];
+  p.push(`L ${last.x1} ${last.y1}`, `L ${last.x0} ${last.y1}`);
+  for (let i = spans.length - 1; i > 0; i--) {
+    p.push(`L ${spans[i].x0} ${spans[i].y0}`, `L ${spans[i - 1].x0} ${spans[i - 1].y1}`);
+  }
+  return `${p.join(' ')} Z`;
+}
 
 export default function FreeformCorkboard() {
   const { storyId } = useParams<{ storyId: string }>();
@@ -48,7 +79,7 @@ export default function FreeformCorkboard() {
   const routerNavigate = useNavigate();
   // The app-level user record — works[storyId] carries the story's title +
   // workflow tag (the corkboard's graph data lives in the freeform backend).
-  const { user: appUser } = useContext(UserContext);
+  const { user: appUser, setUser } = useContext(UserContext);
   const workTitle: string | undefined = storyId ? appUser?.works?.[storyId]?.title : undefined;
 
   // Guard: a non-demo storyId that isn't one of the user's works → back to the
@@ -56,22 +87,55 @@ export default function FreeformCorkboard() {
   // justCreated (set by the dashboard's create flow) skips the guard — the
   // async work-record create may not have landed in user.works yet.
   const arrivedJustCreated = !!(routerLocation.state as { justCreated?: boolean } | null)?.justCreated;
+  // FIL-506 wow: first-sign-in lands the user on a per-user wow sandbox project
+  // (`wow_<sub>`) that isn't in their works grid. Skip the unknown-story guard
+  // for it (like demo_*), and arriving with { wow:true } also bypasses.
+  const arrivedWow = !!(routerLocation.state as { wow?: boolean } | null)?.wow;
+  const isWow = arrivedWow || !!storyId?.startsWith('wow_');
   useEffect(() => {
-    if (!storyId || storyId.startsWith('demo_') || arrivedJustCreated) return;
+    if (!storyId || storyId.startsWith('demo_') || storyId.startsWith('wow_') || arrivedJustCreated || arrivedWow) return;
     if (appUser?.works && !appUser.works[storyId]) {
       routerNavigate('/dashboard');
     }
-  }, [storyId, appUser, routerNavigate, arrivedJustCreated]);
+  }, [storyId, appUser, routerNavigate, arrivedJustCreated, arrivedWow]);
+
+  // FIL-506 wow: arriving on a wow project (or with { wow:true }) runs the flow;
+  // wowDone stops it for this mount, and completeWow marks it seen so the
+  // dashboard onboarding won't re-trigger on later visits. Re-test by reopening
+  // a wow project (or clearing site data to re-arm the dashboard pickup).
+  const [wowDone, setWowDone] = useState(false);
+  const wowActive = isWow && !wowDone;
+  const completeWow = useCallback(() => {
+    markWowSeen();
+    setWowDone(true);
+  }, []);
 
   const [auth, setAuth] = useState<{ userId: string; token: string } | null>(null);
   const [data, setData] = useState<ListProjectEntitiesResponse | null>(null);
   const [layouts, setLayouts] = useState<Record<string, CardLayout>>({});
   const [positions, setPositions] = useState<Record<string, Pos>>({});
+  // In-board zoom via the CSS `zoom` property on the canvas — scales the whole
+  // board (cards, connectors, containers) while normal page scroll still pans, so
+  // a feature-length import is legible without leaving the app. The drag / link /
+  // new-card coordinate math divides client offsets by this (a point N screen px
+  // from the canvas origin is N/zoom board px); zoomRef mirrors it so the
+  // window-level mousemove handlers read the current value without re-binding.
+  const [zoom, setZoom] = useState(1);
+  const zoomRef = useRef(1);
+  useEffect(() => { zoomRef.current = zoom; }, [zoom]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   // Which card is expanded (showing full content). Click-to-expand.
   const [expandedCardId, setExpandedCardId] = useState<string | null>(null);
+  // Hovered character node — demoted structural ties light up (with labels)
+  // while the pointer rests on one of their endpoints. Characters only, so the
+  // board isn't re-rendering on every card hover.
+  const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
+  // Wow-tour relationship beat: force ONE structural tie to full weight while
+  // its coachmark spotlights it (demoted ties are invisible at rest). Set on
+  // step enter, cleared on exit / tour end.
+  const [wowTie, setWowTie] = useState<{ from: string; to: string } | null>(null);
   // Which card has a peer popup open on the canvas. Set by Ask peer button.
   // Independent of expandedCardId so the peer survives card collapse if needed.
   const [peerForCardId, setPeerForCardId] = useState<string | null>(null);
@@ -103,11 +167,72 @@ export default function FreeformCorkboard() {
       setBraindumpOpen(true);
       // Nothing is submitted automatically — the writer edits/adds freely and
       // chooses when to extract.
-      setBraindumpMsg('Brought your brainstorm over — edit or add to it, then hit Process when ready.');
+      setBraindumpMsg('Brought your brainstorm over. Edit or add to it, then hit Process when ready.');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const inflightBraindumpRef = useRef<string | null>(null);
+  // True while a LARGE screenplay import is running the windowed extraction path
+  // (multi-minute, writes window-by-window). It disables the fast give-up timers
+  // and the edge-count belt — which would otherwise resolve the moment window 1's
+  // edges land, dropping the tracker and shimmer long before the run is done.
+  // Only braindump_complete (or a long safety backstop) resolves a windowed run;
+  // braindump_progress keeps it alive and refetches per window.
+  const windowedRunRef = useRef(false);
+  // Interval poll id for the windowed path — WS can't be trusted over a multi-
+  // minute run (the socket dies; braindump_complete comes back sent:0), so we
+  // refetch on a timer so the board builds regardless of WS delivery.
+  const windowedPollRef = useRef<number | null>(null);
+  // Windowed-import meter phase (reading → structuring → processing → wiring),
+  // plus the per-window progress + a live elapsed clock. Driven by the backend
+  // phase pings when the socket delivers, and by an elapsed/poll estimate when it
+  // doesn't — so the meter names the real step instead of going quiet mid-run.
+  const [winPhase, setWinPhase] = useState<WinPhase | null>(null);
+  const [winProg, setWinProg] = useState<{ window?: number; total?: number }>({});
+  const [winElapsed, setWinElapsed] = useState(0);
+  const winPhaseRef = useRef<WinPhase | null>(null);
+  const windowedStartRef = useRef(0);
+  const winLastAliveRef = useRef(0);
+  const winLastGrowthRef = useRef(0);
+  const WIN_PHASE_ORDER: Record<WinPhase, number> = { reading: 0, structuring: 1, processing: 2, wiring: 3 };
+  // Advance the windowed phase MONOTONICALLY — a late/duplicate signal (WS ping
+  // arriving after the elapsed estimate already moved on) can never rewind it.
+  const bumpWinPhase = useCallback((p: WinPhase) => {
+    const cur = winPhaseRef.current;
+    if (cur && WIN_PHASE_ORDER[p] <= WIN_PHASE_ORDER[cur]) return;
+    winPhaseRef.current = p;
+    setWinPhase(p);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const resetWinMeter = useCallback(() => {
+    winPhaseRef.current = null;
+    setWinPhase(null);
+    setWinProg({});
+    setWinElapsed(0);
+  }, []);
+  // Edge count at braindump submit — the baseline for detecting "the graph
+  // assembled" (edges landed) even if the braindump_complete WS is lost, so the
+  // reveal tracker / shimmer / peer gate clear promptly instead of waiting 45s.
+  const edgeCountAtSubmitRef = useRef(0);
+  // Alive-card count at submit — the meter shows THIS braindump's delta, not the
+  // whole board (so an incremental dump reads "Pulled 3 cards", not "Pulled 30").
+  const cardCountAtSubmitRef = useRef(0);
+  // One-shot: after a WINDOWED import resolves, re-apply the full auto-layout to
+  // ALL cards once edges land. A re-import keeps already-seen entities at their
+  // old (scattered) positions, so the new sequence containers would otherwise
+  // wrap stale member spots instead of stacking. Consumed by the relayout effect.
+  const relayoutWindowedRef = useRef(false);
+  const dataRef = useRef<ListProjectEntitiesResponse | null>(null);
+  // One-shot flag: arm the FIL-515 dock auto-collapse only on a real extraction
+  // completion, so manually re-opening the empty dock later doesn't auto-close.
+  const dockAutoCloseRef = useRef(false);
+  // Streamed card ids awaiting a PRECEDES-order re-stack once the edge refetch
+  // lands (set on braindump_complete; consumed by the relayout effect).
+  const relayoutAfterStreamRef = useRef<string[] | null>(null);
+  // Ids of entities streamed in (dev streaming) but not yet persisted to
+  // Neptune. A refetch that races the write must NOT wipe these optimistic
+  // cards (otherwise they vanish then pop back in). Cleared on braindump_complete.
+  const streamedIdsRef = useRef<Set<string>>(new Set());
 
   // Manual card creation (§7). Toolbar dropdown opens a small modal with
   // working_name + description. Pre-flight collision check against current
@@ -138,6 +263,20 @@ export default function FreeformCorkboard() {
   // landed. FloatingPeerCard's QuestionComposer watches this to flip its
   // status from 'submitted' → 'extracted'.
   const [completedResponseIds, setCompletedResponseIds] = useState<Set<string>>(new Set());
+  // Count of peer-response submissions (fires immediately on submit, before the
+  // cascade lands). Drives the wow's "answered → continue" beat.
+  const [submissionCount, setSubmissionCount] = useState(0);
+  // In-flight peer-answer cascades (submit ++, cascade_complete --). Drives the
+  // top "working in the background" toast so an answer that's still extracting
+  // reads as active work, not a stuck "extracting".
+  const [pendingCascades, setPendingCascades] = useState(0);
+  // Watchdog: if cascades stay pending with no change for 90s (a lost
+  // cascade_complete WS), force-clear so the toast can't hang forever.
+  useEffect(() => {
+    if (pendingCascades <= 0) return;
+    const t = window.setTimeout(() => setPendingCascades(0), 90000);
+    return () => window.clearTimeout(t);
+  }, [pendingCascades]);
 
   // Per-card persisted-questions cache, populated lazily when a card expands.
   // Powers the "Working sections" counts on the Character expanded body
@@ -183,6 +322,26 @@ export default function FreeformCorkboard() {
   //   throughline — events stacked in PRECEDES order with generous spacing so
   //                 the arc threads have room; characters/relationships hidden
   const [viewMode, setViewMode] = useState<'master' | 'characters' | 'throughline'>('master');
+  // Throughline sub-layout: the single vertical column (spine + arc threads) or
+  // the writers-room GRID wall (notecards in reading order wrapping into rows;
+  // no arrows, the SC numbers carry the order). Persisted per browser.
+  const [throughlineLayout, setThroughlineLayout] = useState<'column' | 'grid'>(() => {
+    try {
+      return localStorage.getItem('ff-throughline-layout') === 'grid' ? 'grid' : 'column';
+    } catch {
+      return 'column';
+    }
+  });
+  const switchThroughlineLayout = useCallback((m: 'column' | 'grid') => {
+    setThroughlineLayout(m);
+    // In-view drags are transient projections of THIS layout; a card dragged in
+    // the column would otherwise pin to that spot in the grid.
+    setWebDrag({});
+    try { localStorage.setItem('ff-throughline-layout', m); } catch { /* ignore */ }
+  }, []);
+  // Toolbar toggle: hide sequence containers/cards so the board shows just the
+  // event scenes (member scenes stay visible; sequence connectors drop too).
+  const [hideSequences, setHideSequences] = useState(false);
   const switchView = useCallback((v: 'master' | 'characters' | 'throughline') => {
     setViewMode(v);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -211,12 +370,34 @@ export default function FreeformCorkboard() {
   // view at that moment and DON'T re-flow every scroll frame). A key present =
   // expanded; absent = collapsed (members bunched in the ball). In-memory only.
   const [ballExpanded, setBallExpanded] = useState<Record<string, number>>({});
+  // Sequence containers: a sequence that CONTAINS scenes renders as a container
+  // box with its member scenes nested inside. Expanded by default (Ben's call);
+  // this maps a sequence id → true when the writer collapses it. In-memory only.
+  const [sequenceCollapsed, setSequenceCollapsed] = useState<Record<string, boolean>>({});
+  // Which sequence container's header is hovered (reveals the slide-out header).
+  const [hoveredSeqId, setHoveredSeqId] = useState<string | null>(null);
+  // Close-delay so moving the cursor from the label to the pop-up header doesn't
+  // dismiss it mid-transit (the classic hover-gap problem).
+  const seqHoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const enterSeqHover = useCallback((id: string) => {
+    if (seqHoverTimer.current) { clearTimeout(seqHoverTimer.current); seqHoverTimer.current = null; }
+    setHoveredSeqId(id);
+  }, []);
+  const leaveSeqHover = useCallback((id: string) => {
+    if (seqHoverTimer.current) clearTimeout(seqHoverTimer.current);
+    seqHoverTimer.current = setTimeout(() => setHoveredSeqId((c) => (c === id ? null : c)), 220);
+  }, []);
 
   // Transient drag positions for cards that have been DEALT OUT of a ball. The
   // writer can drag a dealt card around; the position feeds back into the ball
   // override (so edges/relationships follow) but is NOT persisted and is reset
   // when the card re-bunches (pruned below once it leaves the overrides).
   const [webDrag, setWebDrag] = useState<Record<string, Pos>>({});
+  // Drag state — declared up here (above the ballEffects + arc-ball memos, which
+  // read them: ballEffects exempts the actively-dragged loose card from the
+  // container nudge; the arc-ball memo goes compact while dragging). Refs below.
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [draggingSeqId, setDraggingSeqId] = useState<string | null>(null);
 
   // -------- Cascade events (toast + tray + summary panel) --------
 
@@ -254,6 +435,27 @@ export default function FreeformCorkboard() {
     };
   }, [auth, storyId]);
 
+  // Re-pull arc suggestions on demand. The windowed-import poll calls this so the
+  // Panel populates (the worker writes suggestions AFTER the graph lands, and the
+  // `arc_suggestion` WS that would push them dies on a long run), and so the
+  // completion check can see them still arriving and keep waiting.
+  // Current suggestion count, mirrored to a ref for the windowed poll's stability
+  // signature (reads without re-binding the interval). Updated on every refetch.
+  const arcSuggestionCountRef = useRef(0);
+  const refreshArcSuggestions = useCallback(async () => {
+    if (!auth || !storyId) return;
+    try {
+      const res = await listArcSuggestions({ projectId: storyId }, auth.token);
+      const sugs = res.suggestions ?? [];
+      arcSuggestionCountRef.current = sugs.length;
+      setArcSuggestions(sugs);
+    } catch (err) {
+      console.warn('[corkboard] refresh-arc-suggestions failed:', err);
+    }
+  }, [auth, storyId]);
+  const refreshArcSuggestionsRef = useRef(refreshArcSuggestions);
+  useEffect(() => { refreshArcSuggestionsRef.current = refreshArcSuggestions; }, [refreshArcSuggestions]);
+
   // -------- Auth + data load --------
 
   // Refresh just the entities (positions/layouts unaffected). Called after
@@ -267,7 +469,20 @@ export default function FreeformCorkboard() {
       const session = await fetchAuthSession();
       const freshToken = session.tokens?.idToken?.toString() ?? auth.token;
       const entitiesRes = await listProjectEntities({ projectId: storyId }, freshToken);
-      setData(entitiesRes);
+      setData((prev) => {
+        // While a braindump is mid-flight, a poll can race the Neptune write —
+        // and under NCU contention that write can take 45s+, so a fallback poll
+        // easily reads a PARTIAL graph (only the first-written vertices, i.e. the
+        // characters). NEVER drop a card already on the board during an inflight
+        // braindump: additively merge so streamed cards AND non-streamed
+        // sequences (which never arrive via entity_streamed) survive a partial
+        // refetch. The authoritative braindump_complete refetch — which clears
+        // inflight FIRST — is the only one allowed to reconcile/remove.
+        if (!prev || !inflightBraindumpRef.current) return entitiesRes;
+        const got = new Set(entitiesRes.entities.map((e) => e.id));
+        const keep = prev.entities.filter((e) => !e.deleted_at && !got.has(e.id));
+        return keep.length ? { ...entitiesRes, entities: [...entitiesRes.entities, ...keep] } : entitiesRes;
+      });
       if (freshToken !== auth.token) {
         setAuth((cur) => (cur ? { ...cur, token: freshToken } : cur));
       }
@@ -293,10 +508,31 @@ export default function FreeformCorkboard() {
         if (cancelled) return;
         setAuth({ userId, token });
 
-        const [entitiesRes, layoutsRes] = await Promise.all([
-          listProjectEntities({ projectId: storyId }, token),
-          getCardLayouts({ userId, projectId: storyId }, token),
-        ]);
+        // Neptune Serverless can reject the first cold list-project-entities
+        // with a memory-limit 500 before it scales off the NCU floor; the same
+        // read succeeds seconds later once the cluster warms. Auto-retry with a
+        // short backoff so the writer never sees the transient (the backend's
+        // own retry window is too short to ride out the scale-up). Reads are
+        // idempotent, so re-running the whole load is safe.
+        const loadOnce = () =>
+          Promise.all([
+            listProjectEntities({ projectId: storyId }, token),
+            getCardLayouts({ userId, projectId: storyId }, token),
+          ]);
+        const RETRY_DELAYS = [1800, 4000];
+        let entitiesRes: Awaited<ReturnType<typeof listProjectEntities>>;
+        let layoutsRes: Awaited<ReturnType<typeof getCardLayouts>>;
+        for (let attempt = 0; ; attempt++) {
+          try {
+            [entitiesRes, layoutsRes] = await loadOnce();
+            break;
+          } catch (loadErr) {
+            if (attempt >= RETRY_DELAYS.length) throw loadErr;
+            console.warn(`[corkboard] load attempt ${attempt + 1} failed, retrying`, loadErr);
+            await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt]));
+            if (cancelled) return;
+          }
+        }
         if (cancelled) return;
 
         const layoutMap: Record<string, CardLayout> = {};
@@ -330,6 +566,92 @@ export default function FreeformCorkboard() {
       ),
     [data],
   );
+  // Cards stream in during extraction but their edges/metadata land on the final
+  // refetch — pulse the cards while that's still happening so the board reads as
+  // "still wiring up" rather than finished-but-bare.
+  const edgesGenerating = braindumpPhase === 'submitting' || braindumpPhase === 'extracting';
+  // The staged braindump meter (draggable) covers ALL braindumps; the top toast
+  // is now just for peer-answer cascades still being woven in.
+  const bgProcessing = pendingCascades > 0;
+  const bgProcessingLabel = 'Working your answer into the outline…';
+  // Keep the peer's write gate in sync: while a braindump's extraction + graph
+  // write is in flight, the peer holds its slice build (asking now would read a
+  // half-written graph). Cleared the moment the braindump settles.
+  useEffect(() => {
+    setPeerWriteActive(edgesGenerating);
+    return () => setPeerWriteActive(false);
+  }, [edgesGenerating]);
+  // Mirror data into a ref so the submit callback can baseline the edge count
+  // without re-creating on every data change.
+  useEffect(() => { dataRef.current = data; }, [data]);
+  // Windowed-meter heartbeat: a 1s ticker while a windowed import runs. It keeps
+  // the elapsed clock live AND advances the phase from elapsed + card growth when
+  // the WS phase pings don't arrive (the socket dies on a multi-minute run). All
+  // advances are monotonic via bumpWinPhase, so a WS ping and this estimate never
+  // fight. Thresholds are deliberately loose — split+segment is quick, the global
+  // pass is a beat, then fills dominate for minutes with no cards until the write
+  // burst, and the spine (wiring) lands right at the tail after growth settles.
+  useEffect(() => {
+    if (!(braindumpPhase === 'extracting' && windowedRunRef.current)) return;
+    const iv = window.setInterval(() => {
+      const el = Date.now() - windowedStartRef.current;
+      setWinElapsed(el);
+      if (el > 8000) bumpWinPhase('structuring');
+      if (el > 24000) bumpWinPhase('processing');
+      const alive = (dataRef.current?.entities ?? []).filter((e) => !e.deleted_at).length;
+      if (alive > cardCountAtSubmitRef.current) {
+        if (alive !== winLastAliveRef.current) {
+          winLastAliveRef.current = alive;
+          winLastGrowthRef.current = Date.now();
+        } else if (Date.now() - winLastGrowthRef.current > 10000) {
+          // Cards have landed and stopped growing ⇒ the writes are done and the
+          // global PRECEDES spine is being stitched. That's the wiring step.
+          bumpWinPhase('wiring');
+        }
+      }
+    }, 1000);
+    return () => window.clearInterval(iv);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [braindumpPhase]);
+  // Lost-WS belt: while a braindump is in flight, resolve locally once the
+  // edge-bearing graph has landed AND SETTLED — edges past the submit baseline,
+  // unchanged across two observations at least 4s apart. First-new-edge was the
+  // old trigger, and it fired on MID-WRITE partial reads (the batched write +
+  // the worker's arc/evokes/causes tail spread the landing over seconds now):
+  // the tracker dropped early, polls died with it, and the wow walkthrough
+  // built itself from a graph still missing its relationships. The steady
+  // while-inflight poll (in runBraindumpExtraction) feeds this the consecutive
+  // reads it needs. braindump_complete (WS alive) still resolves instantly.
+  const beltStableRef = useRef<{ count: number; at: number } | null>(null);
+  useEffect(() => {
+    if (braindumpPhase !== 'extracting' || !inflightBraindumpRef.current) {
+      beltStableRef.current = null;
+      return;
+    }
+    // A windowed import writes edges after EVERY window, so the first window's
+    // edges would trip this belt and resolve the run mid-way. Skip it there —
+    // braindump_progress keeps it alive and braindump_complete resolves it.
+    if (windowedRunRef.current) return;
+    const n = edgeCountOf(data);
+    if (n <= edgeCountAtSubmitRef.current) return;
+    const prev = beltStableRef.current;
+    const now = Date.now();
+    if (!prev || prev.count !== n) {
+      beltStableRef.current = { count: n, at: now }; // still growing — keep watching
+      return;
+    }
+    if (now - prev.at < 4000) return; // same count but re-read too soon to call it settled
+    // Edges landed and held steady — mirror the braindump_complete tidy-up so
+    // the lost-WS path matches the normal one: stash streamed ids for the
+    // PRECEDES re-stack, clear them, release the inflight gate, flip to done.
+    beltStableRef.current = null;
+    inflightBraindumpRef.current = null;
+    if (streamedIdsRef.current.size) {
+      relayoutAfterStreamRef.current = [...streamedIdsRef.current];
+    }
+    streamedIdsRef.current.clear();
+    setBraindumpPhase('done');
+  }, [braindumpPhase, data]);
 
   // Reified Relationship cards live ON the connection between their two
   // characters: positioned at the midpoint of the endpoint cards' centers, and
@@ -400,7 +722,7 @@ export default function FreeformCorkboard() {
   // R4 — structural-tie edit popover. Opened by clicking a dashed structural
   // edge on the canvas; relabel / delete / promote-to-relationship.
   const [editStructural, setEditStructural] = useState<
-    { from: string; to: string; predicate: string; mx: number; my: number } | null
+    { from: string; to: string; predicate: string; mx: number; my: number; isNew?: boolean } | null
   >(null);
   const [structDraft, setStructDraft] = useState('');
   const [structBusy, setStructBusy] = useState(false);
@@ -437,7 +759,54 @@ export default function FreeformCorkboard() {
     [auth, storyId, refreshEntities, closeStructuralEditor],
   );
 
-  const autoPositions = useMemo(() => computeAutoLayout(aliveEntities), [aliveEntities]);
+  const autoPositions = useMemo(
+    () => computeAutoLayout(
+      aliveEntities,
+      data?.edges?.precedes ?? [],
+      typeof window !== 'undefined' ? window.innerWidth : 1400,
+      data?.edges?.contains ?? [],
+    ),
+    [aliveEntities, data?.edges?.precedes, data?.edges?.contains],
+  );
+
+  // Story-order scene numbers ("SC 07") for the notecard-style event cards:
+  // every alive event, container members included, numbered by the PRECEDES
+  // spine (disconnected events append in insertion order after the chain).
+  const sceneNoById = useMemo(() => {
+    const sorted = topoSortEventsByPrecedes(
+      aliveEntities.filter((e) => e.type === 'event'),
+      data?.edges?.precedes ?? [],
+    );
+    const m = new Map<string, number>();
+    sorted.forEach((e, i) => m.set(e.id, i + 1));
+    return m;
+  }, [aliveEntities, data?.edges?.precedes]);
+
+  // Re-tidy the board into the clean chronological layout: events stacked in
+  // PRECEDES (story) order, the other types in their columns. Overrides any
+  // dragged/stored positions and persists the result so it survives reload.
+  const arrangeChronologically = useCallback(() => {
+    if (!auth || !storyId || !data) return;
+    const fresh = computeAutoLayout(
+      aliveEntities,
+      data.edges?.precedes ?? [],
+      typeof window !== 'undefined' ? window.innerWidth : 1400,
+      data.edges?.contains ?? [],
+    );
+    const ids = Object.keys(fresh);
+    setPositions((prev) => {
+      const next = { ...prev };
+      for (const id of ids) next[id] = fresh[id];
+      return next;
+    });
+    setWebDrag({});
+    for (const id of ids) {
+      updateCardPosition(
+        { userId: auth.userId, projectId: storyId, cardId: id, x: fresh[id].x, y: fresh[id].y },
+        auth.token,
+      ).catch((e) => console.warn('[corkboard] arrange persist failed:', e));
+    }
+  }, [auth, storyId, data, aliveEntities]);
 
   // Derived per-card signals (counts/labels pulled from edges). Computed once
   // per data change so cards don't each re-walk the edge list on render.
@@ -459,6 +828,12 @@ export default function FreeformCorkboard() {
           ? { x: stored.x, y: stored.y }
           : (autoPositions[e.id] ?? { x: 0, y: 0 });
       }
+      // Member scenes keep the position computeAutoLayout already gave them above
+      // (a SINGLE COLUMN in PRECEDES/story order directly under their sequence
+      // anchor), so each container box stays narrow and the sequences read as one
+      // clean vertical spine in order — instead of the 2-col grid that used to run
+      // here, which widened the boxes and fanned the containers to the right. A
+      // saved/dragged position still wins (the loop above only fills unseen ids).
       // Seed the four category balls' default positions — a row across the top
       // of the canvas. Stored layouts override (the synthetic ids live in
       // CardLayouts like any other cardId, so a dragged ball persists).
@@ -477,6 +852,15 @@ export default function FreeformCorkboard() {
   // sticky categories (Characters/Arcs ball up once this passes their lowest
   // card). Updated by the scroll/resize effect below (rAF-throttled).
   const [viewportCanvasTop, setViewportCanvasTop] = useState(0);
+  // Viewport dims + the board's offset from the document top — the board's
+  // MINIMUM size fills the viewport under the toolbar (it still grows with
+  // content beyond that). Replaces the demo-era fixed 1200×600 floor.
+  // Declared HERE (above ballEffects) because the throughline grid derives its
+  // column count from the viewport width — same TDZ rule as draggingId.
+  const [viewportWH, setViewportWH] = useState<{ w: number; h: number }>(() => ({
+    w: typeof window !== 'undefined' ? window.innerWidth : 1400,
+    h: typeof window !== 'undefined' ? window.innerHeight : 900,
+  }));
 
   // -------- Sticky-on-scroll ball clusters --------
   //
@@ -540,6 +924,11 @@ export default function FreeformCorkboard() {
     return score;
   }, [aliveEntities, charByName, data]);
 
+  // Throughline grid — the scene the surfaced arc cards are anchored to.
+  // Expanding one of those arc cards moves expandedCardId to the ARC, which
+  // would otherwise drop the anchor and hide the very card being opened.
+  const lastGridArcAnchorRef = useRef<string | null>(null);
+
   const ballEffects = useMemo(() => {
     type Cluster = {
       id: string; label: string; color: string; count: number;
@@ -548,17 +937,39 @@ export default function FreeformCorkboard() {
        *  above the spine) — overrides the stored draggable position. */
       pos?: Pos;
     };
+    type SeqBox = { seqId: string; name: string; collapsed: boolean; count: number; x: number; y: number; w: number; h: number; color: string };
     type Effects = {
       overrides: Map<string, { pos: Pos }>;
       displacements: Map<string, { dx: number; dy: number }>;
       hiddenIds: Set<string>;
       clusters: Cluster[];
+      sequenceBoxes: SeqBox[];
+      // Sequences that have member scenes render as a minimal name label inside
+      // their container (the events are the focus), not as a full card.
+      minimizedSeqIds: Set<string>;
+      // Throughline GRID only — sequence overlays draped over the cohesive
+      // wall: a text-selection-style region traced around each sequence's
+      // member CELLS (one entry per contiguous run), leaving the reading-order
+      // grid itself untouched. `labeled` marks the run carrying the name chip.
+      gridSeqRegions: Array<{
+        seqId: string; runKey: string; name: string; color: string; labeled: boolean;
+        count: number;
+        spans: Array<{ x0: number; y0: number; x1: number; y1: number }>;
+      }>;
+      // Throughline GRID only — cosmetic reading-order chevrons, one centered
+      // in the gap between consecutive scenes on the same row. Pure eye-guides
+      // (the order is already set), non-interactive.
+      gridArrows: Pos[];
     };
     const out: Effects = {
       overrides: new Map(),
       displacements: new Map(),
       hiddenIds: new Set(),
       clusters: [],
+      sequenceBoxes: [],
+      minimizedSeqIds: new Set(),
+      gridSeqRegions: [],
+      gridArrows: [],
     };
 
     // Threaded arcs ride their thread (and ball on it); only UNCONNECTED arcs
@@ -583,6 +994,7 @@ export default function FreeformCorkboard() {
     // Locations section). Hiding them here also drops their connectors.
     for (const e of aliveEntities) {
       if (e.type === 'location') out.hiddenIds.add(e.id);
+      if (hideSequences && e.type === 'sequence') out.hiddenIds.add(e.id);
     }
 
     // -------- Focused views — transient layout projections. No balls; the
@@ -592,7 +1004,7 @@ export default function FreeformCorkboard() {
       // Splay the characters on a ring so every relationship line + pill has
       // room to read. Events + arcs leave the stage.
       for (const e of aliveEntities) {
-        if (e.type === 'event' || e.type === 'arc') out.hiddenIds.add(e.id);
+        if (e.type === 'event' || e.type === 'arc' || e.type === 'sequence') out.hiddenIds.add(e.id);
       }
       // Most-connected character anchors the center; the rest spread on a wide
       // ring around them (ordered by centrality so heavy hitters sit near the
@@ -604,18 +1016,23 @@ export default function FreeformCorkboard() {
       if (n > 0) {
         const [center, ...ring] = chars;
         const m = ring.length;
-        const r = Math.max(360, (m * (COLLAPSED_W + 150)) / (2 * Math.PI));
-        const cx = CANVAS_PAD + r + COLLAPSED_W / 2 + 60;
-        const cy = 80 + r + COLLAPSED_H / 2;
+        // Ring radius = just enough arc for each pill + a small gap. Characters
+        // render as name pills, so the ring packs tight and the whole cast fits
+        // on screen; zoom covers an unusually large ensemble. The ring centers
+        // in the visible board (same width math as the throughline layouts).
+        const r = Math.max(170, (m * (CHAR_PILL_W + 24)) / (2 * Math.PI));
+        const ringAvailW = Math.max(CHAR_PILL_W, viewportWH.w / zoom - 48 - CANVAS_PAD * 2);
+        const cx = CANVAS_PAD + ringAvailW / 2;
+        const cy = 72 + r + CHAR_PILL_H / 2;
         out.overrides.set(center.id, {
-          pos: webDrag[center.id] ?? { x: cx - COLLAPSED_W / 2, y: cy - COLLAPSED_H / 2 },
+          pos: webDrag[center.id] ?? { x: cx - CHAR_PILL_W / 2, y: cy - CHAR_PILL_H / 2 },
         });
         ring.forEach((c, i) => {
           const th = (2 * Math.PI * i) / Math.max(m, 1) - Math.PI / 2;
           out.overrides.set(c.id, {
             pos: webDrag[c.id] ?? {
-              x: Math.max(0, cx + r * Math.cos(th) - COLLAPSED_W / 2),
-              y: Math.max(0, cy + r * Math.sin(th) - COLLAPSED_H / 2),
+              x: Math.max(0, cx + r * Math.cos(th) - CHAR_PILL_W / 2),
+              y: Math.max(0, cy + r * Math.sin(th) - CHAR_PILL_H / 2),
             },
           });
         });
@@ -632,15 +1049,195 @@ export default function FreeformCorkboard() {
       for (const e of aliveEntities) {
         if (e.type === 'character' || e.type === 'relationship') out.hiddenIds.add(e.id);
         if (e.type === 'arc' && !threadedArcIds.has(e.id)) out.hiddenIds.add(e.id);
+        // Sequences are controlled by the show/hide toggle here too (member
+        // scenes always stay in eventOrder → the spine). Hidden by default reads
+        // as a clean event throughline; shown, they sit in a right lane (below).
+        if (e.type === 'sequence' && hideSequences) out.hiddenIds.add(e.id);
       }
       const entById = new Map(aliveEntities.map((e) => [e.id, e]));
-      const colX = 480;
       const spine = eventOrder.filter(
         (id) => entById.get(id)?.narrative_status !== 'backstory',
       );
       const backstory = aliveEntities.filter(
         (e) => e.type === 'event' && e.narrative_status === 'backstory',
       );
+
+      if (throughlineLayout === 'grid') {
+        // GRID — the writers-room wall: ONE cohesive grid of notecards in
+        // strict reading order, left to right, wrapping into rows. Nothing
+        // restructures for sequences. The SC numbers + reading order ARE the
+        // throughline, so connectors are off (gated at the ConnectorLayer
+        // call) and arcs leave the stage entirely. Sequences drape OVER the
+        // wall instead: a text-selection-style tinted region traced around
+        // each sequence's member cells + a name chip on its border (the
+        // regions render from gridSeqRegions; hideSequences clears them).
+        const GAP_X = 24;
+        const GAP_Y = 28;
+        const PAD_OUT = 8; // region padding past the outer cards (outer edges)
+        // Columns from the visible width at the current zoom — CSS zoom shrinks
+        // the layout, so /zoom widens the wall as the writer zooms out. Reflows
+        // on resize (viewportWH is a ballEffects dep).
+        const availW = Math.max(EVENT_CARD_W, viewportWH.w / zoom - 48 - CANVAS_PAD * 2);
+        const cols = Math.max(2, Math.floor((availW + GAP_X) / (EVENT_CARD_W + GAP_X)));
+        const gridW = cols * (EVENT_CARD_W + GAP_X) - GAP_X;
+        // The wall centers in the visible board.
+        const originX = CANVAS_PAD + Math.max(0, (availW - gridW) / 2);
+        const cellPos = (i: number, gtop: number): Pos => ({
+          x: originX + (i % cols) * (EVENT_CARD_W + GAP_X),
+          y: gtop + Math.floor(i / cols) * (COLLAPSED_H + GAP_Y),
+        });
+
+        // Arcs leave the stage — EXCEPT the ones touching an EXPANDED scene:
+        // those surface as normal arc cards stacked beside the expanded card,
+        // so the writer sees what threads through the scene without thread
+        // spaghetti across the row wraps.
+        let expandedEventId =
+          expandedCardId && spine.includes(expandedCardId) ? expandedCardId : null;
+        if (expandedEventId) {
+          lastGridArcAnchorRef.current = expandedEventId;
+        } else if (
+          expandedCardId &&
+          entById.get(expandedCardId)?.type === 'arc' &&
+          lastGridArcAnchorRef.current &&
+          (data?.edges?.evokes ?? []).some(
+            (ev) => ev.event_id === lastGridArcAnchorRef.current && ev.arc_id === expandedCardId,
+          )
+        ) {
+          // Expanding a surfaced arc card keeps the set anchored to the scene
+          // it surfaced from.
+          expandedEventId = lastGridArcAnchorRef.current;
+        }
+        const touchedArcIds = new Set<string>();
+        if (expandedEventId) {
+          for (const ev of data?.edges?.evokes ?? []) {
+            if (ev.event_id === expandedEventId) touchedArcIds.add(ev.arc_id);
+          }
+        }
+        for (const e of aliveEntities) {
+          if (e.type === 'sequence') out.hiddenIds.add(e.id);
+          if (e.type === 'arc' && !touchedArcIds.has(e.id)) out.hiddenIds.add(e.id);
+        }
+
+        let top = 60;
+        // Backstory keeps its ball (outside audience-time); expanded, the beats
+        // deal out as their own wrapped rows above the wall.
+        if (backstory.length > 0) {
+          const meta = CLUSTER_META[BALL_ID_BACKSTORY];
+          const ballPos = webDrag[BALL_ID_BACKSTORY] ?? { x: originX, y: 60 };
+          const expanded = ballExpanded[BALL_ID_BACKSTORY] != null;
+          out.clusters.push({
+            id: BALL_ID_BACKSTORY,
+            label: meta.label,
+            color: getEntityColor(meta.colorKey),
+            count: backstory.length,
+            balled: true,
+            pinned: false,
+            expanded,
+            pos: ballPos,
+          });
+          top = 60 + BALL_H + 40;
+          if (!expanded) {
+            for (const m of backstory) out.hiddenIds.add(m.id);
+          } else {
+            backstory.forEach((m, i) => {
+              out.overrides.set(m.id, { pos: webDrag[m.id] ?? cellPos(i, top) });
+            });
+            top += Math.ceil(backstory.length / cols) * (COLLAPSED_H + GAP_Y) + 18;
+          }
+        }
+
+        // The wall itself — every spine event in reading order, one flat wrap.
+        spine.forEach((id, i) => {
+          out.overrides.set(id, { pos: webDrag[id] ?? cellPos(i, top) });
+        });
+
+        // The expanded scene's touched arcs stack beside it (right of the
+        // expanded width; flip left when that would leave the wall).
+        if (expandedEventId && touchedArcIds.size > 0) {
+          const p = out.overrides.get(expandedEventId)?.pos;
+          if (p) {
+            const asz = collapsedSizeOf('arc');
+            const rightX = p.x + EXPANDED_W + 16;
+            const ax = rightX + asz.w <= originX + gridW + GAP_X ? rightX : p.x - asz.w - 16;
+            let ai = 0;
+            for (const id of touchedArcIds) {
+              out.overrides.set(id, {
+                pos: webDrag[id] ?? { x: ax, y: p.y + ai * (asz.h + 12) },
+              });
+              ai++;
+            }
+          }
+        }
+
+        // Reading-order chevrons between same-row neighbors (the wrap to the
+        // next row reads itself). Sized to fit the slot between two adjacent
+        // sequence regions (GAP_X 24 minus 8 padding each side leaves 8px).
+        for (let i = 0; i < spine.length - 1; i++) {
+          if (Math.floor(i / cols) !== Math.floor((i + 1) / cols)) continue;
+          out.gridArrows.push({
+            x: originX + (i % cols) * (EVENT_CARD_W + GAP_X) + EVENT_CARD_W + GAP_X / 2,
+            y: top + Math.floor(i / cols) * (COLLAPSED_H + GAP_Y) + COLLAPSED_H / 2,
+          });
+        }
+
+        // Sequence overlays — for each sequence, its members' CELL indices
+        // group into contiguous runs; each run traces a region: per-row spans
+        // padded to half the row gap on internal boundaries (so stacked rows
+        // fuse into one shape) and PAD_OUT on the outer edges. Cells are the
+        // LAID-OUT slots (a transiently dragged card leaves its region).
+        if (!hideSequences) {
+          const idxOf = new Map(spine.map((id, i) => [id, i]));
+          const membersBySeq = new Map<string, number[]>();
+          for (const c of data?.edges?.contains ?? []) {
+            const idx = idxOf.get(c.to);
+            if (idx == null) continue;
+            const arr = membersBySeq.get(c.from);
+            if (arr) arr.push(idx);
+            else membersBySeq.set(c.from, [idx]);
+          }
+          const seqColor = getEntityColor('sequence');
+          const rowTopY = (r: number) => top + r * (COLLAPSED_H + GAP_Y);
+          const cellX = (c: number) => originX + c * (EVENT_CARD_W + GAP_X);
+          for (const [seqId, idxs] of membersBySeq) {
+            const seqEnt = entById.get(seqId);
+            if (!seqEnt || seqEnt.type !== 'sequence') continue;
+            idxs.sort((a, b) => a - b);
+            const runs: Array<[number, number]> = [];
+            for (const i of idxs) {
+              const lastRun = runs[runs.length - 1];
+              if (lastRun && i === lastRun[1] + 1) lastRun[1] = i;
+              else runs.push([i, i]);
+            }
+            const color = (((seqEnt.color ?? '') as string).trim()) || seqColor;
+            const name = seqEnt.working_title ?? seqEnt.working_name ?? '';
+            runs.forEach(([a, b], ri) => {
+              const r0 = Math.floor(a / cols);
+              const r1 = Math.floor(b / cols);
+              const spans: Array<{ x0: number; y0: number; x1: number; y1: number }> = [];
+              for (let r = r0; r <= r1; r++) {
+                const s = Math.max(a, r * cols);
+                const e2 = Math.min(b, r * cols + cols - 1);
+                spans.push({
+                  x0: cellX(s % cols) - PAD_OUT,
+                  x1: cellX(e2 % cols) + EVENT_CARD_W + PAD_OUT,
+                  y0: rowTopY(r) - (r === r0 ? PAD_OUT : GAP_Y / 2),
+                  y1: rowTopY(r) + COLLAPSED_H + (r === r1 ? PAD_OUT : GAP_Y / 2),
+                });
+              }
+              out.gridSeqRegions.push({
+                seqId, runKey: `${seqId}:${ri}`, name, color, spans,
+                labeled: ri === 0, count: idxs.length,
+              });
+            });
+          }
+        }
+        return out;
+      }
+
+      // The spine centers in the visible board (same width math as the grid,
+      // so switching layouts doesn't shift the horizontal center).
+      const colAvailW = Math.max(EVENT_CARD_W, viewportWH.w / zoom - 48 - CANVAS_PAD * 2);
+      const colX = CANVAS_PAD + Math.max(0, (colAvailW - EVENT_CARD_W) / 2);
       // The ball defaults to sitting above the first scene but is draggable
       // (transient, via webDrag — resets on view switch). The spine's top is
       // fixed regardless of where the ball is moved.
@@ -651,6 +1248,48 @@ export default function FreeformCorkboard() {
           pos: webDrag[id] ?? { x: colX, y: spineTop + i * (COLLAPSED_H + 110) },
         });
       });
+      // Shown sequences WRAP their member scenes in a container box (like master),
+      // built from the members' spine positions so a sequence reads as a chapter
+      // around its run of events. (Member-less sequences don't appear here.)
+      if (!hideSequences) {
+        const seqColor = getEntityColor('sequence');
+        const SEQ_HEADER_H = 24, PAD = 14, SEQ_BOX_MIN_W = 300;
+        const containsBySeq = new Map<string, string[]>();
+        for (const c of data?.edges?.contains ?? []) {
+          const arr = containsBySeq.get(c.from);
+          if (arr) arr.push(c.to);
+          else containsBySeq.set(c.from, [c.to]);
+        }
+        for (const [seqId, memberIds] of containsBySeq) {
+          const seqEnt = entById.get(seqId);
+          if (!seqEnt || seqEnt.type !== 'sequence') continue;
+          const members = memberIds
+            .map((id) => entById.get(id))
+            .filter((e): e is ProjectEntity => !!e && !e.deleted_at);
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          for (const m of members) {
+            const p = out.overrides.get(m.id)?.pos;
+            if (!p) continue;
+            const w = expandedCardId === m.id ? EXPANDED_W : EVENT_CARD_W;
+            const h = expandedCardId === m.id && expandedCardH > 0 ? expandedCardH : COLLAPSED_H;
+            minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+            maxX = Math.max(maxX, p.x + w); maxY = Math.max(maxY, p.y + h);
+          }
+          if (!Number.isFinite(minX)) continue;
+          out.minimizedSeqIds.add(seqId);
+          out.sequenceBoxes.push({
+            seqId,
+            name: seqEnt.working_title ?? seqEnt.working_name ?? '',
+            collapsed: false,
+            count: members.length,
+            color: (seqEnt.color ?? '').trim() || seqColor,
+            x: minX - PAD,
+            y: minY - SEQ_HEADER_H - PAD,
+            w: Math.max(maxX - minX, SEQ_BOX_MIN_W) + PAD * 2,
+            h: (maxY - minY) + SEQ_HEADER_H + PAD * 2,
+          });
+        }
+      }
       if (backstory.length > 0) {
         const meta = CLUSTER_META[BALL_ID_BACKSTORY];
         const anchorY = ballExpanded[BALL_ID_BACKSTORY];
@@ -668,7 +1307,7 @@ export default function FreeformCorkboard() {
         if (!expanded) {
           for (const m of backstory) out.hiddenIds.add(m.id);
         } else {
-          const bx = Math.max(CANVAS_PAD, colX - COLLAPSED_W - 80);
+          const bx = Math.max(CANVAS_PAD, colX - EVENT_CARD_W - 80);
           backstory.forEach((m, i) => {
             out.overrides.set(m.id, {
               pos:
@@ -695,7 +1334,7 @@ export default function FreeformCorkboard() {
     let boardW = 1200;
     for (const e of aliveEntities) {
       const p = positions[e.id];
-      if (p) boardW = Math.max(boardW, p.x + COLLAPSED_W + CANVAS_PAD);
+      if (p) boardW = Math.max(boardW, p.x + EVENT_CARD_W + CANVAS_PAD);
     }
 
     const balledMemberIds: string[] = [];
@@ -754,8 +1393,10 @@ export default function FreeformCorkboard() {
         // across the board width with cells occupied by the visible event spine
         // skipped, so the characters slot into gaps and their relationship edges
         // read as a web. No displacement — they fill around existing cards.
-        const cellW = COLLAPSED_W + BALL_STACK_GAP;
-        const cellH = COLLAPSED_H + BALL_STACK_GAP;
+        // Characters are name pills now — grid cells sized to the pill so the
+        // dealt-out web packs tight instead of leaving card-sized craters.
+        const cellW = CHAR_PILL_W + BALL_STACK_GAP;
+        const cellH = CHAR_PILL_H + BALL_STACK_GAP;
         const originX = CANVAS_PAD;
         const cols = Math.max(2, Math.min(6, Math.floor((boardW - 2 * CANVAS_PAD) / cellW)));
         const cellKey = (c: number, r: number) => `${c},${r}`;
@@ -766,7 +1407,7 @@ export default function FreeformCorkboard() {
           if (!p) continue;
           const c0 = Math.floor((p.x - originX) / cellW);
           const r0 = Math.floor((p.y - originY) / cellH);
-          const c1 = Math.floor((p.x + COLLAPSED_W - originX) / cellW);
+          const c1 = Math.floor((p.x + EVENT_CARD_W - originX) / cellW);
           const r1 = Math.floor((p.y + COLLAPSED_H - originY) / cellH);
           for (let r = r0; r <= r1; r++)
             for (let c = c0; c <= c1; c++)
@@ -801,7 +1442,7 @@ export default function FreeformCorkboard() {
       clusterBboxes.push({
         x: colX,
         y: ballTopY,
-        w: Math.max(BALL_W, COLLAPSED_W),
+        w: Math.max(BALL_W, EVENT_CARD_W),
         h: lastSlotY - ballTopY,
       });
     }
@@ -813,7 +1454,8 @@ export default function FreeformCorkboard() {
         if (memberSet.has(e.id)) continue;
         const p = positions[e.id];
         if (!p) continue;
-        const card = { x: p.x, y: p.y, w: COLLAPSED_W, h: COLLAPSED_H };
+        const csz = collapsedSizeOf(e.type);
+        const card = { x: p.x, y: p.y, w: csz.w, h: csz.h };
         let maxDx = 0;
         for (const b of clusterBboxes) {
           const overlapsX = card.x < b.x + b.w && card.x + card.w > b.x;
@@ -826,8 +1468,252 @@ export default function FreeformCorkboard() {
       }
     }
 
+    // Sequence containers — a sequence that CONTAINS scenes OWNS them. Expanded
+    // (default): members nest in a column inside a container box below the
+    // sequence card. Collapsed: members hide behind the box (count badge on the
+    // card). Reuses overrides/hiddenIds so cards + connectors follow for free.
+    const seqColor = getEntityColor('sequence');
+    const containsBySeq = new Map<string, string[]>();
+    // When sequences are hidden, leave this empty so the whole sequence-box
+    // section below no-ops (no boxes, members not nested/hidden). The sequence
+    // entities themselves are hidden via the top loop, leaving the event scenes.
+    if (!hideSequences) {
+      for (const c of data?.edges?.contains ?? []) {
+        const arr = containsBySeq.get(c.from);
+        if (arr) arr.push(c.to);
+        else containsBySeq.set(c.from, [c.to]);
+      }
+    }
+    const PAD = 14;
+    // Header band reserved at the box top for the label + ▾/↗ buttons. The box
+    // always keeps this clear ABOVE the topmost member so the header never
+    // overlaps a scene; the first scene sits flush below it. Must match
+    // computeAutoLayout's LABEL_H so collapse/expand doesn't jump.
+    const SEQ_HEADER_H = 24;
+    // Min box width so the header (▾ + label[≤220] + open ↗ ≈ 300px of content)
+    // always fits, even around a single narrow member column. Just wide enough to
+    // wrap the header with a small right margin — not wider.
+    const SEQ_BOX_MIN_W = 300;
+    const basePos = (id: string): Pos | undefined => out.overrides.get(id)?.pos ?? positions[id];
+    // Container box rect derived from the member bbox: reserve the header band
+    // directly above the members, clamp to the min width. `posOf` resolves each
+    // member's effective position (base, or base+displacement in the final pass).
+    const seqBoxRect = (
+      members: ProjectEntity[],
+      posOf: (id: string) => Pos | undefined,
+      anchor: Pos | undefined,
+    ): { x: number; y: number; w: number; h: number } | null => {
+      let mMinX = Infinity, mMinY = Infinity, mMaxX = -Infinity, mMaxY = -Infinity;
+      for (const m of members) {
+        const p = posOf(m.id);
+        if (!p) continue;
+        // Use the member's EFFECTIVE size so the box grows to wrap an expanded
+        // scene instead of the scene spilling past the box edges.
+        const w = expandedCardId === m.id ? EXPANDED_W : EVENT_CARD_W;
+        const h = expandedCardId === m.id && expandedCardH > 0 ? expandedCardH : COLLAPSED_H;
+        mMinX = Math.min(mMinX, p.x); mMinY = Math.min(mMinY, p.y);
+        mMaxX = Math.max(mMaxX, p.x + w); mMaxY = Math.max(mMaxY, p.y + h);
+      }
+      if (!Number.isFinite(mMinX)) {
+        if (!anchor) return null;
+        mMinX = anchor.x; mMaxX = anchor.x + COLLAPSED_W;
+        mMinY = anchor.y + SEQ_HEADER_H; mMaxY = anchor.y + SEQ_HEADER_H;
+      }
+      const innerW = mMaxX - mMinX;
+      return {
+        x: mMinX - PAD,
+        y: mMinY - SEQ_HEADER_H - PAD, // reserve the header band above the members
+        w: Math.max(innerW, SEQ_BOX_MIN_W) + PAD * 2,
+        h: (mMaxY - mMinY) + SEQ_HEADER_H + PAD * 2,
+      };
+    };
+
+    // ---- Pass 1: classify sequences. Collapsed -> hide members + emit the small
+    // box now. Expanded -> stash member info + a PRELIMINARY box rect (from base
+    // positions) to use as a nudge obstacle. Final expanded rects are built in
+    // pass 3 (after displacement) so a nudged neighbor's box follows it. ----
+    type SeqInfo = { seqId: string; name: string; color: string; members: ProjectEntity[]; memberIds: Set<string>; anchor: Pos | undefined };
+    type SeqRect = { seqId: string; memberIds: Set<string>; x: number; y: number; w: number; h: number };
+    const expandedSeqs: SeqInfo[] = [];
+    const seqObstacles: SeqRect[] = [];
+    const allSeqMemberIds = new Set<string>();
+    for (const [seqId, memberIds] of containsBySeq) {
+      const seqEnt = aliveEntities.find((e) => e.id === seqId && e.type === 'sequence' && !e.deleted_at);
+      if (!seqEnt) continue;
+      const members = memberIds
+        .map((id) => aliveEntities.find((e) => e.id === id && !e.deleted_at))
+        .filter((e): e is ProjectEntity => !!e);
+      if (members.length === 0) continue;
+      // A sequence that owns scenes is always a minimal name label (not a full
+      // card) — the events are the focus. Writer-chosen color, else the default.
+      out.minimizedSeqIds.add(seqId);
+      for (const m of members) allSeqMemberIds.add(m.id);
+      const color = (seqEnt.color ?? '').trim() || seqColor;
+      const name = seqEnt.working_title ?? seqEnt.working_name ?? '';
+      const collapsed = !!sequenceCollapsed[seqId];
+      const anchor = basePos(seqId);
+      if (collapsed) {
+        for (const m of members) out.hiddenIds.add(m.id);
+        // Derive the collapsed box's top-left + width from the member bbox (same
+        // as the expanded box) so collapse/expand changes only HEIGHT — no x/y/w
+        // jump when the members sit off the clean column.
+        const r = seqBoxRect(members, basePos, anchor);
+        if (!r) continue;
+        out.sequenceBoxes.push({
+          seqId, name, collapsed: true, count: members.length, color,
+          x: r.x, y: r.y, w: r.w, h: SEQ_HEADER_H + PAD,
+        });
+        continue;
+      }
+      // Expanded — prelim box from BASE positions (nudge obstacle).
+      const prelim = seqBoxRect(members, basePos, anchor);
+      if (!prelim) continue;
+      const memberSet = new Set(members.map((m) => m.id));
+      expandedSeqs.push({ seqId, name, color, members, memberIds: memberSet, anchor });
+      seqObstacles.push({ seqId, memberIds: memberSet, ...prelim });
+    }
+
+    // ---- Pass 2: nudge. An expanded container's border should push things out
+    // of its way instead of overlapping them. Two moves, both rightward (matches
+    // the cluster deal-out), combined via max so nothing fights an existing push:
+    //   (a) box-vs-box: pack the expanded boxes left-to-right so they don't
+    //       overlap each other, shifting a whole box (anchor + all members) as a
+    //       unit so it translates rather than distorting.
+    //   (b) box-vs-loose-card: push any card that is NOT a sequence member out of
+    //       the (post-pack) boxes. Members of OTHER sequences are excluded here —
+    //       they move with their own box in (a). ----
+    // Box-edge breathing room matches the board's default card spacing (per axis)
+    // so a nudged card clears an expanded container with the same gap two stacked
+    // cards have, instead of a tight ball-style gap.
+    const GAP_X = COL_GAP;
+    const GAP_Y = ROW_GAP;
+    const boxDx = new Map<string, number>(); // per-sequence rigid shift
+    // (a) sweep packed boxes by current left edge; greedily clear prior boxes.
+    const packed: SeqRect[] = [];
+    for (const ob of [...seqObstacles].sort((a, b) => a.x - b.x || a.y - b.y)) {
+      let dx = 0;
+      for (const done of packed) {
+        const x = ob.x + dx;
+        const overlapsX = x < done.x + done.w && x + ob.w > done.x;
+        const overlapsY = ob.y < done.y + done.h && ob.y + ob.h > done.y;
+        if (overlapsX && overlapsY) dx = Math.max(dx, done.x + done.w + GAP_X - ob.x);
+      }
+      boxDx.set(ob.seqId, dx);
+      packed.push({ ...ob, x: ob.x + dx });
+    }
+    // apply the rigid box shift to each box's anchor + members
+    for (const s of expandedSeqs) {
+      const dx = boxDx.get(s.seqId) ?? 0;
+      if (dx <= 0) continue;
+      const bump = (id: string) => {
+        const cur = out.displacements.get(id);
+        out.displacements.set(id, { dx: Math.max(cur?.dx ?? 0, dx), dy: cur?.dy ?? 0 });
+      };
+      bump(s.seqId);
+      for (const m of s.members) bump(m.id);
+    }
+    // (b) loose cards: push non-sequence cards clear of the post-pack boxes,
+    // out the NEAREST edge — right if the card sits beside the box, DOWN if it
+    // sits under it. Collect the loose set + each card's direct push first, so
+    // the downward pushes can then RIPPLE to the cards below them (preserving the
+    // gaps rather than bunching).
+    type LooseCard = { id: string; x: number; y: number; w: number; h: number };
+    const looseCards: LooseCard[] = [];
+    const directDx = new Map<string, number>();
+    const directDy = new Map<string, number>();
+    if (packed.length > 0) {
+      for (const e of aliveEntities) {
+        if (out.hiddenIds.has(e.id)) continue;
+        if (e.type === 'location') continue;
+        // The card the writer is actively dragging is exempt: it floats freely
+        // over a container instead of being shoved aside mid-drag. The nudge
+        // re-applies the instant the drag ends (draggingId clears), so a card
+        // dropped on a container still settles out of its way on release.
+        // (Dragging a CONTAINER uses draggingSeqId, not draggingId, so loose
+        // cards still get pushed by a moving box — only this direction is exempt.)
+        if (e.id === draggingId) continue;
+        // Container sequences (minimized, with member scenes) move with their
+        // members via box packing above — skip them here. But a MEMBER-LESS
+        // sequence renders as a normal card and must nudge like any other card.
+        if (out.minimizedSeqIds.has(e.id)) continue;
+        if (allSeqMemberIds.has(e.id)) continue; // a sequence's member moves with its box
+        const base = basePos(e.id);
+        if (!base) continue;
+        // ALWAYS the collapsed footprint — even for the expanded card. If the
+        // nudge re-measured on expansion, growing a pill into a full card would
+        // change its displacement and the card would JUMP away from its node.
+        // Expansion must open IN PLACE; the expanded card's z-index lifts it
+        // above container chrome instead of being pushed out of overlap.
+        const nsz = collapsedSizeOf(e.type);
+        const card: LooseCard = { id: e.id, x: base.x, y: base.y, w: nsz.w, h: nsz.h };
+        looseCards.push(card);
+        const cur = out.displacements.get(e.id);
+        let dx = cur?.dx ?? 0;
+        let dy = cur?.dy ?? 0;
+        for (const b of packed) {
+          const overlapsX = card.x < b.x + b.w && card.x + card.w > b.x;
+          const overlapsY = card.y < b.y + b.h && card.y + card.h > b.y;
+          if (!overlapsX || !overlapsY) continue;
+          const clearRight = b.x + b.w + GAP_X - card.x; // move left edge past the right border
+          const clearDown = b.y + b.h + GAP_Y - card.y;  // move top past the bottom border
+          if (clearRight <= clearDown) dx = Math.max(dx, clearRight);
+          else dy = Math.max(dy, clearDown);
+        }
+        if (dx > 0) directDx.set(e.id, dx);
+        if (dy > 0) directDy.set(e.id, dy);
+      }
+    }
+    // Ripple the downward pushes: any loose card below a down-pushed card (and
+    // overlapping its column) drops by at least as much, so the gap to the cards
+    // beneath is preserved instead of collapsing. Single top-to-bottom sweep.
+    const rippleDy = new Map<string, number>();
+    if (directDy.size > 0) {
+      const sorted = [...looseCards].sort((a, b) => a.y - b.y);
+      for (let i = 0; i < sorted.length; i++) {
+        const c = sorted[i];
+        let dy = directDy.get(c.id) ?? 0;
+        for (let j = 0; j < i; j++) {
+          const a = sorted[j];
+          if (a.y >= c.y) continue; // a must sit above c
+          const overlapsX = a.x < c.x + c.w && a.x + a.w > c.x;
+          if (!overlapsX) continue;
+          const ady = rippleDy.get(a.id) ?? 0;
+          if (ady > dy) dy = ady; // drop at least as far as the card above
+        }
+        if (dy > 0) rippleDy.set(c.id, dy);
+      }
+    }
+    // Commit loose-card displacements (dx from the nearest-edge pass, dy from the
+    // ripple). Falls back to any pre-existing displacement (e.g. cluster push).
+    for (const c of looseCards) {
+      const dx = directDx.get(c.id) ?? out.displacements.get(c.id)?.dx ?? 0;
+      const dy = rippleDy.get(c.id) ?? out.displacements.get(c.id)?.dy ?? 0;
+      if (dx > 0 || dy > 0) out.displacements.set(c.id, { dx, dy });
+    }
+
+    // ---- Pass 3: final expanded box rects from base + displacement (anchor seed
+    // AND members), so a box pushed in pass 2 translates as a unit and a box that
+    // wraps pushed members follows them. ----
+    for (const s of expandedSeqs) {
+      const aDisp = out.displacements.get(s.seqId);
+      const anchorDisp: Pos | undefined = s.anchor
+        ? { x: s.anchor.x + (aDisp?.dx ?? 0), y: s.anchor.y + (aDisp?.dy ?? 0) }
+        : undefined;
+      const posOf = (id: string): Pos | undefined => {
+        const base = basePos(id);
+        if (!base) return undefined;
+        const d = out.displacements.get(id);
+        return d ? { x: base.x + d.dx, y: base.y + d.dy } : base;
+      };
+      const rect = seqBoxRect(s.members, posOf, anchorDisp);
+      if (!rect) continue;
+      out.sequenceBoxes.push({
+        seqId: s.seqId, name: s.name, collapsed: false, count: s.members.length, color: s.color, ...rect,
+      });
+    }
+
     return out;
-  }, [aliveEntities, positions, ballExpanded, arcThreads, viewportCanvasTop, webDrag, viewMode, eventOrder, charCentrality]);
+  }, [aliveEntities, positions, ballExpanded, arcThreads, viewportCanvasTop, webDrag, viewMode, throughlineLayout, viewportWH.w, zoom, eventOrder, charCentrality, data?.edges?.contains, data?.edges?.evokes, sequenceCollapsed, expandedCardId, expandedCardH, hideSequences, draggingId]);
 
   // Prune transient web-drag positions once a card is no longer dealt out (its
   // ball re-bunched or scrolled back to free cards) — so re-expanding resets it
@@ -884,8 +1770,7 @@ export default function FreeformCorkboard() {
       const bd = ballEffects.displacements.get(e.id);
       const p = ov ? ov.pos : bd && nat ? { x: nat.x + bd.dx, y: nat.y + bd.dy } : nat;
       if (!p) continue;
-      const w = COLLAPSED_W;
-      const h = COLLAPSED_H;
+      const { w, h } = collapsedSizeOf(e.type); // character = name pill footprint
       const intersects =
         p.x < clear.x + clear.w && p.x + w > clear.x && p.y < clear.y + clear.h && p.y + h > clear.y;
       if (!intersects) continue;
@@ -929,10 +1814,11 @@ export default function FreeformCorkboard() {
       // Anchor to the endpoints' COLLAPSED centers so expanding a character
       // card doesn't shift the midpoint or the line endpoints — the card grows
       // from a fixed top-left, so its collapsed center is the stable anchor.
-      const cax = pa.x + COLLAPSED_W / 2;
-      const cay = pa.y + COLLAPSED_H / 2;
-      const cbx = pb.x + COLLAPSED_W / 2;
-      const cby = pb.y + COLLAPSED_H / 2;
+      // Characters collapse to the name pill, so their center is the pill's.
+      const cax = pa.x + CHAR_PILL_W / 2;
+      const cay = pa.y + CHAR_PILL_H / 2;
+      const cbx = pb.x + CHAR_PILL_W / 2;
+      const cby = pb.y + CHAR_PILL_H / 2;
       const mx = (cax + cbx) / 2;
       const my = (cay + cby) / 2;
       // The relationship card itself balls up when collapsed, squares when expanded.
@@ -962,7 +1848,11 @@ export default function FreeformCorkboard() {
   // expand) + ball-cluster displacement, matching the canvas. (After ballEffects
   // since it reads the cluster hidden/displacement state.)
   const arcThreadGeo = useMemo(() => {
-    if (arcThreads.length === 0) return [] as { arcId: string; color: string; pathD: string; ballAnchor: { x: number; y: number } | null; samples: { x: number; y: number }[] }[];
+    // The throughline grid has no threads at all — arcs are hidden there
+    // (except the ones surfacing as cards beside an expanded scene), and an
+    // empty geo also empties arcBallById so no ball rides a phantom thread.
+    if (arcThreads.length === 0 || (viewMode === 'throughline' && throughlineLayout === 'grid'))
+      return [] as { arcId: string; color: string; pathD: string; ballAnchor: { x: number; y: number } | null; samples: { x: number; y: number }[] }[];
     const arcsAtEvent = new Map<string, string[]>();
     arcThreads.forEach((t) => t.eventIds.forEach((eid) => {
       if (!arcsAtEvent.has(eid)) arcsAtEvent.set(eid, []);
@@ -975,7 +1865,7 @@ export default function FreeformCorkboard() {
       const ov = ballEffects.overrides.get(id);
       const disp = ballEffects.displacements.get(id);
       const p = ov ? ov.pos : disp ? { x: nat.x + disp.dx, y: nat.y + disp.dy } : nat;
-      return { x: p.x, y: p.y, w: COLLAPSED_W, h: COLLAPSED_H, cx: p.x + COLLAPSED_W / 2, cy: p.y + COLLAPSED_H / 2 };
+      return { x: p.x, y: p.y, w: EVENT_CARD_W, h: COLLAPSED_H, cx: p.x + EVENT_CARD_W / 2, cy: p.y + COLLAPSED_H / 2 };
     };
     return arcThreads
       .map((t, ti) => {
@@ -990,7 +1880,7 @@ export default function FreeformCorkboard() {
         return { arcId: t.arcId, color, pathD, ballAnchor, samples };
       })
       .filter((g) => g.pathD);
-  }, [arcThreads, positions, ballEffects, expandedCardId, expandedCardH, aliveEntities]);
+  }, [arcThreads, positions, ballEffects, expandedCardId, expandedCardH, aliveEntities, viewMode, throughlineLayout]);
 
   // Phase 3 — the arc ball slides along its thread to stay in view as the user
   // scrolls. `viewportCanvasY` is the canvas-coord y at the center of the
@@ -1002,17 +1892,12 @@ export default function FreeformCorkboard() {
   // threshold, is declared earlier — it's read by ballEffects above.)
   const [stickyTopPx, setStickyTopPx] = useState(0);
   const [canvasLeftPx, setCanvasLeftPx] = useState(0);
-  // Viewport dims + the board's offset from the document top — the board's
-  // MINIMUM size fills the viewport under the toolbar (it still grows with
-  // content beyond that). Replaces the demo-era fixed 1200×600 floor.
-  const [viewportWH, setViewportWH] = useState<{ w: number; h: number }>(() => ({
-    w: typeof window !== 'undefined' ? window.innerWidth : 1400,
-    h: typeof window !== 'undefined' ? window.innerHeight : 900,
-  }));
   const [canvasDocTop, setCanvasDocTop] = useState(200);
   // True while scrolling — the balls render as small dots (smooth) and only
   // become the labeled pill once motion stops.
   const [arcsMoving, setArcsMoving] = useState(false);
+  // Drag state declared near the top of the component (above ballEffects); refs
+  // below.
   const arcsMovingTimer = useRef<number | null>(null);
   useEffect(() => {
     let raf = 0;
@@ -1079,6 +1964,79 @@ export default function FreeformCorkboard() {
     return () => window.clearTimeout(t);
   }, [braindumpOpen]);
 
+  // FIL-515: once a braindump finishes and its text has cleared (the content
+  // has disappeared into cards), collapse the dock so the empty field gets out
+  // of the way. ONE-SHOT per completion (dockAutoCloseRef, set when extraction
+  // completes) — otherwise re-opening the now-empty dock later would auto-close
+  // it again. Short delay lets the "Done" status register before the slide-up.
+  useEffect(() => {
+    if (dockAutoCloseRef.current && braindumpPhase === 'done' && braindumpText.trim() === '' && braindumpOpen) {
+      dockAutoCloseRef.current = false;
+      const t = window.setTimeout(() => setBraindumpOpen(false), 700);
+      return () => window.clearTimeout(t);
+    }
+  }, [braindumpPhase, braindumpText, braindumpOpen]);
+
+  // The "Done. Extracted …" status is a completion confirmation, not a permanent
+  // banner — clear it a few seconds after the run finishes so it fades instead
+  // of sitting on the board forever. (A new submit overwrites it immediately.)
+  useEffect(() => {
+    if (braindumpPhase !== 'done' || !braindumpMsg) return;
+    const t = window.setTimeout(() => setBraindumpMsg(null), 4000);
+    return () => window.clearTimeout(t);
+  }, [braindumpPhase, braindumpMsg]);
+
+  // After a streaming braindump completes, re-stack the just-revealed cards in
+  // PRECEDES (story) order — but only once the edge-bearing refetch has landed
+  // (the stream placed them in arrival order, before any edges existed).
+  useEffect(() => {
+    const ids = relayoutAfterStreamRef.current;
+    if (!ids || !data) return;
+    const eventIds = ids.filter((id) => data.entities.find((e) => e.id === id)?.type === 'event');
+    // 2+ events but no PRECEDES yet → the refetch hasn't landed; wait for it.
+    if (eventIds.length >= 2 && (data.edges?.precedes?.length ?? 0) === 0) return;
+    relayoutAfterStreamRef.current = null;
+    const fresh = computeAutoLayout(
+      aliveEntities,
+      data.edges?.precedes ?? [],
+      typeof window !== 'undefined' ? window.innerWidth : 1400,
+      data.edges?.contains ?? [],
+    );
+    setPositions((prev) => {
+      const next = { ...prev };
+      for (const id of ids) if (fresh[id]) next[id] = fresh[id];
+      return next;
+    });
+  }, [data, aliveEntities]);
+
+  // After a WINDOWED import resolves, re-apply the FULL auto-layout to every card
+  // once the structural edges have landed — so sequences stack in order and their
+  // members sit in a tight single column, regardless of any stale positions a
+  // re-import left behind. One-shot (flag set on resolve; cleared here).
+  useEffect(() => {
+    if (!relayoutWindowedRef.current || !data) return;
+    const ents = data.entities ?? [];
+    const hasSeqs = ents.some((e) => e.type === 'sequence');
+    const eventCount = ents.filter((e) => e.type === 'event').length;
+    // Wait for the edges the layout depends on: sequences need CONTAINS, a multi-
+    // event board needs PRECEDES. Otherwise the refetch hasn't fully landed yet.
+    if (hasSeqs && (data.edges?.contains?.length ?? 0) === 0) return;
+    if (eventCount >= 2 && (data.edges?.precedes?.length ?? 0) === 0) return;
+    relayoutWindowedRef.current = false;
+    const fresh = computeAutoLayout(
+      aliveEntities,
+      data.edges?.precedes ?? [],
+      typeof window !== 'undefined' ? window.innerWidth : 1400,
+      data.edges?.contains ?? [],
+    );
+    setPositions((prev) => {
+      const next = { ...prev };
+      for (const id of Object.keys(fresh)) next[id] = fresh[id];
+      return next;
+    });
+    setWebDrag({});
+  }, [data, aliveEntities]);
+
   // arcId → { ball position on the thread, color }. While scrolling, the ball
   // rides to the sample nearest the viewport center (no avoidance — it's a small
   // dot). At rest, it settles on the nearest sample whose pill clears the event/
@@ -1086,24 +2044,29 @@ export default function FreeformCorkboard() {
   const arcBallById = useMemo(() => {
     const m = new Map<string, { pos: { x: number; y: number }; color: string }>();
     if (arcThreadGeo.length === 0) return m;
-    const dimsFor = (id: string): { x: number; y: number; w: number; h: number } | null => {
+    const dimsFor = (id: string, type?: string): { x: number; y: number; w: number; h: number } | null => {
       if (ballEffects.hiddenIds.has(id)) return null;
       const nat = positions[id];
       if (!nat) return null;
       const ov = ballEffects.overrides.get(id);
       const disp = ballEffects.displacements.get(id);
       const p = ov ? ov.pos : disp ? { x: nat.x + disp.dx, y: nat.y + disp.dy } : nat;
-      return { x: p.x, y: p.y, w: COLLAPSED_W, h: COLLAPSED_H };
+      const sz = collapsedSizeOf(type);
+      return { x: p.x, y: p.y, w: sz.w, h: sz.h };
     };
     const obstacles = aliveEntities
       .filter((e) => e.type === 'event' || e.type === 'character')
-      .map((e) => dimsFor(e.id))
+      .map((e) => dimsFor(e.id, e.type))
       .filter((r): r is { x: number; y: number; w: number; h: number } => !!r);
     const overlaps = (a: { x: number; y: number; w: number; h: number }, list: { x: number; y: number; w: number; h: number }[]) =>
       list.some((o) => !(a.x + a.w < o.x || a.x > o.x + o.w || a.y + a.h < o.y || a.y > o.y + o.h));
     const placed: { x: number; y: number; w: number; h: number }[] = [];
     for (const g of arcThreadGeo) {
       if (!g.samples || g.samples.length === 0) continue;
+      // Scrolling: ride the dot to the sample nearest the viewport centre. During
+      // a DRAG we DON'T special-case the position — it uses the same stable
+      // settle logic below (only the SIZE drops to a dot), which holds a clear
+      // spot near the line instead of jumping as the geometry deforms.
       if (arcsMoving) {
         let best = g.samples[0];
         let bestD = Infinity;
@@ -1171,8 +2134,9 @@ export default function FreeformCorkboard() {
           : disp
           ? { x: natural!.x + disp.dx, y: natural!.y + disp.dy }
           : natural!;
-        w = expanded ? EXPANDED_W : COLLAPSED_W;
-        h = expanded ? (expandedCardH > 0 ? expandedCardH : COLLAPSED_H) : COLLAPSED_H;
+        const osz = collapsedSizeOf(e.type); // character = name pill footprint
+        w = expanded ? EXPANDED_W : osz.w;
+        h = expanded ? (expandedCardH > 0 ? expandedCardH : osz.h) : osz.h;
         x = p.x; y = p.y;
       }
       rects.push({ id: e.id, rel: !!relMid, x, y, w, h });
@@ -1209,8 +2173,20 @@ export default function FreeformCorkboard() {
     /** True when dragging a card that's currently DEALT OUT of a ball — the
      *  drag is transient (webDrag), not persisted to CardLayouts. */
     isWeb: boolean;
+    /** Latest position during the drag — read on drop for sequence-membership
+     *  detection (the closure's `positions` is stale from drag-start). */
+    lastPos?: Pos;
   } | null>(null);
-  const [draggingId, setDraggingId] = useState<string | null>(null);
+
+  // Container drag — dragging a sequence's header or border moves the WHOLE
+  // shape: the sequence anchor + every member scene shift by the same delta, so
+  // the box (bbox) and its connectors travel together.
+  const seqDragRef = useRef<{
+    seqId: string;
+    mouseStart: Pos;
+    starts: Map<string, Pos>; // sequence id + each member id → start position
+    moved: boolean;
+  } | null>(null);
 
   // Link-drag — used by the Event card's drag-to-connect handle. When set,
   // a ghost arrow follows the cursor from the source event's handle. On
@@ -1235,6 +2211,14 @@ export default function FreeformCorkboard() {
     causesMode: boolean;
   } | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
+  // Transient success toast for link actions that don't leave a connector on the
+  // board (adding a character to a cast, etc.). Auto-clears.
+  const [linkNotice, setLinkNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!linkNotice) return;
+    const t = window.setTimeout(() => setLinkNotice(null), 2600);
+    return () => window.clearTimeout(t);
+  }, [linkNotice]);
 
   // D'-8 — multi-select state for "create arc from events" + click-arc-to-
   // highlight-events. shift- or meta-click an Event card to add/remove
@@ -1252,6 +2236,12 @@ export default function FreeformCorkboard() {
   // On-demand right-side panel (Information facts + arc suggestions). Opened
   // from the permanent toolbar button.
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  // Section the wow tour wants force-expanded in the right panel (e.g. Information).
+  const [panelForceSection, setPanelForceSection] = useState<string | null>(null);
+  // Card-action gate driven by the wow tour: while a coachmark is up, cards are
+  // locked except for the single action the step is coaching.
+  const [tourGate, setTourGate] = useState<{ active: boolean; allow: 'expand' | 'fullcard' | 'ask' | null }>({ active: false, allow: null });
+  const tourBlocks = (action: 'expand' | 'fullcard' | 'ask') => tourGate.active && tourGate.allow !== action;
 
   // D'-8 — "Create arc from N events" modal state.
   const [createArcFromEventsOpen, setCreateArcFromEventsOpen] = useState(false);
@@ -1269,8 +2259,16 @@ export default function FreeformCorkboard() {
       // card drags from its stored position and persists.
       const override = ballEffects.overrides.get(cardId);
       const viewBallPos = ballEffects.clusters.find((c) => c.id === cardId)?.pos;
-      const start = override ? override.pos : viewBallPos ?? positions[cardId];
+      // If the card is resting at a nudged (container-displaced) position, lift it
+      // from THERE, not its raw stored base — otherwise exempting it from the
+      // nudge on pickup snaps it back to the overlapping drop point. Bake the
+      // nudged spot into its stored position too, so it stops overlapping.
+      const disp = !override && !viewBallPos ? ballEffects.displacements.get(cardId) : undefined;
+      const stored = positions[cardId];
+      const dispStart = disp && stored ? { x: stored.x + disp.dx, y: stored.y + disp.dy } : stored;
+      const start = override ? override.pos : viewBallPos ?? dispStart;
       if (!start) return;
+      if (disp && dispStart) setPositions((p) => ({ ...p, [cardId]: dispStart }));
       // Focal card in focus mode is pinned by the centering transform —
       // dragging would fight it. Close the peer panel to interact normally.
       if (peerForCardId === cardId) return;
@@ -1299,10 +2297,12 @@ export default function FreeformCorkboard() {
       const dy = e.clientY - d.mouseStart.y;
       if (!d.moved && Math.abs(dx) + Math.abs(dy) < DRAG_THRESHOLD_PX) return;
       d.moved = true;
+      const z = zoomRef.current || 1; // client px → board px under zoom
       const nextPos = {
-        x: Math.max(0, d.cardStart.x + dx),
-        y: Math.max(0, d.cardStart.y + dy),
+        x: Math.max(0, d.cardStart.x + dx / z),
+        y: Math.max(0, d.cardStart.y + dy / z),
       };
+      d.lastPos = nextPos;
       // A dealt-out card moves transiently via webDrag (feeds the ball override,
       // so edges follow); everything else moves its stored position.
       if (d.isWeb) {
@@ -1385,6 +2385,34 @@ export default function FreeformCorkboard() {
         }
         return p;
       });
+
+      // Sequence membership via bodily card-drag (event cards only): dropping an
+      // event inside a DIFFERENT container's box moves/nests it there. Dragging a
+      // member out is intentionally NOT a thing here (too easy to do by accident);
+      // removal is a manual control on the card (see the EventSheet Sequence tile).
+      const evt = data?.entities.find((x) => x.id === d.cardId);
+      const fp = d.lastPos;
+      if (evt?.type === 'event' && fp) {
+        const cx = fp.x + EVENT_CARD_W / 2;
+        const cy = fp.y + COLLAPSED_H / 2;
+        const contains = data?.edges?.contains ?? [];
+        const curSeqId = contains.find((c) => c.to === d.cardId)?.from ?? null;
+        const eid = d.cardId;
+        let dropSeqId: string | null = null;
+        for (const b of ballEffects.sequenceBoxes) {
+          if (b.seqId === curSeqId) continue;
+          if (cx >= b.x && cx <= b.x + b.w && cy >= b.y && cy <= b.y + b.h) { dropSeqId = b.seqId; break; }
+        }
+        if (dropSeqId && dropSeqId !== curSeqId) {
+          setData((prev) => (prev ? { ...prev, edges: { ...prev.edges, contains: [...prev.edges.contains.filter((c) => c.to !== eid), { from: dropSeqId!, to: eid }] } } : prev));
+          tagSequenceContains({ sequenceId: dropSeqId, eventId: eid, projectId: storyId }, auth.token)
+            .then(() => setLinkNotice(curSeqId ? 'Scene moved to sequence' : 'Scene added to sequence'))
+            .catch((err) => {
+              setData((prev) => (prev ? { ...prev, edges: { ...prev.edges, contains: prev.edges.contains.filter((c) => !(c.from === dropSeqId! && c.to === eid)) } } : prev));
+              setLinkError(err?.message ?? String(err));
+            });
+        }
+      }
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
@@ -1394,6 +2422,67 @@ export default function FreeformCorkboard() {
     };
   }, [draggingId, auth, storyId]);
 
+  // -------- Sequence container drag (header / border → move whole shape) --------
+  const onSeqContainerMouseDown = useCallback((e: React.MouseEvent, seqId: string) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const starts = new Map<string, Pos>();
+    const sp = positions[seqId];
+    if (sp) starts.set(seqId, { x: sp.x, y: sp.y });
+    for (const c of data?.edges?.contains ?? []) {
+      if (c.from !== seqId) continue;
+      const mp = positions[c.to];
+      if (mp) starts.set(c.to, { x: mp.x, y: mp.y });
+    }
+    seqDragRef.current = { seqId, mouseStart: { x: e.clientX, y: e.clientY }, starts, moved: false };
+    setDraggingSeqId(seqId);
+  }, [positions, data?.edges?.contains]);
+
+  useEffect(() => {
+    if (!draggingSeqId) return;
+    const onMove = (e: MouseEvent) => {
+      const d = seqDragRef.current;
+      if (!d) return;
+      const dx = e.clientX - d.mouseStart.x;
+      const dy = e.clientY - d.mouseStart.y;
+      if (!d.moved && Math.abs(dx) + Math.abs(dy) < DRAG_THRESHOLD_PX) return;
+      d.moved = true;
+      const z = zoomRef.current || 1; // client px → board px under zoom
+      setPositions((p) => {
+        const next = { ...p };
+        for (const [id, s] of d.starts) {
+          next[id] = { x: Math.max(0, s.x + dx / z), y: Math.max(0, s.y + dy / z) };
+        }
+        return next;
+      });
+    };
+    const onUp = () => {
+      const d = seqDragRef.current;
+      seqDragRef.current = null;
+      setDraggingSeqId(null);
+      if (!d || !d.moved || !auth || !storyId) return;
+      setPositions((p) => {
+        for (const id of d.starts.keys()) {
+          const fp = p[id];
+          if (fp) {
+            updateCardPosition(
+              { userId: auth.userId, projectId: storyId, cardId: id, x: fp.x, y: fp.y },
+              auth.token,
+            ).catch((err) => console.warn('[corkboard] save seq position failed:', err));
+          }
+        }
+        return p;
+      });
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [draggingSeqId, auth, storyId]);
+
   // -------- Link drag (Event drag-to-connect → PRECEDES) --------
 
   const onLinkHandleMouseDown = useCallback((e: React.MouseEvent, cardId: string) => {
@@ -1402,9 +2491,10 @@ export default function FreeformCorkboard() {
     e.stopPropagation();
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
+    const z = zoomRef.current || 1;
     const mouseCanvas = {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
+      x: (e.clientX - rect.left) / z,
+      y: (e.clientY - rect.top) / z,
     };
     setLinkDrag({
       fromCardId: cardId,
@@ -1421,8 +2511,9 @@ export default function FreeformCorkboard() {
     if (!linkDrag) return;
     const rectOf = (e: ProjectEntity, p: Pos) => {
       const isExp = expandedCardId === e.id;
-      const w = isExp ? EXPANDED_W : COLLAPSED_W;
-      const h = isExp && expandedCardH > 0 ? expandedCardH : COLLAPSED_H;
+      const sz = collapsedSizeOf(e.type); // characters collapse to the name pill
+      const w = isExp ? EXPANDED_W : sz.w;
+      const h = isExp && expandedCardH > 0 ? expandedCardH : sz.h;
       return { x: p.x, y: p.y, w, h, cx: p.x + w / 2, cy: p.y + h / 2 };
     };
     const positionOf = (entId: string): Pos | null => {
@@ -1476,8 +2567,17 @@ export default function FreeformCorkboard() {
     // The link handle lives on Event cards only, so the source is always
     // an event; the target type determines which edge gets written.
     const hitTestCard = (canvasPos: Pos): string | null => {
+      // Cards first (event / arc / character, and member-LESS sequences which
+      // render as a normal card) so a drop on a member scene inside a container
+      // targets the scene, not the box. Minimized container sequences render as a
+      // box and are hit-tested in the box loop below.
       for (const ent of aliveEntities) {
-        if (ent.type !== 'event' && ent.type !== 'arc') continue;
+        const isCardTarget =
+          ent.type === 'event' ||
+          ent.type === 'arc' ||
+          ent.type === 'character' ||
+          (ent.type === 'sequence' && !ballEffects.minimizedSeqIds.has(ent.id));
+        if (!isCardTarget) continue;
         if (ent.id === linkDrag.fromCardId) continue;
         if (ballEffects.hiddenIds.has(ent.id)) continue;
         const naturalPos = positions[ent.id];
@@ -1497,6 +2597,14 @@ export default function FreeformCorkboard() {
           canvasPos.y <= r.y + r.h
         ) {
           return ent.id;
+        }
+      }
+      // No card hit — a drop inside a sequence container's box targets the
+      // sequence (→ add the dragged event as a member).
+      for (const b of ballEffects.sequenceBoxes) {
+        if (b.seqId === linkDrag.fromCardId) continue;
+        if (canvasPos.x >= b.x && canvasPos.x <= b.x + b.w && canvasPos.y >= b.y && canvasPos.y <= b.y + b.h) {
+          return b.seqId;
         }
       }
       return null;
@@ -1527,7 +2635,8 @@ export default function FreeformCorkboard() {
     const onMove = (e: MouseEvent) => {
       const rect = canvasRef.current?.getBoundingClientRect();
       if (!rect) return;
-      const canvasPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      const z = zoomRef.current || 1;
+      const canvasPos = { x: (e.clientX - rect.left) / z, y: (e.clientY - rect.top) / z };
       const causesMode = e.altKey;
       setLinkDrag((cur) => {
         if (!cur) return cur;
@@ -1546,8 +2655,9 @@ export default function FreeformCorkboard() {
 
     const onUp = (e: MouseEvent) => {
       const rect = canvasRef.current?.getBoundingClientRect();
+      const z = zoomRef.current || 1;
       const canvasPos = rect
-        ? { x: e.clientX - rect.left, y: e.clientY - rect.top }
+        ? { x: (e.clientX - rect.left) / z, y: (e.clientY - rect.top) / z }
         : null;
       const target = canvasPos ? hitTestCard(canvasPos) : null;
       const edgeKey = canvasPos && !target ? hitTestEdge(canvasPos) : null;
@@ -1563,6 +2673,77 @@ export default function FreeformCorkboard() {
       if (target && target !== from) {
         const targetEnt = data?.entities.find((e) => e.id === target);
         if (!targetEnt) return;
+
+        const fromEnt = data?.entities.find((x) => x.id === from);
+        const sType = fromEnt?.type;
+        const tType = targetEnt.type;
+
+        // Character → Character: a structural tie. Create it (so the line appears
+        // and persists) with a neutral placeholder, then immediately pop the
+        // label editor at the drop point so the writer names the relationship
+        // instead of it silently defaulting to a misleading 'related'.
+        if (sType === 'character' && tType === 'character') {
+          if ((data?.edges.structural ?? []).some((s) => s.from === from && s.to === target)) return;
+          const predicate = 'related';
+          setData((prev) => (prev ? { ...prev, edges: { ...prev.edges, structural: [...prev.edges.structural, { from, to: target, predicate }] } } : prev));
+          setStructuralEdge({ projectId: storyId, fromId: from, toId: target, predicate }, auth.token)
+            .catch((err) => {
+              setData((prev) => (prev ? { ...prev, edges: { ...prev.edges, structural: prev.edges.structural.filter((s) => !(s.from === from && s.to === target)) } } : prev));
+              setLinkError(err?.message ?? String(err));
+            });
+          setEditStructural({ from, to: target, predicate, mx: e.clientX, my: e.clientY, isNew: true });
+          setStructDraft('');
+          return;
+        }
+
+        // Character ↔ Event: add the character to the event's cast (INVOLVES).
+        // No connector is drawn for INVOLVES; a toast confirms it.
+        if ((sType === 'character' && tType === 'event') || (sType === 'event' && tType === 'character')) {
+          const eventId = sType === 'event' ? from : target;
+          const characterId = sType === 'character' ? from : target;
+          if ((data?.edges.involves ?? []).some((i) => i.from === eventId && i.to === characterId)) {
+            setLinkNotice('Character already in the cast');
+            return;
+          }
+          setData((prev) => (prev ? { ...prev, edges: { ...prev.edges, involves: [...prev.edges.involves, { from: eventId, to: characterId }] } } : prev));
+          tagEventInvolvesCharacter({ eventId, characterId, projectId: storyId }, auth.token)
+            .then(() => setLinkNotice('Character added to the cast'))
+            .catch((err) => {
+              setData((prev) => (prev ? { ...prev, edges: { ...prev.edges, involves: prev.edges.involves.filter((i) => !(i.from === eventId && i.to === characterId)) } } : prev));
+              setLinkError(err?.message ?? String(err));
+            });
+          return;
+        }
+
+        // Event ↔ Sequence: add the event as a member scene (CONTAINS, disjoint
+        // server-side — a scene is in at most one sequence). Dropping a member of
+        // sequence A onto B MOVES it (drops A's membership, adds B's).
+        if ((sType === 'event' && tType === 'sequence') || (sType === 'sequence' && tType === 'event')) {
+          const sequenceId = sType === 'sequence' ? from : target;
+          const eventId = sType === 'event' ? from : target;
+          if ((data?.edges.contains ?? []).some((c) => c.from === sequenceId && c.to === eventId)) return;
+          const wasMember = (data?.edges.contains ?? []).some((c) => c.to === eventId);
+          setData((prev) => (prev ? { ...prev, edges: { ...prev.edges, contains: [...prev.edges.contains.filter((c) => c.to !== eventId), { from: sequenceId, to: eventId }] } } : prev));
+          // Reposition the event to where it was dropped (inside the new box) so it
+          // nests there and leaves the old container, instead of the box stretching
+          // back to the event's old spot. Only when the event was the dragged source.
+          if (canvasPos && sType === 'event') {
+            const np = { x: Math.max(0, canvasPos.x - EVENT_CARD_W / 2), y: Math.max(0, canvasPos.y - COLLAPSED_H / 2) };
+            setPositions((p) => ({ ...p, [eventId]: np }));
+            updateCardPosition({ userId: auth.userId, projectId: storyId, cardId: eventId, x: np.x, y: np.y }, auth.token).catch(() => {});
+          }
+          tagSequenceContains({ sequenceId, eventId, projectId: storyId }, auth.token)
+            .then(() => setLinkNotice(wasMember ? 'Scene moved to sequence' : 'Scene added to sequence'))
+            .catch((err) => {
+              setData((prev) => (prev ? { ...prev, edges: { ...prev.edges, contains: prev.edges.contains.filter((c) => !(c.from === sequenceId && c.to === eventId)) } } : prev));
+              setLinkError(err?.message ?? String(err));
+            });
+          return;
+        }
+
+        // Only Events are valid sources for the remaining edge types (PRECEDES /
+        // CAUSES / EVOKES). Anything else (e.g. character → arc) is a no-op.
+        if (sType !== 'event') return;
 
         // D'-11 — Alt held at drop → CAUSES. Target may be Event OR Arc.
         // Layered on top of PRECEDES (an Event→Event pair can carry both),
@@ -1685,7 +2866,9 @@ export default function FreeformCorkboard() {
           tagEventEvokes(
             { eventId: from, arcId: target, projectId: storyId },
             auth.token,
-          ).catch((err) => {
+          )
+            .then(() => setLinkNotice('Event now evokes arc'))
+            .catch((err) => {
             setData((prev) =>
               prev
                 ? {
@@ -1710,8 +2893,10 @@ export default function FreeformCorkboard() {
       // Branch 2: dropped on an existing PRECEDES arrow → splice the
       // dragged event in. A→C becomes A→B + B→C atomically (sequential
       // API calls; revert all if any leg fails). Suppressed in CAUSES mode —
-      // Alt+drag never splices.
-      if (edgeKey && !e.altKey) {
+      // Alt+drag never splices. Event sources only (splicing inserts into the
+      // PRECEDES chain — a character/other source has nothing to splice).
+      const fromIsEvent = data?.entities.find((x) => x.id === from)?.type === 'event';
+      if (edgeKey && !e.altKey && fromIsEvent) {
         const [oldFrom, oldTo] = edgeKey.split('|');
         if (!oldFrom || !oldTo) return;
         if (oldFrom === from || oldTo === from) return; // belt + suspenders
@@ -1881,16 +3066,29 @@ export default function FreeformCorkboard() {
 
   // -------- Braindump submit --------
 
-  const onSubmitBraindump = useCallback(async () => {
+  // Shared submit core: enqueue extract-braindump for a block of prose (writer
+  // braindump OR parsed screenplay text) + the fallback polls. Callers validate
+  // length first.
+  const runBraindumpExtraction = useCallback(async (prose: string, opts?: { sourceFormat?: 'screenplay'; wow?: boolean }) => {
     if (!auth || !storyId) return;
-    const prose = braindumpText.trim();
-    if (prose.length < 20) {
-      setBraindumpMsg('Need at least 20 characters.');
-      setBraindumpPhase('error');
-      return;
-    }
     const braindumpId = `bd_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     inflightBraindumpRef.current = braindumpId;
+    // Large screenplay imports (> ~25pp) run the windowed backend path — multi-
+    // minute, window-by-window. Mark it so the fast give-up timers + edge belt
+    // don't resolve it early; it resolves on braindump_complete (or a long backstop).
+    const isWindowed = opts?.sourceFormat === 'screenplay' && prose.length > 40000;
+    windowedRunRef.current = isWindowed;
+    edgeCountAtSubmitRef.current = edgeCountOf(dataRef.current); // baseline for the lost-WS belt
+    cardCountAtSubmitRef.current = (dataRef.current?.entities ?? []).filter((e) => !e.deleted_at).length;
+    if (isWindowed) {
+      windowedStartRef.current = Date.now();
+      winLastAliveRef.current = cardCountAtSubmitRef.current;
+      winLastGrowthRef.current = Date.now();
+      resetWinMeter();
+      bumpWinPhase('reading');
+    } else {
+      resetWinMeter();
+    }
     setBraindumpPhase('submitting');
     setBraindumpMsg('Queueing extraction…');
     try {
@@ -1901,42 +3099,186 @@ export default function FreeformCorkboard() {
           projectId: storyId,
           braindumpId,
           prose,
+          ...(opts?.sourceFormat ? { sourceFormat: opts.sourceFormat } : {}),
+          // Dev-only: stream entities in card-by-card (REACT_APP_FREEFORM_STREAMING
+          // is set in .env.development only; prod runs the batch path). The wow
+          // flow (FIL-506) forces streaming regardless of env — the card-by-card
+          // reveal IS the wow; the non-streaming recovery path backstops failures.
+          ...(process.env.REACT_APP_FREEFORM_STREAMING === 'true' || opts?.wow ? { streaming: true } : {}),
         },
         auth.token,
       );
       setBraindumpPhase('extracting');
-      setBraindumpMsg('Extracting — usually 15-30s. New cards will appear when ready.');
-      // Fallback poll: if the WS event is missed (network blip, reconnect race,
-      // anything), refetch entities at 20s and 45s. The braindump_complete WS
-      // handler clears inflightBraindumpRef so these are no-ops once the WS
-      // path fires normally. Belt-and-suspenders against the prior bug where
-      // braindumps occasionally landed in Neptune but never streamed onto the
-      // canvas.
       const idAtSubmit = braindumpId;
-      const pollIfStillInflight = () => {
-        if (inflightBraindumpRef.current === idAtSubmit) {
-          refreshEntitiesRef.current();
-        }
-      };
-      window.setTimeout(pollIfStillInflight, 20000);
-      window.setTimeout(() => {
-        pollIfStillInflight();
-        // After 45s, if WS still hasn't fired, mark as done locally so the
-        // header doesn't sit on "Extracting…" indefinitely. The cards already
-        // landed from the refetches above (if extraction succeeded).
-        if (inflightBraindumpRef.current === idAtSubmit) {
+      if (isWindowed) {
+        // Windowed import: minutes long, and the WS socket does not survive it —
+        // so POLL. Refetch every 15s so the board builds window-by-window
+        // regardless of WS. The interval self-terminates when the run resolves
+        // (inflight cleared by braindump_complete or the backstop). WS
+        // progress/complete, when they do arrive, are a fast path on top.
+        setBraindumpMsg('Reading the script. This can take a few minutes; cards appear as each part is processed.');
+        if (windowedPollRef.current) window.clearInterval(windowedPollRef.current);
+        const STABLE_MS = 45000; // graph unchanged this long ⇒ the run is done
+        let lastSig = '';
+        let stableSince = Date.now();
+        const resolveWindowed = () => {
           inflightBraindumpRef.current = null;
-          setBraindumpPhase('done');
-          setBraindumpMsg('Extraction took longer than expected — check for new cards.');
+          windowedRunRef.current = false;
+          if (windowedPollRef.current) { window.clearInterval(windowedPollRef.current); windowedPollRef.current = null; }
+          setBraindumpPhase('done'); // stops the shimmer + tracker + meter
+          setBraindumpMsg('Done reading the script.');
           setBraindumpText('');
-        }
-      }, 45000);
+          dockAutoCloseRef.current = true;
+          resetWinMeter();
+          relayoutWindowedRef.current = true; // snap the board into the clean layout
+          refreshEntitiesRef.current();
+          refreshArcSuggestionsRef.current();
+        };
+        windowedPollRef.current = window.setInterval(() => {
+          if (inflightBraindumpRef.current !== idAtSubmit) {
+            if (windowedPollRef.current) { window.clearInterval(windowedPollRef.current); windowedPollRef.current = null; }
+            return;
+          }
+          refreshEntitiesRef.current();
+          // Also re-pull arc suggestions — the worker writes them (+ CAUSES/EVOKES
+          // edges) AFTER the graph lands, so this is the only way the Panel fills
+          // and the only way the completion check can see them still arriving.
+          refreshArcSuggestionsRef.current();
+          // Completion by STABILITY, over the WHOLE result — entities AND edges AND
+          // arc suggestions. Watching entity count alone resolved the moment the
+          // last window's cards landed, dropping the tracker while the PRECEDES
+          // spine, CAUSES edges, and arc suggestions were still being written (the
+          // "didn't wait for arcs / out a sequence" drop). Two guards before we
+          // call it done: the graph must be non-empty AND the PRECEDES spine must
+          // have landed (edges grew past submit), so we never resolve during the
+          // pre-spine fill lull.
+          const n = (dataRef.current?.entities ?? []).length;
+          const e = edgeCountOf(dataRef.current);
+          const s = arcSuggestionCountRef.current;
+          const sig = `${n}:${e}:${s}`;
+          const spineLanded = e > edgeCountAtSubmitRef.current;
+          if (sig !== lastSig) { lastSig = sig; stableSince = Date.now(); }
+          else if (n > 0 && spineLanded && Date.now() - stableSince > STABLE_MS) { resolveWindowed(); }
+        }, 15000);
+        // Hard backstop past the Lambda ceiling, in case the graph never stabilizes.
+        window.setTimeout(() => {
+          if (inflightBraindumpRef.current === idAtSubmit) resolveWindowed();
+        }, 960000);
+      } else {
+        setBraindumpMsg('Extracting, usually 15-30s. New cards will appear when ready.');
+        // Steady fallback poll while inflight (every 8s): keeps the board filling
+        // even when the braindump_complete WS is lost, and gives the stability
+        // belt the consecutive reads it needs to judge "settled" instead of
+        // resolving on the first partial mid-write read. Self-terminates when
+        // the run resolves (WS handler / belt / hard stop clear inflight).
+        const pollIv = window.setInterval(() => {
+          if (inflightBraindumpRef.current !== idAtSubmit) {
+            window.clearInterval(pollIv);
+            return;
+          }
+          refreshEntitiesRef.current();
+        }, 8000);
+        // At 45s, keep the writer informed — but DON'T flip to done: the write +
+        // worker tail can legitimately still be landing, and a premature 'done'
+        // is exactly what dropped the tracker early and let the wow walkthrough
+        // build from a half-written graph.
+        window.setTimeout(() => {
+          if (inflightBraindumpRef.current === idAtSubmit) {
+            setBraindumpMsg('Still working. A big idea can take a minute…');
+          }
+        }, 45000);
+        // Hard stop: if neither braindump_complete nor the stability belt ever
+        // resolved (truly lossy run), resolve authoritatively at 100s.
+        window.setTimeout(() => {
+          if (inflightBraindumpRef.current === idAtSubmit) {
+            inflightBraindumpRef.current = null;
+            setBraindumpPhase('done');
+            setBraindumpMsg('Extraction took longer than expected. Check for new cards.');
+            setBraindumpText('');
+            dockAutoCloseRef.current = true;
+            refreshEntitiesRef.current();
+          }
+        }, 100000);
+      }
     } catch (err: any) {
       setBraindumpPhase('error');
       setBraindumpMsg(err.message ?? String(err));
       inflightBraindumpRef.current = null;
     }
-  }, [auth, storyId, braindumpText]);
+  }, [auth, storyId]);
+
+  const onSubmitBraindump = useCallback(async () => {
+    const prose = braindumpText.trim();
+    if (prose.length < 20) {
+      setBraindumpMsg('Need at least 20 characters.');
+      setBraindumpPhase('error');
+      return;
+    }
+    // During the wow, force the card-by-card streaming reveal regardless of env.
+    await runBraindumpExtraction(prose, { wow: wowActive });
+  }, [braindumpText, runBraindumpExtraction, wowActive]);
+
+  // -------- Script (PDF) drop → extraction --------
+
+  // Drop a PDF screenplay anywhere on the board: parse its text client-side,
+  // then auto-submit it through the same extract-braindump pipeline. Thin v1
+  // (FIL-511): short scripts/excerpts; chunking + a screenplay-specific
+  // segmentation prompt are phase 2. Scanned/image PDFs yield no text.
+  const [scriptDragOver, setScriptDragOver] = useState(false);
+  const scriptInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleScriptFile = useCallback(async (file: File) => {
+    if (!auth || !storyId) return;
+    if (braindumpPhase === 'submitting' || braindumpPhase === 'extracting') return;
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+    if (!isPdf) {
+      setBraindumpPhase('error');
+      setBraindumpMsg('Drop a PDF screenplay.');
+      return;
+    }
+    setBraindumpOpen(false);
+    setBraindumpPhase('submitting');
+    setBraindumpMsg(`Reading ${file.name}…`);
+    try {
+      const { parsePdfToText } = await import('../../lib/pdfText');
+      const text = await parsePdfToText(file, (p, total) =>
+        setBraindumpMsg(`Reading ${file.name}… page ${p}/${total}`),
+      );
+      const prose = text.trim();
+      if (prose.length < 40) {
+        setBraindumpPhase('error');
+        setBraindumpMsg('Could not read text from that PDF (is it a scanned image?).');
+        return;
+      }
+      await runBraindumpExtraction(prose, { sourceFormat: 'screenplay' });
+    } catch (err: any) {
+      setBraindumpPhase('error');
+      setBraindumpMsg(`Could not read that PDF: ${err?.message ?? String(err)}`);
+    }
+  }, [auth, storyId, braindumpPhase, runBraindumpExtraction]);
+
+  // Window-level file drag/drop so a screenplay can be dropped anywhere on the
+  // board (and so the browser doesn't navigate to the file on a stray drop).
+  useEffect(() => {
+    const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
+    const onDragOver = (e: DragEvent) => { if (hasFiles(e)) { e.preventDefault(); setScriptDragOver(true); } };
+    const onDragLeave = (e: DragEvent) => { if (e.relatedTarget === null) setScriptDragOver(false); };
+    const onDrop = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      setScriptDragOver(false);
+      const file = e.dataTransfer?.files?.[0];
+      if (file) handleScriptFile(file);
+    };
+    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('dragleave', onDragLeave);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('dragleave', onDragLeave);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, [handleScriptFile]);
 
   // -------- Manual card creation --------
 
@@ -2143,10 +3485,25 @@ export default function FreeformCorkboard() {
   ]);
 
   // D'-9 — accept an arc suggestion. Calls the backend which creates the
+  // Arcs spawn in their own lane RIGHT of the throughline (matching the
+  // auto-layout), stacked below any existing arcs so a new one never lands
+  // mid-board on top of another. (Plain top-down createArc + accepted
+  // suggestions; create-from-events keeps its centroid placement near the
+  // selected scenes.)
+  const computeNewArcPosition = useCallback((): Pos => {
+    const boardW = typeof window !== 'undefined' ? window.innerWidth : 1400;
+    const centerX = Math.round(boardW / 2 - EVENT_CARD_W / 2);
+    const arcX = centerX + EVENT_CARD_W + COL_GAP; // one lane right of the spine
+    const arcCount = (data?.entities ?? []).filter((e) => e.type === 'arc' && !e.deleted_at).length;
+    return { x: arcX, y: CANVAS_PAD + arcCount * (COLLAPSED_H + ROW_GAP) };
+  }, [data]);
+
   // Arc vertex via createArc semantics + marks the suggestion accepted.
   // Optimistic: drop the suggestion from in-memory list immediately + add
-  // the new arc entity. Place the new arc near viewport center so the
-  // writer can see it land.
+  // the new arc entity. Accepted arcs land in the ARC LANE right of the
+  // throughline, stacked below existing arcs (same rule as manual create) —
+  // viewport-center placement piled every accepted arc onto the same spot
+  // mid-board.
   const onAcceptArcSuggestion = useCallback(
     async (suggestionId: string) => {
       if (!auth || !storyId) return;
@@ -2154,7 +3511,7 @@ export default function FreeformCorkboard() {
       if (!sug) return;
       // Optimistic — drop suggestion immediately.
       setArcSuggestions((cur) => cur.filter((s) => s.suggestionId !== suggestionId));
-      const pos = computeNewCardPosition();
+      const pos = computeNewArcPosition();
       try {
         const res = await acceptArcSuggestion(
           {
@@ -2191,7 +3548,7 @@ export default function FreeformCorkboard() {
         console.warn('[corkboard] accept-arc-suggestion failed:', err);
       }
     },
-    [auth, storyId, arcSuggestions],
+    [auth, storyId, arcSuggestions, computeNewArcPosition],
   );
 
   const onDismissArcSuggestion = useCallback(
@@ -2221,8 +3578,9 @@ export default function FreeformCorkboard() {
   const computeNewCardPosition = useCallback((): Pos => {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return { x: CANVAS_PAD, y: CANVAS_PAD };
-    const vx = window.innerWidth / 2 - rect.left;
-    const vy = window.innerHeight / 2 - rect.top;
+    const z = zoomRef.current || 1;
+    const vx = (window.innerWidth / 2 - rect.left) / z;
+    const vy = (window.innerHeight / 2 - rect.top) / z;
     return {
       x: Math.max(CANVAS_PAD, Math.round(vx - COLLAPSED_W / 2)),
       y: Math.max(CANVAS_PAD, Math.round(vy - COLLAPSED_H / 2)),
@@ -2261,7 +3619,7 @@ export default function FreeformCorkboard() {
 
     setCreateSubmitting(true);
     try {
-      const pos = computeNewCardPosition();
+      const pos = createKind === 'arc' ? computeNewArcPosition() : computeNewCardPosition();
       let newEntity: ProjectEntity;
       if (createKind === 'arc') {
         // D'-1 — top-down arc creation via createArc (separate from createCard).
@@ -2361,6 +3719,7 @@ export default function FreeformCorkboard() {
     createPrecededBy,
     data,
     computeNewCardPosition,
+    computeNewArcPosition,
     closeCreateModal,
   ]);
 
@@ -2826,6 +4185,52 @@ export default function FreeformCorkboard() {
       try { msg = JSON.parse(raw.data); } catch { return; }
       if (msg?.projectId !== storyId) return;
 
+      // Dev streaming: a vertex finished extracting — drop its card on the
+      // board immediately (card-by-card reveal). The final braindump_complete
+      // refetch reconciles edges + authoritative fields. Ids match the backend
+      // (slug), so the refetch dedups instead of duplicating.
+      if (msg.type === 'entity_streamed' && msg.entity?.id) {
+        const e = msg.entity;
+        streamedIdsRef.current.add(e.id);
+        setData((prev) => {
+          if (!prev) return prev;
+          if (prev.entities.some((x) => x.id === e.id)) return prev;
+          const ent = {
+            id: e.id,
+            type: e.type,
+            working_name: e.working_name,
+            working_title: e.working_title,
+            narrative_status: e.narrative_status,
+            description: e.description ?? e.summary ?? '',
+            int_ext: e.int_ext,
+          } as ProjectEntity;
+          return { ...prev, entities: [...prev.entities, ent] };
+        });
+        return;
+      }
+
+      if (msg.type === 'braindump_progress') {
+        // Windowed import: a phase transition (reading → structuring → processing
+        // → wiring) and/or a window's cards landing. Keep the run alive (tracker +
+        // shimmer stay on — it IS still processing), name the phase on the meter,
+        // and refetch so the board builds window-by-window. These pings are the
+        // fast path; the FE ticker carries the meter when the socket has died.
+        if (inflightBraindumpRef.current) {
+          if (msg.phase && ['reading', 'structuring', 'processing', 'wiring'].includes(msg.phase)) {
+            bumpWinPhase(msg.phase as WinPhase);
+          }
+          if (msg.window || msg.total) {
+            setWinProg({ window: msg.window, total: msg.total });
+            winLastGrowthRef.current = Date.now(); // a window just wrote ⇒ still growing
+          }
+          if (msg.window && (msg.total ?? 0) > 1) {
+            setBraindumpMsg(`Processing the script: part ${msg.window}/${msg.total}…`);
+          }
+          refreshEntitiesRef.current();
+        }
+        return;
+      }
+
       if (msg.type === 'braindump_complete') {
         const counts = msg.counts ?? {};
         const total =
@@ -2840,7 +4245,21 @@ export default function FreeformCorkboard() {
             : `Done. Extracted ${counts.characters ?? 0} char · ${counts.events ?? 0} event · ${counts.locations ?? 0} loc.`,
         );
         setBraindumpText('');
+        dockAutoCloseRef.current = true;
+        if (windowedRunRef.current) relayoutWindowedRef.current = true; // snap into the clean layout
         inflightBraindumpRef.current = null;
+        windowedRunRef.current = false; // windowed run resolved
+        resetWinMeter();
+        refreshArcSuggestionsRef.current(); // arcs were written just before this WS
+        if (windowedPollRef.current) { window.clearInterval(windowedPollRef.current); windowedPollRef.current = null; }
+        // Streamed cards were positioned in ARRIVAL order (PRECEDES didn't exist
+        // yet). Stash them so the effect below re-stacks them in PRECEDES (story)
+        // order ONCE the edge-bearing refetch lands — doing it here would race
+        // the refetch and re-place them in arrival order again.
+        if (streamedIdsRef.current.size) {
+          relayoutAfterStreamRef.current = [...streamedIdsRef.current];
+        }
+        streamedIdsRef.current.clear();
         refreshEntitiesRef.current();
         return;
       }
@@ -2854,6 +4273,7 @@ export default function FreeformCorkboard() {
           '· new:', msg.newEntities?.length ?? 0,
           '· cross:', msg.crossCardLandings?.length ?? 0,
         );
+        setPendingCascades((c) => Math.max(0, c - 1));
         if (msg.cardResponseId) {
           setCompletedResponseIds((prev) => {
             const next = new Set(prev);
@@ -2994,13 +4414,14 @@ export default function FreeformCorkboard() {
     const el = canvasRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
+    const z = zoomRef.current || 1;
     const combinedW = EXPANDED_W + PEER_GAP + PEER_CARD_W;
-    // Viewport-centered x, translated into canvas coords.
-    const x = Math.max(CANVAS_PAD, (window.innerWidth - combinedW) / 2 - rect.left);
+    // Viewport-centered x, translated into canvas coords (÷zoom).
+    const x = Math.max(CANVAS_PAD, ((window.innerWidth - combinedW * z) / 2 - rect.left) / z);
     // Below the toolbar with breathing room; clamp inside the canvas.
     const toolbarBottom = toolbarRef.current?.getBoundingClientRect().bottom ?? 0;
     const yViewport = Math.max(toolbarBottom + 24, window.innerHeight * 0.1);
-    const y = Math.max(CANVAS_PAD, yViewport - rect.top);
+    const y = Math.max(CANVAS_PAD, (yViewport - rect.top) / z);
     setPeerFocusPos({ x, y });
   }, [peerForCardId]);
 
@@ -3021,9 +4442,41 @@ export default function FreeformCorkboard() {
     return () => observer.disconnect();
   }, [expandedCardId]);
 
+  // -------- Story rename --------
+  // Any story that has a persisted works record can be renamed (demo + wow
+  // stories have records too); the works-presence check is the real gate.
+  const canRename = !!storyId && !!appUser?.works?.[storyId];
+  const renameStory = async (newTitle: string) => {
+    const title = newTitle.trim();
+    if (!storyId || !auth || !title || title === workTitle) return;
+    const prevTitle = workTitle;
+    // Optimistic: update the local works record so the header reflects it now.
+    const patchTitle = (t?: string) => setUser((u: any) =>
+      u?.works?.[storyId] ? { ...u, works: { ...u.works, [storyId]: { ...u.works[storyId], title: t } } } : u);
+    patchTitle(title);
+    try {
+      const session = await fetchAuthSession();
+      const tk = session.tokens?.idToken?.toString() ?? auth.token;
+      // The works "save" event upserts by storyId (same path the outline editor's
+      // title change uses) and returns the refreshed works map. Freeform records
+      // carry no outline fields, so the empty S1-S9 are a no-op; workflow must be
+      // re-sent so the freeform routing tag survives the write.
+      const res = await axios.post(`${process.env.REACT_APP_URL}/works`, {
+        event: 'save', title, userId: auth.userId, storyId, workflow: 'freeform',
+        M: '', T: '', G: '', CQ: '', SUM: '', BRAINSTORM: '',
+        S1: '', S2: '', S3: '', S4: '', S5: '', S6: '', S7: '', S8: '', S9: '',
+      }, { headers: { Authorization: tk } });
+      const works = res?.data?.body?.works ?? res?.data?.works;
+      if (works) setUser((u: any) => (u ? { ...u, works } : u));
+    } catch (err) {
+      console.warn('[corkboard] rename failed, reverting:', err);
+      patchTitle(prevTitle);
+    }
+  };
+
   // -------- Render --------
 
-  if (loading) return <ThemeCtx.Provider value={theme}><Shell storyId={storyId} title={workTitle}>Loading corkboard…</Shell></ThemeCtx.Provider>;
+  if (loading) return <ThemeCtx.Provider value={theme}><Shell storyId={storyId} title={workTitle}><CorkboardLoading /></Shell></ThemeCtx.Provider>;
   if (error) return <ThemeCtx.Provider value={theme}><Shell storyId={storyId} title={workTitle}><div style={{ color: 'crimson' }}>Error: {error}</div></Shell></ThemeCtx.Provider>;
   if (!data) return <ThemeCtx.Provider value={theme}><Shell storyId={storyId} title={workTitle}>No data.</Shell></ThemeCtx.Provider>;
 
@@ -3038,17 +4491,29 @@ export default function FreeformCorkboard() {
       : computePeerPosition(positions[peerEntity.id], peerEntity)
     : null;
 
-  const heightOf = (cardId: string) =>
-    expandedCardId === cardId && expandedCardH > 0 ? expandedCardH : COLLAPSED_H;
-  const widthOf = (cardId: string) =>
-    expandedCardId === cardId ? EXPANDED_W : COLLAPSED_W;
+  // Throughline grid — the wall shows ORDER only: no PRECEDES lines, no arc
+  // threads (the SC numbers carry the throughline; row-wrap arrows are noise).
+  const gridActive = viewMode === 'throughline' && throughlineLayout === 'grid';
 
-  // Effective position for sizing: the view/ball override when present, else
-  // the stored position; hidden entities don't stretch the canvas (a focused
-  // view shouldn't inherit the master board's sprawl).
+  const typeOfCard = (cardId: string) => data.entities.find((e) => e.id === cardId)?.type;
+  const heightOf = (cardId: string) =>
+    expandedCardId === cardId && expandedCardH > 0 ? expandedCardH : collapsedSizeOf(typeOfCard(cardId)).h;
+  const widthOf = (cardId: string) =>
+    expandedCardId === cardId ? EXPANDED_W : collapsedSizeOf(typeOfCard(cardId)).w;
+
+  // Effective position for sizing: the view/ball override when present, else the
+  // stored position PLUS any nudge displacement — must mirror the render exactly
+  // so a card pushed down/right by a sequence-box nudge grows the board instead
+  // of sliding off it. Hidden entities don't stretch the canvas (a focused view
+  // shouldn't inherit the master board's sprawl).
   const sizePosOf = (id: string): Pos | null => {
     if (ballEffects.hiddenIds.has(id)) return null;
-    return ballEffects.overrides.get(id)?.pos ?? positions[id] ?? null;
+    const ov = ballEffects.overrides.get(id)?.pos;
+    if (ov) return ov;
+    const base = positions[id];
+    if (!base) return null;
+    const d = ballEffects.displacements.get(id);
+    return d ? { x: base.x + d.dx, y: base.y + d.dy } : base;
   };
   // Board floors: fill the viewport under the toolbar (48 = Shell side
   // padding; 24 = breathing room at the bottom). Content extends it further.
@@ -3073,7 +4538,7 @@ export default function FreeformCorkboard() {
 
   return (
     <ThemeCtx.Provider value={theme}>
-    <Shell storyId={storyId} title={workTitle}>
+    <Shell storyId={storyId} title={workTitle} canRename={canRename} onRename={renameStory}>
       {/* Toolbar — one cohesive control strip: stats on the left, controls on
           the right. Manually sticky (an app-shell overflow ancestor defeats
           position:sticky): the wrapper holds the bar's slot in flow; once it
@@ -3126,10 +4591,11 @@ export default function FreeformCorkboard() {
         <ToolbarButton
           label="Master"
           icon="▦"
+          tourId="toolbar-views"
           onClick={() => switchView('master')}
           active={viewMode === 'master'}
           accent={viewMode === 'master' ? '#ea580c' : undefined}
-          title="The full free-form board — your stored layout"
+          title="The full free-form board with your stored layout"
         />
         <ToolbarButton
           label="Characters"
@@ -3137,15 +4603,120 @@ export default function FreeformCorkboard() {
           onClick={() => switchView('characters')}
           active={viewMode === 'characters'}
           accent={viewMode === 'characters' ? '#ea580c' : undefined}
-          title="Splay the characters out to read their relationships — events step aside"
+          title="Splay the characters out to read their relationships; events step aside"
         />
+        {/* "Outline" is the writer-facing name (the step outline: scenes in
+            story order); the internal viewMode key stays 'throughline'. */}
         <ToolbarButton
-          label="Throughline"
-          icon="≡"
+          label="Outline"
+          icon={
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
+              <path d="M12 3v18" />
+              <path d="M8 7l4-4 4 4" />
+              <path d="M8 17l4 4 4-4" />
+            </svg>
+          }
           onClick={() => switchView('throughline')}
           active={viewMode === 'throughline'}
           accent={viewMode === 'throughline' ? '#ea580c' : undefined}
-          title="Events stacked in story order with room for the arc threads"
+          title="Your step outline: scenes in story order"
+        />
+        {/* Throughline sub-layout — column (spine + threads) | grid (the
+            writers-room wall: reading-order notecards wrapping into rows). */}
+        {viewMode === 'throughline' && (
+          <div
+            style={{
+              display: 'flex', gap: 2, padding: 2, borderRadius: 8,
+              border: `1px solid ${dark ? '#2a2a30' : '#e8e0d2'}`,
+              background: dark ? '#101013' : '#faf6ee',
+            }}
+          >
+            {(['column', 'grid'] as const).map((m) => {
+              const active = throughlineLayout === m;
+              return (
+                <button
+                  key={m}
+                  onClick={() => switchThroughlineLayout(m)}
+                  title={m === 'column'
+                    ? 'One vertical spine in story order, arc threads alongside'
+                    : 'The writers-room wall: numbered notecards in reading order, wrapping into rows'}
+                  style={{
+                    border: 'none', cursor: 'pointer', borderRadius: 6,
+                    padding: '4px 9px', fontSize: 11, fontWeight: active ? 800 : 600,
+                    fontFamily: 'system-ui, sans-serif',
+                    background: active ? '#ea580c' : 'transparent',
+                    color: active ? '#fff' : dark ? 'rgba(255,255,255,0.66)' : '#555',
+                    display: 'flex', alignItems: 'center', gap: 5,
+                  }}
+                >
+                  {m === 'column' ? (
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
+                      <rect x="7" y="3" width="10" height="5" rx="1" />
+                      <rect x="7" y="10" width="10" height="5" rx="1" />
+                      <rect x="7" y="17" width="10" height="5" rx="1" />
+                    </svg>
+                  ) : (
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
+                      <rect x="3" y="3" width="8" height="6" rx="1" />
+                      <rect x="13" y="3" width="8" height="6" rx="1" />
+                      <rect x="3" y="12" width="8" height="6" rx="1" />
+                      <rect x="13" y="12" width="8" height="6" rx="1" />
+                    </svg>
+                  )}
+                  {m === 'column' ? 'Column' : 'Grid'}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {aliveEntities.some((e) => e.type === 'sequence') && viewMode !== 'characters' && (
+          <ToolbarButton
+            label={hideSequences ? 'Show sequences' : 'Hide sequences'}
+            icon={
+              hideSequences ? (
+                // eye-off — sequences currently hidden
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
+                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                  <line x1="1" y1="1" x2="23" y2="23" />
+                </svg>
+              ) : (
+                // eye — sequences currently shown
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+              )
+            }
+            onClick={() => setHideSequences((v) => !v)}
+            active={hideSequences}
+            accent={hideSequences ? '#ea580c' : undefined}
+            title="Hide the sequence containers to see just the event scenes"
+          />
+        )}
+        <ToolbarButton
+          label="Script"
+          icon={
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <path d="M14 2v6h6" />
+              <path d="M9 13h6" />
+              <path d="M9 17h6" />
+            </svg>
+          }
+          onClick={() => storyId && routerNavigate(`/freeform/${storyId}/script`)}
+          title="Write the screenplay: your scenes in story order, ready to draft"
+        />
+        <ToolbarButton
+          label="Arrange"
+          icon={
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
+              <path d="M21 6H3" />
+              <path d="M15 12H3" />
+              <path d="M9 18H3" />
+            </svg>
+          }
+          onClick={arrangeChronologically}
+          title="Re-stack the board: events in story (PRECEDES) order. Overrides manual card positions."
         />
         {isMockMode && (
           <span style={{ fontSize: 11, fontWeight: 700, color: '#b45309', padding: '0 6px' }}>
@@ -3155,20 +4726,23 @@ export default function FreeformCorkboard() {
         <div style={{ flex: 1 }} />
 
         <ToolbarButton
-          label="Refresh"
-          icon="↻"
-          onClick={() => refreshEntities()}
-          title="Refetch entities from Neptune (if a WS event was missed)"
-        />
-        <ToolbarButton
           label={deletedEntities.length > 0 ? `Trash · ${deletedEntities.length}` : 'Trash'}
-          icon="🗑"
+          icon={
+            <svg width="14" height="14" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
+              <path
+                d="M5.5 1C5.22386 1 5 1.22386 5 1.5C5 1.77614 5.22386 2 5.5 2H9.5C9.77614 2 10 1.77614 10 1.5C10 1.22386 9.77614 1 9.5 1H5.5ZM3 3.5C3 3.22386 3.22386 3 3.5 3H5H10H11.5C11.7761 3 12 3.22386 12 3.5C12 3.77614 11.7761 4 11.5 4H11V12C11 12.5523 10.5523 13 10 13H5C4.44772 13 4 12.5523 4 12V4L3.5 4C3.22386 4 3 3.77614 3 3.5ZM5 4H10V12H5V4Z"
+                fill="currentColor"
+                fillRule="evenodd"
+                clipRule="evenodd"
+              />
+            </svg>
+          }
           onClick={() => setTrashOpen(true)}
           disabled={deletedEntities.length === 0}
           title={
             deletedEntities.length === 0
               ? 'No deleted cards'
-              : `${deletedEntities.length} deleted card${deletedEntities.length === 1 ? '' : 's'} — view + restore`
+              : `${deletedEntities.length} deleted card${deletedEntities.length === 1 ? '' : 's'}, view and restore`
           }
         />
         <ToolbarButton
@@ -3186,7 +4760,28 @@ export default function FreeformCorkboard() {
                 }}
               />
             ) : (
-              '✎'
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                xmlns="http://www.w3.org/2000/svg"
+                style={{ display: 'block' }}
+              >
+                <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" />
+                <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" />
+                <path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4" />
+                <path d="M17.599 6.5a3 3 0 0 0 .399-1.375" />
+                <path d="M6.003 5.125A3 3 0 0 0 6.401 6.5" />
+                <path d="M3.477 10.896a4 4 0 0 1 .585-.396" />
+                <path d="M19.938 10.5a4 4 0 0 1 .585.396" />
+                <path d="M6 18a4 4 0 0 1-1.967-.516" />
+                <path d="M19.967 17.484A4 4 0 0 1 18 18" />
+              </svg>
             )
           }
           onClick={() => setBraindumpOpen((v) => !v)}
@@ -3196,20 +4791,50 @@ export default function FreeformCorkboard() {
               ? '#ea580c'
               : undefined
           }
-          title="Dump an idea — extraction turns it into cards (⌘↵ to process)"
+          title="Dump an idea; extraction turns it into cards (⌘↵ to process)"
+        />
+        <ToolbarButton
+          label="Import"
+          tourId="toolbar-import"
+          icon={
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <path d="M17 8l-5-5-5 5" />
+              <path d="M12 3v12" />
+            </svg>
+          }
+          onClick={() => scriptInputRef.current?.click()}
+          title="Import a PDF screenplay; its text is extracted into cards (or drop one anywhere on the board)"
+        />
+        <input
+          ref={scriptInputRef}
+          type="file"
+          accept="application/pdf,.pdf"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) handleScriptFile(f);
+            e.currentTarget.value = '';
+          }}
         />
         <ToolbarButton
           label={arcSuggestions.length > 0 ? `Panel · ${arcSuggestions.length}` : 'Panel'}
           icon="ⓘ"
           onClick={() => setRightPanelOpen(true)}
           accent={arcSuggestions.length > 0 ? getEntityColor('arc') : undefined}
-          title="Open the side panel — suggestions, information, arcs"
+          title="Open the side panel: suggestions, information, arcs"
         />
 
         <div style={{ position: 'relative' }}>
           <ToolbarButton
-            label="New ▾"
+            label="New"
             icon="+"
+            tourId="toolbar-new"
+            trailing={
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block', opacity: 0.75 }}>
+                <path d="m6 9 6 6 6-6" />
+              </svg>
+            }
             onClick={() => setNewMenuOpen((v) => !v)}
             active={newMenuOpen}
             title="Create a card manually (without braindump)"
@@ -3337,15 +4962,36 @@ export default function FreeformCorkboard() {
             <div style={{ width: 1, height: 18, background: dark ? '#26262b' : '#ece5d7', margin: '0 2px' }} />
             <ToolbarButton
               label="Top"
-              icon="↑"
+              icon={
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
+                  <path d="M12 19V5" />
+                  <path d="m5 12 7-7 7 7" />
+                </svg>
+              }
               onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
               title="Jump back to the top of the board"
             />
             <ToolbarButton
               label="Hide"
-              icon="⨯"
+              icon={
+                <svg
+                  width="13"
+                  height="13"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2.2}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  xmlns="http://www.w3.org/2000/svg"
+                  style={{ display: 'block' }}
+                >
+                  <path d="M18 6 6 18" />
+                  <path d="m6 6 12 12" />
+                </svg>
+              }
               onClick={() => setToolbarHidden(true)}
-              title="Hide the toolbar while scrolling — a small tab stays top-right"
+              title="Hide the toolbar while scrolling; a small tab stays top-right"
             />
           </>
         )}
@@ -3409,13 +5055,117 @@ export default function FreeformCorkboard() {
         }
       />
 
+      {/* Staged braindump meter (draggable) — shown while any braindump extracts,
+          not just the wow. Streamed-card count, then edge/throughline wiring. */}
+      {edgesGenerating && (
+        <BraindumpMeter
+          aliveCount={Math.max(0, aliveEntities.length - cardCountAtSubmitRef.current)}
+          edgeCount={Math.max(0, edgeCountOf(data) - edgeCountAtSubmitRef.current)}
+          winPhase={winPhase}
+          winProg={winProg}
+          elapsedMs={winElapsed}
+        />
+      )}
+
+      {/* In-board zoom control — a small floating segmented control at the board's
+          bottom-right (the canonical canvas-zoom spot, reads as part of the board).
+          Discrete levels only; page scroll still pans. */}
+      <div
+        style={{
+          position: 'fixed', bottom: 20, right: 20, zIndex: 130,
+          display: 'flex', alignItems: 'center', gap: 2, padding: 3,
+          borderRadius: 10, userSelect: 'none',
+          background: dark ? 'rgba(20,21,26,0.92)' : 'rgba(255,255,255,0.94)',
+          border: `1px solid ${dark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.1)'}`,
+          boxShadow: '0 6px 20px rgba(0,0,0,0.28)',
+          fontFamily: 'system-ui, sans-serif', fontSize: 12, fontWeight: 600,
+        }}
+      >
+        {[0.25, 0.5, 0.75, 1].map((z) => {
+          const active = Math.abs(zoom - z) < 0.005;
+          return (
+            <button
+              key={z}
+              onClick={() => setZoom(z)}
+              title={`Zoom ${Math.round(z * 100)}%`}
+              style={{
+                border: 'none', cursor: 'pointer', borderRadius: 7,
+                padding: '5px 9px', minWidth: 40,
+                background: active ? '#ff6b35' : 'transparent',
+                color: active ? '#fff' : dark ? 'rgba(255,255,255,0.72)' : '#333',
+                fontWeight: active ? 800 : 600,
+              }}
+            >
+              {Math.round(z * 100)}%
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Top-of-page background-work toast — a peer answer still being woven in.
+          Reassures the writer that work is happening instead of a card sitting
+          silently on "extracting". */}
+      {bgProcessing && (
+        <div
+          style={{
+            position: 'fixed', top: 16, left: '50%', transform: 'translateX(-50%)',
+            zIndex: 9994, display: 'flex', alignItems: 'center', gap: 10,
+            padding: '9px 16px', borderRadius: 999,
+            background: dark ? 'rgba(20,21,26,0.96)' : 'rgba(255,255,255,0.97)',
+            border: dark ? '1px solid #2a2a30' : '1px solid #e2e8f0',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
+            fontFamily: 'system-ui, sans-serif', pointerEvents: 'none',
+          }}
+        >
+          <span
+            style={{
+              width: 13, height: 13, borderRadius: 999, flexShrink: 0,
+              border: '2px solid rgba(234,88,12,0.3)', borderTopColor: '#ea580c',
+              display: 'inline-block', animation: 'cb-spin 0.8s linear infinite',
+            }}
+          />
+          <span style={{ fontSize: 12.5, fontWeight: 600, color: dark ? '#e6e6ea' : '#333' }}>
+            {bgProcessingLabel}
+          </span>
+        </div>
+      )}
+
+      {/* FIL-506 — corkboard half of the wow (review sample → reveal → spotlight → peer). */}
+      <WowFlow
+        active={wowActive}
+        data={data}
+        braindumpPhase={braindumpPhase}
+        onPrefillSample={(text) => {
+          setBraindumpText(text);
+          setBraindumpOpen(true);
+        }}
+        onSetPanel={(open) => setRightPanelOpen(open)}
+        onOpenPanelSection={(id) => { setRightPanelOpen(true); setPanelForceSection(id); }}
+        onTourGate={setTourGate}
+        onHighlightTie={setWowTie}
+        onOpenSheet={(id) => setSheetCardId(id)}
+        sheetOpenId={sheetCardId}
+        expandedCardId={expandedCardId}
+        peerOpenCardId={peerForCardId}
+        submissionCount={submissionCount}
+        onComplete={completeWow}
+      />
+
       <div
         ref={canvasRef}
         onMouseDown={onCanvasMouseDown}
+        className="cb-noselect"
         style={{
           position: 'relative',
           width: canvasW,
           height: canvasH,
+          // In-board zoom: CSS `zoom` scales the whole board and its used size, so
+          // page scroll still pans and fixed chrome (toolbar/panels) is untouched.
+          zoom,
+          // Zoomed out, the shrunk board CENTERS in the viewport instead of
+          // hugging the left edge (auto margins compute on the zoomed layout
+          // size; coordinate math already reads rect.left, so drags stay exact).
+          margin: zoom < 0.999 ? '0 auto' : undefined,
           // The board surface — JUST the dot grid (subtle, scrolls with the
           // board). The lamp + vignette wash is global on the Shell and reads
           // through the board's transparent fill, so the gradient is seamless
@@ -3433,7 +5183,7 @@ export default function FreeformCorkboard() {
             ? 'none'
             : 'inset 0 1px 0 rgba(255,255,255,0.8), 0 1px 6px rgba(120,90,40,0.05)',
           overflow: 'hidden',
-          userSelect: draggingId ? 'none' : 'auto',
+          userSelect: 'none',
           cursor: draggingId ? 'grabbing' : 'default',
         }}
       >
@@ -3445,8 +5195,10 @@ export default function FreeformCorkboard() {
           height={canvasH}
           entities={aliveEntities}
           positions={positions}
-          edges={data.edges}
+          edges={gridActive ? { ...data.edges, precedes: [], sequence_precedes: [] } : data.edges}
           expandedCardId={expandedCardId}
+          hoveredCardId={hoveredCardId}
+          forcedTie={wowTie}
           expandedCardH={expandedCardH}
           focusMode={peerForCardId !== null}
           hiddenIds={ballEffects.hiddenIds}
@@ -3460,9 +5212,286 @@ export default function FreeformCorkboard() {
           onEditStructural={openStructuralEditor}
           arcThreadGeo={arcThreadGeo}
           backstorySplit={viewMode === 'throughline'}
+          sequenceBoxRects={new Map(ballEffects.sequenceBoxes.map((b) => [b.seqId, { x: b.x, y: b.y, w: b.w, h: b.h }]))}
         />
+        {/* Throughline grid — cosmetic reading-order chevrons in the gaps
+            between same-row neighbors. Non-interactive eye-guides only. */}
+        {ballEffects.gridArrows.length > 0 && (
+          <svg
+            width={canvasW}
+            height={canvasH}
+            style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none', zIndex: 0 }}
+          >
+            {ballEffects.gridArrows.map((a, i) => (
+              <path
+                key={`gridarrow-${i}`}
+                d={`M ${a.x - 3} ${a.y - 5} L ${a.x + 3} ${a.y} L ${a.x - 3} ${a.y + 5}`}
+                fill="none"
+                stroke={dark ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.28)'}
+                strokeWidth={2}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            ))}
+          </svg>
+        )}
+        {/* Throughline grid — sequence overlays draped over the cohesive wall:
+            a tinted region traced around each sequence's member cells (rows
+            fuse into one shape), name chip riding the top border. Renders
+            behind the cards; the chip opens the sequence's full sheet. */}
+        {ballEffects.gridSeqRegions.length > 0 && (
+          <svg
+            width={canvasW}
+            height={canvasH}
+            style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none', zIndex: 0 }}
+          >
+            {ballEffects.gridSeqRegions.map((g) => (
+              <path
+                key={`gridseq-${g.runKey}`}
+                d={gridRegionPath(g.spans)}
+                fill={hexToRgba(g.color, 0.05)}
+                stroke={hexToRgba(g.color, 0.45)}
+                strokeWidth={1.5}
+                strokeLinejoin="round"
+              />
+            ))}
+          </svg>
+        )}
+        {ballEffects.gridSeqRegions.filter((g) => g.labeled).map((g) => {
+          const hovered = hoveredSeqId === g.seqId;
+          const seqEnt = data.entities.find((e) => e.id === g.seqId);
+          const summary = (seqEnt?.summary ?? seqEnt?.description ?? '').trim();
+          const chipX = g.spans[0].x0 + 12;
+          const chipY = g.spans[0].y0 - 10;
+          return (
+            <React.Fragment key={`gridseqlbl-${g.seqId}`}>
+              <div
+                onClick={() => setSheetCardId(g.seqId)}
+                onMouseEnter={() => enterSeqHover(g.seqId)}
+                onMouseLeave={() => leaveSeqHover(g.seqId)}
+                title="Open the sequence"
+                style={{
+                  position: 'absolute', left: chipX, top: chipY,
+                  zIndex: 2, cursor: 'pointer', padding: '2px 9px', borderRadius: 999,
+                  fontSize: 10.5, fontWeight: 800, letterSpacing: 0.5,
+                  fontFamily: 'system-ui, sans-serif', whiteSpace: 'nowrap',
+                  maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis',
+                  background: dark ? '#141417' : '#fff',
+                  border: `1px solid ${hexToRgba(g.color, 0.55)}`,
+                  color: g.color,
+                }}
+              >
+                {g.name || 'Sequence'}
+              </div>
+              {/* Hover card — same header card the master container shows,
+                  dropped below the chip. */}
+              <div
+                onMouseEnter={() => enterSeqHover(g.seqId)}
+                onMouseLeave={() => leaveSeqHover(g.seqId)}
+                style={{
+                  position: 'absolute', left: chipX, top: chipY + 26,
+                  width: 250, zIndex: 33,
+                  background: dark ? '#1a1a1e' : '#fff',
+                  border: `1px solid ${hexToRgba(g.color, 0.4)}`, borderRadius: 10,
+                  padding: 12, boxShadow: '0 8px 28px rgba(0,0,0,0.22)',
+                  opacity: hovered ? 1 : 0,
+                  transform: hovered ? 'translateY(0)' : 'translateY(-6px)',
+                  pointerEvents: hovered ? 'auto' : 'none',
+                  transition: 'opacity 150ms ease, transform 150ms ease',
+                }}
+              >
+                <div style={{ fontSize: 9, letterSpacing: 0.6, textTransform: 'uppercase', color: g.color, fontWeight: 700, marginBottom: 4 }}>
+                  Sequence · {g.count} scene{g.count === 1 ? '' : 's'}
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: dark ? '#e6e6ea' : '#1a1a1a', marginBottom: summary ? 6 : 8, lineHeight: 1.3 }}>
+                  {g.name || 'Sequence'}
+                </div>
+                {summary && (
+                  <p style={{ fontSize: 11.5, lineHeight: 1.5, color: dark ? '#aeaeb6' : '#555', margin: '0 0 8px' }}>
+                    {summary.length > 170 ? summary.slice(0, 170) + '…' : summary}
+                  </p>
+                )}
+                <button
+                  onClick={() => setSheetCardId(g.seqId)}
+                  style={{
+                    height: 26, padding: '0 12px', borderRadius: 7, cursor: 'pointer',
+                    border: `1px solid ${hexToRgba(g.color, 0.5)}`, background: hexToRgba(g.color, 0.14),
+                    color: g.color, fontSize: 11.5, fontWeight: 600,
+                  }}
+                >
+                  Open ↗
+                </button>
+              </div>
+            </React.Fragment>
+          );
+        })}
+        {/* Sequence containers — the box wraps its freely-draggable member scenes
+            (events are the focus); the sequence shows as a minimal name label that
+            reveals a header on hover. Box renders behind the cards (DOM order). */}
+        {ballEffects.sequenceBoxes.map((b) => {
+          const seqEnt = data.entities.find((e) => e.id === b.seqId);
+          const hovered = hoveredSeqId === b.seqId;
+          // Suppress the box's grow/shrink transition during ANY live drag that
+          // moves it — the container drag (draggingSeqId) OR an individual member
+          // scene being dragged (draggingId ∈ members) — so the border tracks 1:1
+          // instead of trailing the cards and catching up at the end.
+          const memberDragging = !!draggingId && (data.edges?.contains ?? []).some((c) => c.from === b.seqId && c.to === draggingId);
+          const liveMove = draggingSeqId === b.seqId || memberDragging;
+          // Opaque tinted header bg (tint layered over a solid surface) so PRECEDES
+          // arrows passing behind the header don't show through it.
+          const headerBg = `linear-gradient(${hexToRgba(b.color, 0.18)}, ${hexToRgba(b.color, 0.18)}), ${theme === 'dark' ? '#1a1a1e' : '#fff'}`;
+          // Link-drag target: the box is the current drop target while dragging an
+          // arrow over it → highlight the border + a ring so the writer sees it.
+          const isLinkTarget = !!linkDrag?.moved && linkDrag.overCardId === b.seqId && linkDrag.fromCardId !== b.seqId;
+          const HEADER_W = 250;
+          const boardW = typeof window !== 'undefined' ? window.innerWidth : 1400;
+          const slideLeft = boardW - (b.x + b.w) < HEADER_W + 40;
+          const summary = (seqEnt?.summary ?? seqEnt?.description ?? '').trim();
+          const onEnter = () => enterSeqHover(b.seqId);
+          const onLeave = () => leaveSeqHover(b.seqId);
+          return (
+            <React.Fragment key={`seqbox-${b.seqId}`}>
+              <div
+                // Same anchor the member-less SequenceCompact card uses, so the
+                // wow tour's sequence beat resolves whether the sequence renders
+                // as a card or (once it has a member scene) as this container.
+                data-tour={`card-${b.seqId}`}
+                onMouseDown={b.collapsed ? undefined : (e) => onSeqContainerMouseDown(e, b.seqId)}
+                onMouseEnter={onEnter}
+                onMouseLeave={onLeave}
+                style={{
+                  position: 'absolute', left: b.x, top: b.y, width: b.w, height: b.h,
+                  border: `${isLinkTarget ? 2.5 : 1.5}px ${b.collapsed ? 'dashed' : 'solid'} ${hexToRgba(b.color, hovered || isLinkTarget || draggingSeqId === b.seqId ? 0.9 : 0.4)}`,
+                  borderRadius: 14, background: hexToRgba(b.color, isLinkTarget ? 0.14 : draggingSeqId === b.seqId ? 0.1 : 0.05),
+                  boxShadow: isLinkTarget ? `0 0 0 4px ${hexToRgba(b.color, 0.22)}` : undefined,
+                  // Expanded: the whole box is a drag surface (the dead area moves
+                  // the container); the member cards sit above it (higher z / later
+                  // in the DOM) so they stay interactive. Collapsed: click-through.
+                  pointerEvents: b.collapsed ? 'none' : 'auto',
+                  cursor: b.collapsed ? 'default' : 'move',
+                  zIndex: 0,
+                  // Entrance: scale up from the top-left so a sequence becoming a
+                  // container expands out of the card's spot instead of popping.
+                  // Plays once when the box element mounts (conversion / load).
+                  animation: b.collapsed ? undefined : 'cb-seqbox-in 260ms cubic-bezier(0.22,1,0.36,1)',
+                  transformOrigin: 'top left',
+                  // Grow/shrink in place on collapse/expand (top-left stays put), so
+                  // the container animates instead of popping. Suppressed while
+                  // dragging this box so the move tracks the cursor 1:1.
+                  transition: liveMove
+                    ? 'none'
+                    : 'width 220ms cubic-bezier(0.22,1,0.36,1), height 220ms cubic-bezier(0.22,1,0.36,1), left 220ms cubic-bezier(0.22,1,0.36,1), top 220ms cubic-bezier(0.22,1,0.36,1), border-color 140ms ease',
+                }}
+              />
+              {/* Border drag-strips — drag any edge to move the whole container.
+                  Only the ~10px edges are handles; the interior stays click-through
+                  so the member scene cards remain interactive. */}
+              {!b.collapsed && ([
+                { k: 't', x: b.x, y: b.y, w: b.w, h: 10 },
+                { k: 'b', x: b.x, y: b.y + b.h - 10, w: b.w, h: 10 },
+                { k: 'l', x: b.x, y: b.y, w: 10, h: b.h },
+                { k: 'r', x: b.x + b.w - 10, y: b.y, w: 10, h: b.h },
+              ]).map((s) => (
+                <div
+                  key={s.k}
+                  onMouseDown={(e) => onSeqContainerMouseDown(e, b.seqId)}
+                  style={{ position: 'absolute', left: s.x, top: s.y, width: s.w, height: s.h, cursor: 'move', zIndex: 1 }}
+                />
+              ))}
+              {/* Minimal label = drag handle (header text). Toggle stays a click;
+                  open the sheet from the hover header's "Open ↗". */}
+              <div
+                onMouseEnter={onEnter}
+                onMouseLeave={onLeave}
+                onMouseDown={(e) => onSeqContainerMouseDown(e, b.seqId)}
+                title="Drag to move the sequence"
+                style={{ position: 'absolute', left: b.x + 10, top: b.y + 6, zIndex: 32, display: 'flex', alignItems: 'center', gap: 6, cursor: 'move' }}
+              >
+                <button
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={() => setSequenceCollapsed((c) => ({ ...c, [b.seqId]: !b.collapsed }))}
+                  title={b.collapsed ? 'Expand sequence' : 'Collapse sequence'}
+                  style={{
+                    height: 20, minWidth: 20, padding: '0 5px', borderRadius: 6,
+                    border: `1px solid ${hexToRgba(b.color, 0.4)}`, background: headerBg,
+                    color: b.color, fontSize: 11, fontWeight: 700, lineHeight: 1, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3,
+                  }}
+                >
+                  {b.collapsed ? `▸ ${b.count}` : '▾'}
+                </button>
+                <span
+                  style={{
+                    maxWidth: 220, height: 20, padding: '0 8px', borderRadius: 6,
+                    background: headerBg, color: b.color,
+                    fontSize: 11, fontWeight: 600, lineHeight: '20px',
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                    display: 'inline-block', userSelect: 'none',
+                  }}
+                >
+                  {b.name || 'Sequence'}
+                </span>
+                <button
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={() => setSheetCardId(b.seqId)}
+                  title="Open full sequence card"
+                  style={{
+                    height: 20, width: 22, borderRadius: 6,
+                    border: `1px solid ${hexToRgba(b.color, 0.4)}`, background: headerBg,
+                    color: b.color, fontSize: 12, fontWeight: 700, lineHeight: 1, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                >
+                  ↗
+                </button>
+              </div>
+              {/* Hover header — slides out to the side with available space. */}
+              <div
+                onMouseEnter={onEnter}
+                onMouseLeave={onLeave}
+                style={{
+                  position: 'absolute', top: b.y,
+                  left: slideLeft ? b.x - HEADER_W - 10 : b.x + b.w + 10,
+                  width: HEADER_W, zIndex: 33,
+                  background: dark ? '#1a1a1e' : '#fff',
+                  border: `1px solid ${hexToRgba(b.color, 0.4)}`, borderRadius: 10,
+                  padding: 12, boxShadow: '0 8px 28px rgba(0,0,0,0.22)',
+                  opacity: hovered ? 1 : 0,
+                  transform: hovered ? 'translateX(0)' : `translateX(${slideLeft ? 8 : -8}px)`,
+                  pointerEvents: hovered ? 'auto' : 'none',
+                  transition: 'opacity 150ms ease, transform 150ms ease',
+                }}
+              >
+                <div style={{ fontSize: 9, letterSpacing: 0.6, textTransform: 'uppercase', color: b.color, fontWeight: 700, marginBottom: 4 }}>
+                  Sequence · {b.count} scene{b.count === 1 ? '' : 's'}
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: dark ? '#e6e6ea' : '#1a1a1a', marginBottom: summary ? 6 : 8, lineHeight: 1.3 }}>
+                  {b.name || 'Sequence'}
+                </div>
+                {summary && (
+                  <p style={{ fontSize: 11.5, lineHeight: 1.5, color: dark ? '#aeaeb6' : '#555', margin: '0 0 8px' }}>
+                    {summary.length > 170 ? summary.slice(0, 170) + '…' : summary}
+                  </p>
+                )}
+                <button
+                  onClick={() => setSheetCardId(b.seqId)}
+                  style={{
+                    height: 26, padding: '0 12px', borderRadius: 7, cursor: 'pointer',
+                    border: `1px solid ${hexToRgba(b.color, 0.5)}`, background: hexToRgba(b.color, 0.14),
+                    color: b.color, fontSize: 11.5, fontWeight: 600,
+                  }}
+                >
+                  Open ↗
+                </button>
+              </div>
+            </React.Fragment>
+          );
+        })}
         {aliveEntities.map((entity) => {
           if (ballEffects.hiddenIds.has(entity.id)) return null;
+          // A sequence that owns scenes is a container: the full card is replaced
+          // by the minimal name label rendered in the box layer above.
+          if (ballEffects.minimizedSeqIds.has(entity.id)) return null;
           // Reified relationships render at the midpoint of their two
           // characters (tracking them), not at a stored position.
           const relMid = relMidpoints.get(entity.id);
@@ -3482,7 +5511,7 @@ export default function FreeformCorkboard() {
           } else if (arcBall) {
             // Center the ball (or, when expanded, the card) on the thread anchor.
             // While scrolling it's a small dot; at rest, the labeled pill.
-            const compactBall = arcsMoving && !expanded;
+            const compactBall = (arcsMoving || !!draggingId || !!draggingSeqId) && !expanded;
             const bw = expanded ? EXPANDED_W : compactBall ? ARC_DOT : ARC_BALL_W;
             const bh = expanded ? (expandedCardH > 0 ? expandedCardH : 200) : compactBall ? ARC_DOT : ARC_BALL_H;
             renderPos = { x: arcBall.pos.x - bw / 2, y: arcBall.pos.y - bh / 2 };
@@ -3517,12 +5546,23 @@ export default function FreeformCorkboard() {
               auth={auth}
               projectId={storyId}
               completedResponseIds={completedResponseIds}
-              animatePosition={!!(override || displacement || relMid || arcBall || peerClear.has(entity.id) || (isFocalCard && peerFocusPos) || focusExiting)}
+              animatePosition={!!(override || displacement || relMid || (arcBall && !draggingId && !draggingSeqId) || peerClear.has(entity.id) || (isFocalCard && peerFocusPos) || focusExiting)}
               ballColor={arcBall?.color}
-              ballCompact={!!arcBall && arcsMoving && !expanded}
-              onMouseDown={(e) => onCardMouseDown(e, entity.id)}
+              ballCompact={!!arcBall && (arcsMoving || !!draggingId || !!draggingSeqId) && !expanded}
+              processing={edgesGenerating && !expanded}
+              onMouseDown={(e) => { if (tourBlocks('expand')) return; onCardMouseDown(e, entity.id); }}
+              sceneNo={entity.type === 'event' ? sceneNoById.get(entity.id) : undefined}
+              onHoverChange={
+                entity.type === 'character'
+                  ? (hovering) => setHoveredCardId((cur) => (hovering ? entity.id : cur === entity.id ? null : cur))
+                  : undefined
+              }
               onLinkHandleMouseDown={
-                entity.type === 'event'
+                // The grid wall is about the order that's already set — no
+                // drag-to-connect there (write PRECEDES from column/master).
+                tourGate.active || gridActive
+                  ? undefined
+                  : entity.type === 'event' || entity.type === 'character'
                   ? (e) => onLinkHandleMouseDown(e, entity.id)
                   : undefined
               }
@@ -3543,12 +5583,12 @@ export default function FreeformCorkboard() {
                         ev.event_id === entity.id && ev.arc_id === highlightedArcId,
                     )))
               }
-              onAskPeer={() => setPeerForCardId(entity.id)}
-              onOpenSheet={() => setSheetCardId(entity.id)}
-              onDelete={() => onDeleteCard(entity.id)}
-              onRename={(newName) => onRenameCard(entity.id, newName)}
-              onUpdateDescription={(d) => onUpdateDescription(entity.id, d)}
-              onChangeNarrativeStatus={(next) => onChangeNarrativeStatus(entity.id, next)}
+              onAskPeer={() => { if (tourBlocks('ask')) return; setPeerForCardId(entity.id); }}
+              onOpenSheet={() => { if (tourBlocks('fullcard')) return; setSheetCardId(entity.id); }}
+              onDelete={() => { if (tourGate.active) return; onDeleteCard(entity.id); }}
+              onRename={(newName) => { if (tourGate.active) return Promise.resolve(); return onRenameCard(entity.id, newName); }}
+              onUpdateDescription={(d) => { if (tourGate.active) return Promise.resolve(); return onUpdateDescription(entity.id, d); }}
+              onChangeNarrativeStatus={(next) => { if (tourGate.active) return; onChangeNarrativeStatus(entity.id, next); }}
               onQuestionsChanged={() => refreshCardQuestions(entity.id)}
               cardRef={(el) => {
                 cardRefs.current[entity.id] = el;
@@ -3578,14 +5618,14 @@ export default function FreeformCorkboard() {
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
               <span style={{ fontSize: 9, letterSpacing: 0.5, textTransform: 'uppercase', color: '#94a3b8', fontWeight: 600 }}>
-                Edit tie
+                {editStructural.isNew ? 'Label this tie' : 'Edit tie'}
               </span>
               <button onClick={closeStructuralEditor} style={{ border: 'none', background: 'none', cursor: 'pointer', color: dark ? '#63636d' : '#bbb', fontSize: 14, lineHeight: 1, padding: 0 }}>✕</button>
             </div>
             <input
               value={structDraft}
               onChange={(e) => setStructDraft(e.target.value)}
-              placeholder="predicate (e.g. mentor of)"
+              placeholder="e.g. mentor of, rival, sibling"
               autoFocus
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && structDraft.trim() && !structBusy) {
@@ -3683,9 +5723,30 @@ export default function FreeformCorkboard() {
             completedResponseIds={completedResponseIds}
             onCardQuestionsChanged={() => refreshCardQuestions(peerEntity.id)}
             onCascadeFallbackRefresh={() => refreshEntitiesRef.current()}
+            onResponseSubmitted={() => { setSubmissionCount((c) => c + 1); setPendingCascades((c) => c + 1); }}
           />
         )}
       </div>
+
+      {/* Link-action toast — confirms drag-to-connect actions that leave no
+          connector on the board (cast adds, structural ties), and surfaces link
+          errors. Bottom-center, auto-clears. */}
+      {(linkNotice || linkError) && (
+        <div
+          style={{
+            position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+            zIndex: 160, padding: '10px 16px', borderRadius: 10,
+            background: linkError ? (theme === 'dark' ? '#3a1d1d' : '#fee2e2') : (theme === 'dark' ? '#1c2a1f' : '#ecfdf3'),
+            color: linkError ? (theme === 'dark' ? '#fca5a5' : '#b91c1c') : (theme === 'dark' ? '#86efac' : '#15803d'),
+            border: `1px solid ${linkError ? (theme === 'dark' ? '#7f1d1d' : '#fecaca') : (theme === 'dark' ? '#2f5e2f' : '#bbf7d0')}`,
+            fontSize: 13, fontWeight: 600, boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+            maxWidth: 440, textAlign: 'center',
+          }}
+          onClick={() => { setLinkNotice(null); setLinkError(null); }}
+        >
+          {linkError ?? linkNotice}
+        </div>
+      )}
 
       {/* Cascade toasts — top-right, stacked. z-index keeps them above
           canvas/peer but below the sheet overlay. Arc suggestions used to
@@ -3736,6 +5797,7 @@ export default function FreeformCorkboard() {
           onOpenCard={(cardId) => setSheetCardId(cardId)}
           onEntitiesChanged={refreshEntities}
           onClose={() => setRightPanelOpen(false)}
+          openSection={panelForceSection}
         />
       )}
 
@@ -3782,6 +5844,43 @@ export default function FreeformCorkboard() {
               )}
               onClose={cascadeState.closeSummaryPanel}
             />
+          </div>
+        </div>
+      )}
+
+      {/* Script-drop overlay — shown while a file is dragged over the board.
+          pointer-events:none so the drop still reaches the window handler. */}
+      {scriptDragOver && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 300, pointerEvents: 'none',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: dark ? 'rgba(10,10,12,0.72)' : 'rgba(250,250,250,0.78)',
+            backdropFilter: 'blur(2px)', WebkitBackdropFilter: 'blur(2px)',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14,
+              padding: '40px 56px', borderRadius: 18,
+              border: `2px dashed ${hexToRgba('#ff6b35', 0.7)}`,
+              background: dark ? 'rgba(23,23,27,0.85)' : 'rgba(255,255,255,0.9)',
+              boxShadow: `0 0 60px ${hexToRgba('#ff6b35', 0.18)}`,
+              textAlign: 'center', fontFamily: 'system-ui, sans-serif',
+            }}
+          >
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#ff6b35" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg">
+              <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2Z" />
+              <path d="M14 2v6h6" />
+              <path d="M12 18v-6" />
+              <path d="m9 15 3-3 3 3" />
+            </svg>
+            <div style={{ fontSize: 17, fontWeight: 600, color: dark ? '#ededf1' : '#1d2230' }}>
+              Drop your screenplay
+            </div>
+            <div style={{ fontSize: 12.5, color: dark ? '#9a9aa4' : '#777', maxWidth: 280, lineHeight: 1.5 }}>
+              We’ll read the PDF and extract its scenes, characters, and locations into cards.
+            </div>
           </div>
         </div>
       )}
@@ -4051,6 +6150,23 @@ export default function FreeformCorkboard() {
               onClose={() => setSheetCardId(null)}
               onUpdateDescription={(d) => onUpdateDescription(sheetCardId, d)}
               onEntitiesChanged={refreshEntities}
+            />
+          );
+        }
+        if (e.type === 'sequence') {
+          return (
+            <SequenceSheet
+              key={sheetCardId}
+              entity={e}
+              allEntities={data.entities}
+              edges={data.edges}
+              auth={auth}
+              projectId={storyId}
+              completedResponseIds={completedResponseIds}
+              onClose={() => setSheetCardId(null)}
+              onEntitiesChanged={refreshEntities}
+              onOpenCard={(cardId) => setSheetCardId(cardId)}
+              onUpdateDescription={(d) => onUpdateDescription(sheetCardId, d)}
             />
           );
         }

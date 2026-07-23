@@ -16,9 +16,29 @@ export const REL_COLLAPSED_H = 26;
 
 export const REL_BALL_COLOR = '#dc2626';
 
-export const COL_GAP = 60;
+// Characters collapse to a NAME PILL (constellation-node look) instead of a full
+// card: same drag/collision/expansion machinery, just a smaller default shape.
+// Long names wrap, so the pill can grow past CHAR_PILL_H (it's a minHeight),
+// same approximation the rel/arc balls already make.
+export const CHAR_PILL_W = 168;
 
-export const ROW_GAP = 24;
+export const CHAR_PILL_H = 44;
+
+// Events are title-forward notecards — wider than the generic card so the
+// bigger title breathes (height unchanged; content is SC no + title only).
+export const EVENT_CARD_W = 300;
+
+// Collapsed footprint by entity type — geometry consumers (connectors, hit
+// tests, collision/displacement, auto-layout) use this instead of assuming
+// every collapsed card is COLLAPSED_W × COLLAPSED_H.
+export const collapsedSizeOf = (type?: string): { w: number; h: number } =>
+  type === 'character' ? { w: CHAR_PILL_W, h: CHAR_PILL_H }
+  : type === 'event' ? { w: EVENT_CARD_W, h: COLLAPSED_H }
+  : { w: COLLAPSED_W, h: COLLAPSED_H };
+
+export const COL_GAP = 120;
+
+export const ROW_GAP = 48;
 
 export const CANVAS_PAD = 24;
 

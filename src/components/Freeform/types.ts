@@ -4,7 +4,7 @@
 // Mirror the backend extraction schema in freeform-workflow-app/lib/schemas/.
 // Keep in sync if those evolve.
 
-export type EntityType = 'character' | 'event' | 'relationship' | 'location' | 'information' | 'arc';
+export type EntityType = 'character' | 'event' | 'relationship' | 'location' | 'information' | 'arc' | 'sequence';
 
 export type NarrativeStatus = 'on_screen' | 'backstory' | 'offstage';
 export type IntExt = 'INT' | 'EXT' | 'UNKNOWN';

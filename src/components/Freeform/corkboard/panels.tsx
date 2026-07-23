@@ -27,6 +27,53 @@ import { BallChip } from './toolbar';
 
 export const INFO_ACCENT = '#0891b2'; // cyan — the Information layer's accent
 
+// InfoHint: a small "i" affordance on a panel-section header that reveals an
+// explanatory tooltip on hover. Tooltip styling is lifted from the canvas
+// floating-button tooltips (CanvasToolbar.tsx): glassy dark panel, 8px radius,
+// 11px copy, soft shadow. Theme-aware so light mode isn't black-on-white.
+function InfoHint({ text, dark, accent }: { text: string; dark: boolean; accent: string }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div
+      style={{ position: 'relative', flexShrink: 0, display: 'flex', alignItems: 'center', marginRight: 16 }}
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+    >
+      <span
+        aria-label="About this section"
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          width: 15, height: 15, borderRadius: '50%', boxSizing: 'border-box',
+          border: `1px solid ${show ? accent : dark ? '#4a4a52' : '#ccc'}`,
+          color: show ? accent : dark ? '#82828c' : '#999',
+          fontSize: 9.5, fontWeight: 700, fontStyle: 'italic',
+          fontFamily: 'Georgia, "Times New Roman", serif', lineHeight: 1,
+          cursor: 'help', transition: 'color 120ms, border-color 120ms',
+        }}
+      >
+        i
+      </span>
+      {show && (
+        <div
+          style={{
+            position: 'absolute', top: '100%', right: 0, marginTop: 8,
+            padding: '0.6rem 0.75rem',
+            background: dark ? 'rgba(20, 20, 26, 0.98)' : 'rgba(255, 255, 255, 0.99)',
+            border: `1px solid ${dark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'}`,
+            borderRadius: 8, fontSize: 11,
+            color: dark ? 'rgba(255, 255, 255, 0.7)' : '#555',
+            width: 230, lineHeight: 1.5,
+            boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)',
+            pointerEvents: 'none', zIndex: 20,
+          }}
+        >
+          {text}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function RightPanel({
   information,
   suggestions,
@@ -42,6 +89,7 @@ export function RightPanel({
   onOpenCard,
   onEntitiesChanged,
   onClose,
+  openSection,
 }: {
   information: ProjectInformation[];
   suggestions: ArcSuggestion[];
@@ -58,6 +106,9 @@ export function RightPanel({
   onOpenCard: (cardId: string) => void;
   onEntitiesChanged: () => void;
   onClose: () => void;
+  /** When set, force-expand this section (e.g. the wow tour bringing the
+   *  Information section open as it walks to it). */
+  openSection?: string | null;
 }) {
   const dark = useThemeMode() === 'dark';
   useEffect(() => {
@@ -70,6 +121,11 @@ export function RightPanel({
   // collapsed (showing just their count summary).
   const [open, setOpen] = useState<Record<string, boolean>>({ suggestions: true });
   const toggle = (id: string) => setOpen((o) => ({ ...o, [id]: !o[id] }));
+  // Force-expand a section on request (the wow tour expands Information as it
+  // walks to it). One-shot per value change; the writer can collapse it after.
+  useEffect(() => {
+    if (openSection) setOpen((o) => ({ ...o, [openSection]: true }));
+  }, [openSection]);
 
   // Braindumps log — fetched once when the panel opens. Read-only history of
   // every extraction source (braindumps + committed peer responses).
@@ -78,7 +134,9 @@ export function RightPanel({
     if (!auth || !projectId) return;
     let cancelled = false;
     listBraindumps({ projectId }, auth.token)
-      .then((res) => { if (!cancelled) setBraindumps(res.braindumps); })
+      // Scratch generations (script editor tail extractions) are provenance,
+      // not writer braindumps — keep this log to true braindumps.
+      .then((res) => { if (!cancelled) setBraindumps(res.braindumps.filter((b) => !b.braindumpId.startsWith('scratch_'))); })
       .catch((err) => {
         console.warn('[panel] list-braindumps failed', err);
         if (!cancelled) setBraindumps([]);
@@ -92,22 +150,25 @@ export function RightPanel({
     return e?.working_title ?? e?.working_name ?? 'a scene';
   };
 
-  const section = (id: string, label: string, count: number, accent: string, body: React.ReactNode) => {
+  const section = (id: string, label: string, count: number, accent: string, body: React.ReactNode, hint?: string) => {
     const isOpen = !!open[id];
     return (
-      <div style={{ borderBottom: dark ? '1px solid #26262b' : '1px solid #f0f0f0' }}>
-        <button
-          onClick={() => toggle(id)}
-          style={{
-            width: '100%', display: 'flex', alignItems: 'center', gap: 8,
-            padding: '13px 18px', background: 'transparent', border: 'none',
-            cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit',
-          }}
-        >
-          <span style={{ fontSize: 10, color: dark ? '#63636d' : '#bbb', width: 10 }}>{isOpen ? '▾' : '▸'}</span>
-          <span style={{ fontSize: 10, letterSpacing: 0.6, textTransform: 'uppercase', color: accent, fontWeight: 700 }}>{label}</span>
-          <span style={{ fontSize: 12, color: dark ? '#6e6e78' : '#aaa' }}>{count}</span>
-        </button>
+      <div data-tour={`panel-${id}`} style={{ borderBottom: dark ? '1px solid #26262b' : '1px solid #f0f0f0' }}>
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <button
+            onClick={() => toggle(id)}
+            style={{
+              flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8,
+              padding: '13px 18px', background: 'transparent', border: 'none',
+              cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit',
+            }}
+          >
+            <span style={{ fontSize: 10, color: dark ? '#63636d' : '#bbb', width: 10 }}>{isOpen ? '▾' : '▸'}</span>
+            <span style={{ fontSize: 10, letterSpacing: 0.6, textTransform: 'uppercase', color: accent, fontWeight: 700 }}>{label}</span>
+            <span style={{ fontSize: 12, color: dark ? '#6e6e78' : '#aaa' }}>{count}</span>
+          </button>
+          {hint && <InfoHint text={hint} dark={dark} accent={accent} />}
+        </div>
         {isOpen && <div style={{ padding: '0 18px 14px' }}>{body}</div>}
       </div>
     );
@@ -145,6 +206,7 @@ export function RightPanel({
                     onDismiss={() => onDismissSuggestion(sug.suggestionId)}
                   />
                 )),
+            'Recurring thematic threads the system spots across your braindumps. Accept one to turn it into an Arc card, or dismiss it so it won’t resurface.',
           )}
 
           {section('information', 'Information', information.length, INFO_ACCENT,
@@ -161,6 +223,7 @@ export function RightPanel({
                     onChanged={onEntitiesChanged}
                   />
                 )),
+            'Facts established in the story and who knows them. Extracted from braindumps and scenes; edit or hard-delete a fact here.',
           )}
 
           {section('arcs', 'Arcs', arcs.length, arcColor,
@@ -175,6 +238,7 @@ export function RightPanel({
                     onOpenSheet={() => onOpenCard(arc.id)}
                   />
                 )),
+            'Every arc in the project, with its kind, derived status, and a jump to its full sheet. Arcs also appear on the canvas as threads woven through the scenes they evoke.',
           )}
 
           {section('locations', 'Locations', locations.length, getEntityColor('location'),
@@ -188,6 +252,7 @@ export function RightPanel({
                     onOpenSheet={() => onOpenCard(loc.id)}
                   />
                 )),
+            'Places scenes occur in, with how many scenes use each.',
           )}
 
           {section('braindumps', 'Braindumps', braindumps?.length ?? 0, '#8b8b96',
@@ -196,6 +261,7 @@ export function RightPanel({
               : braindumps.length === 0
               ? empty('No braindumps yet — open the Braindump dock in the toolbar and process one.')
               : braindumps.map((bd) => <BraindumpRow key={bd.id} entry={bd} />),
+            'A read-only log of every extraction source (braindumps and committed peer responses), newest first. Click an entry to expand its full text.',
           )}
         </div>
       </div>
