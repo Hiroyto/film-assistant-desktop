@@ -19,6 +19,10 @@ const windowsSign =
       }
     : {};
 
+// Entitlements do hardened runtime (JIT do V8 + .node nativo do better-sqlite3
+// fora do asar). Sem eles o app ASSINADO crasha no boot / não abre o SQLite.
+const MAC_ENTITLEMENTS = path.join(__dirname, 'build-resources', 'entitlements.mac.plist');
+
 // macOS signing + notarization (@electron/notarize) — via env.
 const macOSSign =
   process.env.APPLE_IDENTITY
@@ -26,7 +30,10 @@ const macOSSign =
         osxSign: {
           identity: process.env.APPLE_IDENTITY,
           // JIT do V8 exige entitlements de hardened runtime adequados (AD-06).
-          optionsForFile: () => ({ hardenedRuntime: true }),
+          optionsForFile: () => ({
+            hardenedRuntime: true,
+            entitlements: MAC_ENTITLEMENTS,
+          }),
         },
         osxNotarize: process.env.APPLE_ID
           ? {
@@ -53,6 +60,7 @@ module.exports = {
       /^\/shell\/tsconfig\.json$/,
       /^\/amplify\//,
       /^\/public\//,
+      /^\/build-resources\//, // entitlements — usados na assinatura, não vão no app
       /^\/_reversa_sdd\//,
       /^\/my-app\//,
       /^\/\.env$/,

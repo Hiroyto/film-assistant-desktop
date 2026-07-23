@@ -5,6 +5,20 @@
 /.pnp
 .pnp.js
 
+# ── Material de assinatura de código (NUNCA versionar) ───────────────────────
+# Chaves/certs gerados no setup do Apple Developer (ver RELEASE.md) e do
+# Authenticode. Vão para GitHub Secrets, jamais para o repo.
+*.p12
+*.pfx
+*.cer
+*.csr
+*.pem
+*.p8
+*.mobileprovision
+*.keychain
+*.keychain-db
+*.p12.base64
+
 # testing
 /coverage
 
