@@ -136,7 +136,10 @@ export function computeCardSignals(data: ListProjectEntitiesResponse | null): Re
     fSig.structuralCount = (fSig.structuralCount ?? 0) + 1;
     tSig.structuralCount = (tSig.structuralCount ?? 0) + 1;
     (fSig.structuralPreds ??= []).push(s.predicate);
-    (tSig.structuralPreds ??= []).push(s.predicate);
+    // The to-side reads its OWN side of the fact (dual-wording convention):
+    // Mabel shows 'created_by Leah', not 'creator_of'. Legacy edges without
+    // an inverse fall back to the forward wording.
+    (tSig.structuralPreds ??= []).push(s.inverse_predicate || s.predicate);
     (fSig.structuralPeers ??= []).push(toEnt.working_name ?? toEnt.id);
     (tSig.structuralPeers ??= []).push(fromEnt.working_name ?? fromEnt.id);
   }

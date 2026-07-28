@@ -488,7 +488,12 @@ const ScriptEditor: React.FC<ScriptEditorProps> = ({
         </div>
 
         <div className={`screenplay-content-area ${themeClass}`} style={{ flex: 1, minHeight: 0 }}>
-          {activeEditor && <SluglineAutoFill editor={activeEditor} />}
+          {activeEditor && (
+            <SluglineAutoFill
+              editor={activeEditor}
+              getEditors={getAllEditorsForAutofill}
+            />
+          )}
           {activeEditor && (
             <CharacterAutoFill
               editor={activeEditor}
@@ -584,4 +589,4 @@ const ScriptEditor: React.FC<ScriptEditorProps> = ({
   );
 };
 
-export default ScriptEditor;
+export default ScriptEditor;

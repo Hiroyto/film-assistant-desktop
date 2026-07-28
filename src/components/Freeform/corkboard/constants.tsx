@@ -46,7 +46,7 @@ export const DRAG_THRESHOLD_PX = 4;
 
 export const PEER_CARD_W = 760;
 
-export const PEER_PROSE_COL_W = 280;
+export const PEER_PROSE_COL_W = 360;
 
 export const PEER_GAP = 24;
 

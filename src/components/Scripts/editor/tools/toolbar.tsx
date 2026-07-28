@@ -104,12 +104,14 @@ const Toolbar: React.FC<ToolbarProps> = ({
 
   const activeLineType = getActiveLineType(editor);
 
+  // FD element order — matches the Cmd/Ctrl+1..6 direct shortcuts:
+  //   1 slugline · 2 action · 3 character · 4 parenthetical · 5 dialogue · 6 transition
   const formatOptions: FormatOption[] = [
     { type: "scene", label: "slugline", icon: <FileText size={14} /> },
     { type: "description", label: "action", icon: <AlignLeft size={14} /> },
     { type: "character", label: "character", icon: <Type size={14} /> },
-    { type: "dialogue", label: "dialogue", icon: <Type size={14} /> },
     { type: "parenthetical", label: "parenthetical", icon: <Type size={14} /> },
+    { type: "dialogue", label: "dialogue", icon: <Type size={14} /> },
     { type: "transition", label: "transition", icon: <AlignLeft size={14} /> },
   ];
 
@@ -343,4 +345,4 @@ const Toolbar: React.FC<ToolbarProps> = ({
   );
 };
 
-export default Toolbar;
+export default Toolbar;

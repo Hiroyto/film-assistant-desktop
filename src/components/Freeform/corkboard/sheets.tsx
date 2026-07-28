@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { getEntityColor, hexToRgba } from '../../../components/Freeform/entityColors';
 import { PEER_BLUE } from '../../../components/Freeform/tokens';
+import { queueEditGlobal } from '../../../lib/storySession';
 import { listCardQuestions, setSequenceColor, tagCauses, tagEventInvolvesCharacter, tagEventOccursIn, tagSequenceContains, untagCauses, untagEventInvolvesCharacter, untagEventOccursIn, untagSequenceContains, updateArc, updateCardDescription, updateEventSubEvents, updateRelationshipKind, type ArcKind, type NarrativeStatus, type PersistedQuestion, type ProjectEdges, type ProjectEntity, type ProjectInformation, type SubEvent } from '../../../lib/freeformApi';
 import { BentoSheet, buildArcBentoLayout, buildCharacterBentoLayout, buildEventBentoLayout, buildRelationshipBentoLayout, buildSequenceBentoLayout, type SectionTileDef } from './bento';
 import { EditableDescription, EditableName, NarrativeStatusToggle } from './cards';
@@ -213,7 +214,11 @@ export function CharacterSheet({
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {reifiedRels.map((rel) => {
-            const other = rel.character_a === charName ? rel.character_b : rel.character_a;
+            const isA = rel.character_a === charName;
+            const other = isA ? rel.character_b : rel.character_a;
+            // The OTHER side's role, shown when the bond is asymmetric —
+            // reads as "Mabel (ward)" from Leah's sheet.
+            const otherRole = (rel.role_a !== rel.role_b) ? (isA ? rel.role_b : rel.role_a) : '';
             return (
               <div
                 key={rel.id}
@@ -222,7 +227,10 @@ export function CharacterSheet({
                 style={{ cursor: 'pointer', padding: '7px 9px', border: dark ? '1px solid #2a2a30' : '1px solid #eee', borderRadius: 6, background: dark ? '#1a1a1e' : '#fff' }}
               >
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 13, color: dark ? '#e6e6ea' : '#1a1a1a', fontWeight: 500 }}>{other ?? '?'}</span>
+                  <span style={{ fontSize: 13, color: dark ? '#e6e6ea' : '#1a1a1a', fontWeight: 500 }}>
+                    {other ?? '?'}
+                    {otherRole && <span style={{ fontWeight: 400, color: dark ? '#82828c' : '#888' }}> ({String(otherRole).replace(/_/g, ' ')})</span>}
+                  </span>
                   {rel.kind && (
                     <span style={{ fontSize: 9, letterSpacing: 0.4, textTransform: 'uppercase', color: getEntityColor('relationship'), background: hexToRgba(getEntityColor('relationship'), 0.12), padding: '1px 6px', borderRadius: 8 }}>
                       {String(rel.kind).replace(/_/g, ' ')}
@@ -814,9 +822,14 @@ export function EventSheet({
             placeholder="Add a summary…"
             style={{ marginBottom: 8 }}
             onSave={(d) =>
-              updateCardDescription({ cardId: entity.id, projectId, description: d }, auth.token).then(
-                () => onEntitiesChanged(),
-              )
+              updateCardDescription({ cardId: entity.id, projectId, description: d }, auth.token)
+                .then(() => onEntitiesChanged())
+                .catch((err) => {
+                  // FIL-518 stage 3: failed push queues for durable retry
+                  // instead of silently dropping the writer's summary.
+                  queueEditGlobal(projectId, { cardId: entity.id, field: 'description', value: d });
+                  console.warn('[sheets] summary push failed; queued for retry', err);
+                })
             }
           />
           {entity.evidence_quote && (
@@ -883,6 +896,8 @@ export function EventSheet({
             willDelete:
               !(i.established_in_event_ids ?? []).some((eid) => eid !== entity.id) &&
               !(edges.knowledge ?? []).some((k) => k.info_id === i.id),
+            superseded: Boolean((i as any).superseded_by_pages),
+            supersededNote: String((i as any).drift_note ?? ''),
           }))}
           accent="#64748b"
           onChanged={onEntitiesChanged}
@@ -1703,11 +1718,21 @@ export function RelationshipSheet({
             RELATIONSHIP
           </span>
           <span style={{ fontSize: 22, fontWeight: 500, color: dark ? '#e6e6ea' : '#1a1a1a', lineHeight: 1 }}>
-            {charA} ↔ {charB}
+            {/* Roles render per endpoint when the bond is asymmetric (the
+                2026-07-25 convention: kind = bond noun, roles = who is what). */}
+            {charA}
+            {entity.role_a && entity.role_a !== entity.role_b && (
+              <span style={{ fontSize: 12, color: dark ? '#82828c' : '#888' }}> ({String(entity.role_a).replace(/_/g, ' ')})</span>
+            )}
+            {' ↔ '}
+            {charB}
+            {entity.role_b && entity.role_a !== entity.role_b && (
+              <span style={{ fontSize: 12, color: dark ? '#82828c' : '#888' }}> ({String(entity.role_b).replace(/_/g, ' ')})</span>
+            )}
           </span>
           {entity.kind && (
             <span style={{ fontSize: 11, color: dark ? '#82828c' : '#888', fontStyle: 'italic' }}>
-              {entity.kind}
+              {String(entity.kind).replace(/_/g, ' ')}
             </span>
           )}
         </div>
