@@ -11,6 +11,7 @@ export interface SyncEvents {
   'sync.entry.succeeded': { entryId: string; entityType: string };
   'sync.entry.failed': { entryId: string; reason: string; attempts: number };
   'sync.conflict': { entityType: string; entityId: string; snapshotId?: string };
+  'sync.conflict.resolved': { entityType: string; entityId: string };
   'sync.applied': { entityType: string; entityId: string };
   'sync.initial_pull.completed': { userId: string };
 }

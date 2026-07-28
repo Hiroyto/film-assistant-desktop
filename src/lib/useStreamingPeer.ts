@@ -1,9 +1,12 @@
 // lib/useStreamingPeer.ts
 //
-// FIL-477 / A2 — Subscribes to the WS for peer-first-pass streaming events
-// scoped by clientRequestId. Same WS endpoint as useCascadeEvents but a
-// separate subscription (parallel hooks, parallel connections — consolidate
-// to a single bus in v2 if connection count becomes an issue).
+// FIL-477 / A2 — Subscribes to peer-first-pass streaming events scoped by
+// clientRequestId, riding THE story session's WebSocket (storySession.ts).
+// This hook used to open its own socket per peer card; that made every ask
+// race its own identify write (worked-once-then-hangs), doubled the
+// connections table, and had no reconnect. The session socket is open and
+// identified long before any ask, reconnects with backoff, and the session
+// forwards projectId-less peer events to onMessage subscribers.
 //
 // Event vocabulary from lib/peer.mjs:
 //   - prose_start          → TTFT
@@ -18,6 +21,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PeerCardState, PeerQuestion } from '../components/Freeform';
+import { acquireStorySession, type StorySessionHandle } from './storySession';
 
 interface UseStreamingPeerArgs {
   userId: string;
@@ -55,6 +59,24 @@ export interface StreamingPeerState {
   beginStream: (clientRequestId: string) => void;
   /** Clear streaming state when the peer card closes. */
   reset: () => void;
+  /**
+   * Resolves once the socket is OPEN and the identify has had a beat to land
+   * in the connections table (~400ms grace after open). The ask path awaits
+   * this BEFORE enqueueing the peer job — the local-slice cutover made asks
+   * fast enough to beat a freshly-mounted socket's identify, so the backend's
+   * connection scan missed this tab and the stream went nowhere (the
+   * worked-once-then-hangs race). Fail-open on timeout: an enqueue with a
+   * late socket still lands its questions, and the recovery poll shows them.
+   */
+  waitReady: (timeoutMs?: number) => Promise<boolean>;
+  /** Timestamp of the last in-scope stream event (null if none this ask). */
+  getLastEventAt: () => number | null;
+  /**
+   * Recovery hydrate: adopt persisted questions fetched over HTTP when the
+   * WS stream was lost (identify race, dropped socket). Marks the ask
+   * complete; canonical ids come straight from persistence.
+   */
+  hydratePersisted: (qs: PeerQuestion[]) => void;
 }
 
 export function useStreamingPeer({
@@ -75,11 +97,13 @@ export function useStreamingPeer({
   // the latest value without depending on it as a callback closure.
   const activeRequestIdRef = useRef<string | null>(null);
 
-  const wsRef = useRef<WebSocket | null>(null);
+  const sessionRef = useRef<StorySessionHandle | null>(null);
+  const lastEventAtRef = useRef<number | null>(null);
 
   const beginStream = useCallback(
     (clientRequestId: string) => {
       activeRequestIdRef.current = clientRequestId;
+      lastEventAtRef.current = null;
       setState('loading');
       setProse('');
       setQuestions([]);
@@ -88,6 +112,34 @@ export function useStreamingPeer({
     },
     [],
   );
+
+  // Identify grace: the identify message is a Dynamo write on the WS handler
+  // side; give it a beat after socket OPEN before we let the ask enqueue. On
+  // the long-lived session socket this is almost always already satisfied
+  // (openedAt is minutes old), so asks proceed with zero added latency; the
+  // grace only bites right after a mount or a reconnect.
+  const IDENTIFY_GRACE_MS = 400;
+  const waitReady = useCallback(async (timeoutMs = 5000): Promise<boolean> => {
+    const t0 = Date.now();
+    for (;;) {
+      const st = sessionRef.current?.wsState();
+      if (st?.open) {
+        const since = Date.now() - (st.openedAt ?? 0);
+        if (since < IDENTIFY_GRACE_MS) await new Promise((r) => setTimeout(r, IDENTIFY_GRACE_MS - since));
+        return true;
+      }
+      if (Date.now() - t0 >= timeoutMs) return false;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+  }, []);
+
+  const getLastEventAt = useCallback(() => lastEventAtRef.current, []);
+
+  const hydratePersisted = useCallback((qs: PeerQuestion[]) => {
+    if (qs.length === 0) return;
+    setQuestions((prev) => (prev.length >= qs.length ? prev : qs));
+    setState('complete');
+  }, []);
 
   const reset = useCallback(() => {
     activeRequestIdRef.current = null;
@@ -100,38 +152,22 @@ export function useStreamingPeer({
 
   useEffect(() => {
     if (disabled) return;
-    const wsEndpoint = process.env.REACT_APP_WEBSOCKET_ENDPOINT;
-    if (!wsEndpoint) return;
 
     let cancelled = false;
-    const ws = new WebSocket(wsEndpoint);
-    wsRef.current = ws;
+    // Ride the story session's socket. Token-less auth: supplies the userId
+    // the socket identify needs (the demo page has no page-level acquirer)
+    // without ever clobbering the page's real token.
+    const session = acquireStorySession(storyId ?? projectId, { userId });
+    sessionRef.current = session;
 
-    ws.onopen = () => {
-      if (cancelled) return;
-      setIsConnected(true);
-      try {
-        ws.send(
-          JSON.stringify({
-            action: 'identify',
-            userId,
-            storyId: storyId ?? projectId,
-            timestamp: Date.now(),
-          }),
-        );
-      } catch {
-        /* ignore */
-      }
-    };
+    // isConnected mirrors the session socket cheaply (no per-message work).
+    setIsConnected(session.wsState().open);
+    const connPoll = window.setInterval(() => {
+      if (!cancelled) setIsConnected(session.wsState().open);
+    }, 2000);
 
-    ws.onmessage = (raw) => {
+    const off = session.onMessage((msg: any) => {
       if (cancelled) return;
-      let msg: any;
-      try {
-        msg = JSON.parse(raw.data);
-      } catch {
-        return;
-      }
       // Only handle peer-stream events
       if (
         !msg?.type ||
@@ -143,6 +179,7 @@ export function useStreamingPeer({
       }
       // Scope by clientRequestId — ignore events that don't match the active one.
       if (msg.clientRequestId !== activeRequestIdRef.current) return;
+      lastEventAtRef.current = Date.now();
 
       switch (msg.type) {
         case 'prose_start':
@@ -219,25 +256,14 @@ export function useStreamingPeer({
           setError(msg.error ?? 'Peer streaming error');
           break;
       }
-    };
-
-    ws.onclose = () => {
-      if (cancelled) return;
-      setIsConnected(false);
-    };
-
-    ws.onerror = () => {
-      // ignore — onclose will fire too
-    };
+    });
 
     return () => {
       cancelled = true;
-      try {
-        ws.close(1000, 'unmount');
-      } catch {
-        /* ignore */
-      }
-      wsRef.current = null;
+      window.clearInterval(connPoll);
+      off();
+      session.release();
+      sessionRef.current = null;
     };
   }, [userId, projectId, storyId, cardId, disabled]);
 
@@ -250,5 +276,8 @@ export function useStreamingPeer({
     isConnected,
     beginStream,
     reset,
+    waitReady,
+    getLastEventAt,
+    hydratePersisted,
   };
 }

@@ -466,6 +466,7 @@ export function CardBox({
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <button
+              data-tour={`open-sheet-${entity.id}`}
               onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();

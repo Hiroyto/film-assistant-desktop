@@ -18,6 +18,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useTour, type TourStep } from '../../Tour/TourProvider';
 import { ExploreOnOwn } from '../../Tour/ExploreOnOwn';
 import { WOW_SAMPLE } from './wowShared';
+import { setWowBentoPeerActive } from './peer';
 import type { ListProjectEntitiesResponse, ProjectEntity } from '../../../lib/freeformApi';
 
 export { WOW_SAMPLE };
@@ -134,6 +135,7 @@ export default function WowFlow({
   // The card whose full sheet the writer opened — the bento tour walks it.
   const bentoTargetRef = useRef<string | null>(null);
   const guideExpandStartedRef = useRef(false);
+  const guideFullcardStartedRef = useRef(false);
   const guideAskStartedRef = useRef(false);
   const bentoTourStartedRef = useRef(false);
   const toolbarTourStartedRef = useRef(false);
@@ -344,9 +346,9 @@ export default function WowFlow({
           'It caught how they connect.',
           <>
             From the way you wrote {cardRef(displayName(rA))} and{' '}
-            {cardRef(displayName(rB))}, the engine read the tie between them
-            without you stating it. It maps the relationships already in your
-            story, it does not add new ones.
+            {cardRef(displayName(rB))}, the engine read the tie between them.
+            It maps the relationships already in your story, it does not add
+            new ones.
           </>,
         ),
       });
@@ -407,7 +409,7 @@ export default function WowFlow({
       nextLabel: peerTarget ? "Open one of your cards →" : 'Got it →',
       content: stepBody(
         'And it tracked the facts.',
-        'Every fact your prose established lives here. The engine just records what your story put on the table.',
+        'Every fact your prose established is recorded here in the panel, not as cards to open. The real work happens back on the board. Let\'s open one of your scene cards.',
       ),
       onExit: () => {
         onSetPanel(false);
@@ -482,6 +484,16 @@ export default function WowFlow({
     }
   }, [phase, peerOpenCardId, startTour, endTour, onComplete]);
 
+  // Block the bento's own Ask-peer button while the tour walks the opened card
+  // (bento-intro / bento-tour), so the peer only fires through the tour's
+  // scripted "Now try the peer" step + the canvas footer button at guide-ask.
+  // Phase-tied, so it clears on ANY other phase, a skip, or unmount.
+  useEffect(() => {
+    const inBento = phase === 'bento-intro' || phase === 'bento-tour';
+    setWowBentoPeerActive(inBento);
+    return () => setWowBentoPeerActive(false);
+  }, [phase]);
+
   // Keep the guide-fullcard banner anchored just below the target card so the
   // prompt sits near what it's pointing at. Light poll + scroll/resize; falls
   // back to bottom-center if the card isn't on screen.
@@ -526,17 +538,41 @@ export default function WowFlow({
     }
   }, [phase, submissionCount]);
 
-  // Guide-fullcard: a banner coaches the writer to open the full card (the
-  // "open full sheet" link on their card). Advances when a sheet actually opens.
+  // Guide-fullcard: SPOTLIGHT the "open full sheet" link on the expanded card
+  // (writers lost the thread here when it was just a floating banner, no visual
+  // guidance). Same pattern as guide-expand: spotlight the affordance, hideNext,
+  // advance when a sheet actually opens.
   useEffect(() => {
     if (phase !== 'guide-fullcard') return;
     if (sheetOpenId) {
+      guideFullcardStartedRef.current = false;
+      endTour();
       bentoTargetRef.current = sheetOpenId;
       // Let the writer take in the whole card first; they click to start the
       // section-by-section walkthrough.
       setPhase('bento-intro');
+      return;
     }
-  }, [phase, sheetOpenId]);
+    const target = targetCardRef.current;
+    if (target && !guideFullcardStartedRef.current) {
+      guideFullcardStartedRef.current = true;
+      startTour(
+        [
+          {
+            // Spotlight the WHOLE expanded card (stays clear, board blurs) so the
+            // writer keeps seeing it; the pulsing "open full sheet" link (styled
+            // below while in this phase) marks the exact click spot.
+            id: 'wow-fullcard',
+            selector: `[data-tour="card-${target}"]`,
+            placement: 'side',
+            hideNext: true,
+            content: stepBody('Now open the full card.', 'Hit the glowing "open full sheet ↗" to see everything the engine tracks about it.'),
+          },
+        ],
+        { lockScroll: false, onSkip: onComplete },
+      );
+    }
+  }, [phase, sheetOpenId, startTour, endTour, onComplete]);
 
   // Bento-tour: fly through the opened card's sections — what each covers, what
   // it tracks, and that it's a LIVING link the writer grows incrementally. Steps
@@ -564,7 +600,7 @@ export default function WowFlow({
     const steps: TourStep[] =
       card?.type === 'event'
         ? [
-            bento('summary', 'The full card.', 'This is a scene in full. The summary is what happens; everything around it is what the engine tracks about it.'),
+            bento('summary', 'The summary.', 'The line of what happens in the scene. Everything around it is what the engine tracks about it.'),
             bento('throughline', 'Where it sits.', 'Its place in your story order: what leads in, what follows, kept in sync as you build.'),
             bento('knowledge', 'Who knows what, here.', 'The dramatic-irony layer, per scene: what the audience knows and what each character does not.'),
             bento('established', 'What it establishes.', 'The facts this scene puts on the table, pulled from your prose, editable anytime.'),
@@ -573,14 +609,14 @@ export default function WowFlow({
           ]
         : card?.type === 'sequence'
         ? [
-            bento('summary', 'The full sequence.', 'This is one section of your plot in full. The summary up top is the broad movement; everything around it is what the engine tracks about it.'),
+            bento('summary', 'The summary.', 'The broad movement of this section up top. Everything around it is what the engine tracks about it.'),
             bento('scenes', 'The scenes inside.', 'As you develop it, the individual scenes nest here and the sequence becomes a container on the board.'),
             bento('throughline', 'Where it sits.', 'Its place in the story order, relative to the other sequences.'),
             bento('arcs', 'Threads running through.', 'The arcs that thread across this stretch of the story.'),
             living('questions'),
           ]
         : [
-            bento('identity', 'The full card.', 'This is your character in full. The summary up top; everything around it is what the engine tracks about them.'),
+            bento('identity', 'The summary.', 'Who they are, up top. Everything around it is what the engine tracks about them.'),
             bento('knowledge', 'What they know.', 'Per scene: what they know, suspect, or are in the dark about. The dramatic-irony layer.'),
             bento('arcs', 'Their arcs.', 'The threads they move through across the story.'),
             bento('relationships', 'Their bonds.', 'Who they are to everyone else, tracked as the story develops.'),
@@ -608,6 +644,11 @@ export default function WowFlow({
           content: stepBody('See it your way.', 'Switch views: the free-form board, the character web, or your outline in story order.'),
         },
         {
+          id: 'wow-tb-script',
+          selector: '[data-tour="toolbar-script"]',
+          content: stepBody('Then draft the pages.', 'Script turns this outline into real screenplay pages. Your scenes wait there as slots, and a peer reads what you write. Your first visit walks you through it.'),
+        },
+        {
           id: 'wow-tb-import',
           selector: '[data-tour="toolbar-import"]',
           nextLabel: "You're set →",
@@ -624,23 +665,25 @@ export default function WowFlow({
   return (
     <>
       <style>{`@keyframes cb-spin { to { transform: rotate(360deg); } }`}</style>
+      {/* Pulse the "open full sheet" link while guide-fullcard is active, so the
+          click spot is obvious even though the whole card (not the link) is the
+          spotlight cutout. box-shadow + color only — no layout shift. */}
+      {phase === 'guide-fullcard' && targetCardRef.current && (
+        <style>{`
+          [data-tour="open-sheet-${targetCardRef.current}"] {
+            color: #ff8c42 !important;
+            border-radius: 5px;
+            animation: wowOpenPulse 1.3s ease-in-out infinite;
+          }
+          @keyframes wowOpenPulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(255,140,66,0); }
+            50%      { box-shadow: 0 0 0 4px rgba(255,140,66,0.4); }
+          }
+        `}</style>
+      )}
       {/* The staged braindump meter now lives in the corkboard (BraindumpMeter),
           shown for ALL braindumps and draggable — so the wow no longer renders
           its own reveal tracker here. */}
-
-      {/* ---------- Guide-fullcard ---------- */}
-      <AnimatePresence>
-        {phase === 'guide-fullcard' && (
-          <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 12 }} style={bannerAt(ORANGE, cardBannerPos)}>
-            <div style={{ fontSize: 14, lineHeight: 1.55, color: '#ff8c42' }}>
-              Nice. Now open the <strong>full card</strong>. Hit <strong>"open full sheet ↗"</strong> on your card to see everything the engine tracks about it.
-            </div>
-            <div style={{ marginTop: 12 }}>
-              <ExploreOnOwn onClick={() => { wowEvent('completed', { skippedFullcard: true }); setPhase('done'); onComplete(); }} />
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* ---------- Bento intro (see the whole card, then walk it) ---------- */}
       <AnimatePresence>
@@ -652,9 +695,20 @@ export default function WowFlow({
             // Centered over the (still full-screen) card — not bottom-anchored.
             style={{ ...bannerBottom(ORANGE), bottom: 'auto', top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}
           >
-            <div style={{ fontSize: 14, lineHeight: 1.55, color: '#ff8c42' }}>
-              This is the full card, everything the engine tracks about it. Take a look around, then I'll walk you through what each part does.
-            </div>
+            {(() => {
+              const c = (data?.entities ?? []).find((e) => e.id === bentoTargetRef.current);
+              const kind = c?.type === 'sequence' ? 'one section of your plot in full'
+                : c?.type === 'character' ? 'your character in full'
+                : 'a scene in full';
+              return (
+                <div style={{ color: '#ff8c42' }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>The full card.</div>
+                  <div style={{ fontSize: 14, lineHeight: 1.55 }}>
+                    This is {kind}. Take a look around, then I'll walk you through what each part does.
+                  </div>
+                </div>
+              );
+            })()}
             <button
               onClick={() => { wowEvent('bento_intro_continue'); setPhase('bento-tour'); }}
               style={{

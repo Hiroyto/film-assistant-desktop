@@ -25,8 +25,10 @@ import CascadeToast from '../../components/Freeform/CascadeToast';
 import RecentUpdatesTray from '../../components/Freeform/RecentUpdatesTray';
 import { getEntityColor, hexToRgba } from '../../components/Freeform/entityColors';
 import { PEER_BLUE } from '../../components/Freeform/tokens';
-import { SupersessionRequiredError, acceptArcSuggestion, createArc, createArcFromEvents, createCard, createInformation, deleteArc, deleteCard, deleteStructuralEdge, dismissArcSuggestion, enqueueCardExtraction, enqueueExtractionJob, getCardLayouts, isMockMode, listArcSuggestions, listCardQuestions, listProjectEntities, promoteStructuralToRelationship, resolveNarrativeStatusFlip, restoreArc, restoreCard, setStructuralEdge, slugForCard, tagCauses, tagEventEvokes, tagEventInvolvesCharacter, tagEventPrecedes, tagSequenceContains, untagCauses, untagEventPrecedes, updateArc, updateCardDescription, updateCardName, updateCardNarrativeStatus, updateCardPosition, type ArcKind, type ArcSuggestion, type CardLayout, type EvokesTransition, type ListProjectEntitiesResponse, type NarrativeStatus, type PersistedQuestion, type ProjectEntity, type SupersessionRequiredResponse } from '../../lib/freeformApi';
+import { SupersessionRequiredError, acceptArcSuggestion, createArc, createArcFromEvents, createCard, createInformation, deleteArc, deleteCard, dismissArcSuggestion, enqueueCardExtraction, enqueueExtractionJob, getCardLayouts, isMockMode, listArcSuggestions, listCardQuestions, listProjectEntities, promoteStructuralToRelationship, resolveNarrativeStatusFlip, restoreArc, restoreCard, slugForCard, updateArc, updateCardDescription, updateCardName, updateCardNarrativeStatus, updateCardPosition, type ArcKind, type ArcSuggestion, type CardLayout, type EvokesTransition, type ListProjectEntitiesResponse, type NarrativeStatus, type PersistedQuestion, type ProjectEntity, type SupersessionRequiredResponse } from '../../lib/freeformApi';
 import { useCascadeEvents } from '../../lib/useCascadeEvents';
+import { countFreshDeltaEdges, loadStoredGraph, mergeGraphDelta, onGraphUpdate, saveStoredGraph, type GraphDelta } from '../../lib/localGraphStore';
+import { acquireStorySession, overlayPending, queueStructOpGlobal, type StorySessionHandle } from '../../lib/storySession';
 import { fetchAuthSession } from 'aws-amplify/auth';
 import axios from 'axios';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
@@ -214,6 +216,22 @@ export default function FreeformCorkboard() {
   // assembled" (edges landed) even if the braindump_complete WS is lost, so the
   // reveal tracker / shimmer / peer gate clear promptly instead of waiting 45s.
   const edgeCountAtSubmitRef = useRef(0);
+  // FIL-516 — graph deltas applied this run. Two jobs: (1) recently-applied
+  // deltas re-apply over mid-write refetches (refreshEntities replaces
+  // edges with server truth, which would clobber pre-write delta edges for
+  // 5-20s until the burst lands); entries self-expire past the write
+  // window. (2) A non-zero fresh-edge count tells the lost-WS belt to stand
+  // down: a delivered delta proves the socket was alive, and edge growth
+  // can no longer distinguish "write landed" from "delta applied".
+  const pendingDeltasRef = useRef<Array<{ at: number; delta: GraphDelta }>>([]);
+  const deltaEdgesRef = useRef(0);
+  const applyPendingDeltas = useCallback((payload: ListProjectEntitiesResponse): ListProjectEntitiesResponse => {
+    const now = Date.now();
+    pendingDeltasRef.current = pendingDeltasRef.current.filter((p) => now - p.at < 60000);
+    let out = payload;
+    for (const p of pendingDeltasRef.current) out = mergeGraphDelta(out, p.delta);
+    return out;
+  }, []);
   // Alive-card count at submit — the meter shows THIS braindump's delta, not the
   // whole board (so an incremental dump reads "Pulled 3 cards", not "Pulled 30").
   const cardCountAtSubmitRef = useRef(0);
@@ -233,6 +251,51 @@ export default function FreeformCorkboard() {
   // Neptune. A refetch that races the write must NOT wipe these optimistic
   // cards (otherwise they vanish then pop back in). Cleared on braindump_complete.
   const streamedIdsRef = useRef<Set<string>>(new Set());
+  // OPTIMISTIC EDGES from streamed event cards (edges-took-forever fix): each
+  // streamed event carries prev_event_id (arrival order IS the spine) and its
+  // involved character ids, so the board wires provisional PRECEDES/INVOLVES
+  // the moment cards land instead of waiting for the write. Re-applied over
+  // every mid-run refetch (partial reads carry no edges yet); cleared wherever
+  // streamedIdsRef clears — the authoritative refetch is the truth.
+  const streamedEdgesRef = useRef<Array<{ kind: 'precedes' | 'involves'; from: string; to: string }>>([]);
+  // Last WS sign-of-life for the inflight braindump (streamed cards + tail
+  // progress): the hard stop is a liveness deadline, not a fixed clock.
+  const wsActivityRef = useRef(0);
+  // Tail-generation counts (extraction_progress WS): what the model is writing
+  // during the no-new-cards stretch — the meter's substantive line.
+  const [weaving, setWeaving] = useState<{ information: number; relationships: number; knowledge_edges: number } | null>(null);
+  // Fold the optimistic streamed edges into a payload (both endpoints present,
+  // not already there). Payloads without edges (odd hydrates) pass through.
+  const mergeStreamedEdges = useCallback((p: ListProjectEntitiesResponse): ListProjectEntitiesResponse => {
+    const opt = streamedEdgesRef.current;
+    if (!opt.length || !p?.edges) return p;
+    const have = new Set(p.entities.filter((e) => !e.deleted_at).map((e) => e.id));
+    const addPre = opt.filter((o) => o.kind === 'precedes' && have.has(o.from) && have.has(o.to) && !p.edges.precedes.some((x) => x.from === o.from && x.to === o.to));
+    const addInv = opt.filter((o) => o.kind === 'involves' && have.has(o.from) && have.has(o.to) && !p.edges.involves.some((x) => x.from === o.from && x.to === o.to));
+    if (!addPre.length && !addInv.length) return p;
+    return {
+      ...p,
+      edges: {
+        ...p.edges,
+        precedes: [...p.edges.precedes, ...addPre.map(({ from, to }) => ({ from, to, streamed: true }))],
+        involves: [...p.edges.involves, ...addInv.map(({ from, to }) => ({ from, to, streamed: true }))],
+      },
+    };
+  }, []);
+  // Record a streamed event's optimistic edges (deduped; rendering happens via
+  // mergeStreamedEdges on the next payload pass).
+  const noteStreamedEdges = useCallback((e: any) => {
+    if (e?.type !== 'event' || !e.id) return;
+    const push = (kind: 'precedes' | 'involves', from: string, to: string) => {
+      if (!streamedEdgesRef.current.some((x) => x.kind === kind && x.from === from && x.to === to)) {
+        streamedEdgesRef.current.push({ kind, from, to });
+      }
+    };
+    if (typeof e.prev_event_id === 'string' && e.prev_event_id) push('precedes', e.prev_event_id, e.id);
+    for (const cid of Array.isArray(e.characters_involved_ids) ? e.characters_involved_ids : []) {
+      if (typeof cid === 'string' && cid) push('involves', e.id, cid);
+    }
+  }, []);
 
   // Manual card creation (§7). Toolbar dropdown opens a small modal with
   // working_name + description. Pre-flight collision check against current
@@ -478,19 +541,30 @@ export default function FreeformCorkboard() {
         // sequences (which never arrive via entity_streamed) survive a partial
         // refetch. The authoritative braindump_complete refetch — which clears
         // inflight FIRST — is the only one allowed to reconcile/remove.
-        if (!prev || !inflightBraindumpRef.current) return entitiesRes;
+        // FIL-516: recent graph deltas re-apply on top — a refetch racing the
+        // write burst must not clobber pre-write delta edges off the board.
+        // FIL-518 structural queue: pending writer edits (field + structural)
+        // overlay every network payload so a refetch mid-queue never visually
+        // undoes an unpushed drag/rename.
+        if (!prev || !inflightBraindumpRef.current) return overlayPending(storyId, applyPendingDeltas(entitiesRes));
         const got = new Set(entitiesRes.entities.map((e) => e.id));
         const keep = prev.entities.filter((e) => !e.deleted_at && !got.has(e.id));
-        return keep.length ? { ...entitiesRes, entities: [...entitiesRes.entities, ...keep] } : entitiesRes;
+        const base = keep.length ? { ...entitiesRes, entities: [...entitiesRes.entities, ...keep] } : entitiesRes;
+        // Mid-run refetches read the pre-write graph (no edges yet) — re-apply
+        // the optimistic streamed edges so the wired-up board never un-wires.
+        return overlayPending(storyId, applyPendingDeltas(mergeStreamedEdges(base)));
       });
       if (freshToken !== auth.token) {
         setAuth((cur) => (cur ? { ...cur, token: freshToken } : cur));
       }
       console.info('[corkboard] refreshed entities — count:', entitiesRes.entities.length);
+      // FIL-518 stage 2a — keep the local shelf current (payload only;
+      // layouts are cached at load time and mutated locally by drags).
+      void saveStoredGraph(storyId, { payload: entitiesRes });
     } catch (e) {
       console.warn('[corkboard] refresh failed:', e);
     }
-  }, [auth, storyId]);
+  }, [auth, storyId, applyPendingDeltas]);
 
   useEffect(() => {
     if (!storyId) {
@@ -499,8 +573,44 @@ export default function FreeformCorkboard() {
       return;
     }
     let cancelled = false;
+    let hydrated = false;
     (async () => {
       try {
+        // FIL-518 stage 2a — HYDRATE-FIRST: the local graph copy renders the
+        // board immediately (entities + cached layouts, so positions don't
+        // flash defaults); the network load below replaces it and re-stocks
+        // the shelf. A missing/stale/broken record just means the network
+        // path runs exactly as before.
+        try {
+          const stored = await loadStoredGraph(storyId);
+          if (stored && !cancelled) {
+            setData(overlayPending(storyId, stored.payload));
+            if (stored.layouts) setLayouts(stored.layouts);
+            setLoading(false);
+            hydrated = true;
+            console.info('[graph-store] hydrated board from local copy', {
+              entities: stored.payload.entities.length,
+              ageSeconds: Math.round((Date.now() - stored.fetchedAt) / 1000),
+            });
+          } else if (!stored && !cancelled && (arrivedJustCreated || arrivedWow)) {
+            // Just-created story (incl. the wow tour): the graph IS empty —
+            // render the empty board now instead of blocking on a cold
+            // Neptune read of nothing (measured 11.6s while Serverless
+            // scales off its floor). The network load below still runs and
+            // replaces this.
+            setData({
+              projectId: storyId,
+              entities: [],
+              edges: { involves: [], occurs_in: [], precedes: [], sequence_precedes: [], structural: [], knowledge: [], evokes: [], arc_involves: [], causes: [], contains: [] },
+              information: [],
+              latencyMs: 0,
+            });
+            setLoading(false);
+            hydrated = true; // a failed network load degrades to the empty board, not the error screen
+            console.info('[graph-store] just-created story: rendering empty board immediately');
+          }
+        } catch { /* shelf empty or unavailable */ }
+
         const session = await fetchAuthSession();
         const token = session.tokens?.idToken?.toString() ?? '';
         const userId = String(session.tokens?.idToken?.payload?.['cognito:username'] ?? '');
@@ -537,10 +647,15 @@ export default function FreeformCorkboard() {
 
         const layoutMap: Record<string, CardLayout> = {};
         for (const l of layoutsRes.layouts) layoutMap[l.cardId] = l;
-        setData(entitiesRes);
+        setData(overlayPending(storyId, entitiesRes));
         setLayouts(layoutMap);
+        // Re-stock the shelf with the authoritative read.
+        void saveStoredGraph(storyId, { payload: entitiesRes, layouts: layoutMap });
       } catch (e: any) {
-        if (!cancelled) setError(e.message ?? String(e));
+        // A hydrated board survives a failed network load (offline, cold
+        // Neptune): keep rendering the local copy, log the miss.
+        if (!cancelled && !hydrated) setError(e.message ?? String(e));
+        else if (!cancelled) console.warn('[graph-store] network load failed; rendering local copy', e);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -548,6 +663,26 @@ export default function FreeformCorkboard() {
     return () => {
       cancelled = true;
     };
+    // arrivedJustCreated/arrivedWow are stable per navigation (router state).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storyId]);
+
+  // FIL-518 stage 2a — cross-tab: another tab persisted a fresh payload for
+  // this story; re-hydrate from the shelf (no network). Skipped while a
+  // braindump is inflight here — the additive-preservation rules own that
+  // window and the completion refetch reconciles.
+  useEffect(() => {
+    if (!storyId) return;
+    const off = onGraphUpdate((sid) => {
+      if (sid !== storyId || inflightBraindumpRef.current) return;
+      void loadStoredGraph(storyId).then((stored) => {
+        if (stored) {
+          setData(overlayPending(storyId, stored.payload));
+          console.info('[graph-store] re-hydrated from another tab');
+        }
+      });
+    });
+    return off;
   }, [storyId]);
 
   // -------- Compute initial positions (stored layouts + auto-defaults) --------
@@ -570,6 +705,25 @@ export default function FreeformCorkboard() {
   // refetch — pulse the cards while that's still happening so the board reads as
   // "still wiring up" rather than finished-but-bare.
   const edgesGenerating = braindumpPhase === 'submitting' || braindumpPhase === 'extracting';
+  // FIL-516 done-split: done-for-RENDERING happens at graph_delta (meter,
+  // shimmer, tour all resolve — the board is visually complete); done-for-
+  // PERSISTENCE happens at braindump_complete (the Neptune burst landed —
+  // measured 36s on a cold cluster). Only the peer gate cares about the
+  // second one: the peer's slice reads Neptune server-side, so it must not
+  // un-gate until the write truly lands. writeSettling holds that gate
+  // through the gap; a 150s failsafe clears it if braindump_complete never
+  // arrives (the FE ask() also fail-opens after 35s of gate-holding).
+  const [writeSettling, setWriteSettling] = useState(false);
+  const writeSettlingTimerRef = useRef<number | null>(null);
+  const beginWriteSettling = useCallback(() => {
+    setWriteSettling(true);
+    if (writeSettlingTimerRef.current) window.clearTimeout(writeSettlingTimerRef.current);
+    writeSettlingTimerRef.current = window.setTimeout(() => setWriteSettling(false), 150000);
+  }, []);
+  const endWriteSettling = useCallback(() => {
+    setWriteSettling(false);
+    if (writeSettlingTimerRef.current) { window.clearTimeout(writeSettlingTimerRef.current); writeSettlingTimerRef.current = null; }
+  }, []);
   // The staged braindump meter (draggable) covers ALL braindumps; the top toast
   // is now just for peer-answer cascades still being woven in.
   const bgProcessing = pendingCascades > 0;
@@ -578,9 +732,9 @@ export default function FreeformCorkboard() {
   // write is in flight, the peer holds its slice build (asking now would read a
   // half-written graph). Cleared the moment the braindump settles.
   useEffect(() => {
-    setPeerWriteActive(edgesGenerating);
+    setPeerWriteActive(edgesGenerating || writeSettling);
     return () => setPeerWriteActive(false);
-  }, [edgesGenerating]);
+  }, [edgesGenerating, writeSettling]);
   // Mirror data into a ref so the submit callback can baseline the edge count
   // without re-creating on every data change.
   useEffect(() => { dataRef.current = data; }, [data]);
@@ -632,6 +786,16 @@ export default function FreeformCorkboard() {
     // edges would trip this belt and resolve the run mid-way. Skip it there —
     // braindump_progress keeps it alive and braindump_complete resolves it.
     if (windowedRunRef.current) return;
+    // FIL-516: a graph_delta landed this run — edges are on the board BEFORE
+    // the write, so edge growth can't signal the write landing anymore. And a
+    // delivered delta proves the socket is alive, so braindump_complete is
+    // coming; the stability hard stop remains the true-dead-socket backstop.
+    if (deltaEdgesRef.current > 0) return;
+    // Same reasoning for OPTIMISTIC streamed edges (the wired-while-streaming
+    // fix): they land mid-generation, so edge growth no longer means the write
+    // is down — and streamed cards prove the socket is alive anyway. The
+    // liveness hard stop backstops a run that dies after streaming started.
+    if (streamedEdgesRef.current.length > 0) return;
     const n = edgeCountOf(data);
     if (n <= edgeCountAtSubmitRef.current) return;
     const prev = beltStableRef.current;
@@ -650,8 +814,11 @@ export default function FreeformCorkboard() {
       relayoutAfterStreamRef.current = [...streamedIdsRef.current];
     }
     streamedIdsRef.current.clear();
+    streamedEdgesRef.current = [];
+    setWeaving(null);
     setBraindumpPhase('done');
-  }, [braindumpPhase, data]);
+    endWriteSettling(); // edges landed via refetch = the write is down
+  }, [braindumpPhase, data, endWriteSettling]);
 
   // Reified Relationship cards live ON the connection between their two
   // characters: positioned at the midpoint of the endpoint cards' centers, and
@@ -758,6 +925,27 @@ export default function FreeformCorkboard() {
     },
     [auth, storyId, refreshEntities, closeStructuralEditor],
   );
+  // FIL-518 structural queue: label set/delete are queue-first (local apply +
+  // durable background push, editor closes instantly). Promote stays on
+  // runStructural — it mints a Relationship entity and needs the refetch.
+  const queueStructuralSet = useCallback(
+    (from: string, to: string, predicate: string) => {
+      if (!storyId) return;
+      setData((prev) => (prev ? { ...prev, edges: { ...prev.edges, structural: [...prev.edges.structural.filter((s) => !(s.from === from && s.to === to)), { from, to, predicate }] } } : prev));
+      queueStructOpGlobal(storyId, { kind: 'structural_set', from, to, predicate });
+      closeStructuralEditor();
+    },
+    [storyId, closeStructuralEditor],
+  );
+  const queueStructuralDelete = useCallback(
+    (from: string, to: string) => {
+      if (!storyId) return;
+      setData((prev) => (prev ? { ...prev, edges: { ...prev.edges, structural: prev.edges.structural.filter((s) => !(s.from === from && s.to === to)) } } : prev));
+      queueStructOpGlobal(storyId, { kind: 'structural_delete', from, to });
+      closeStructuralEditor();
+    },
+    [storyId, closeStructuralEditor],
+  );
 
   const autoPositions = useMemo(
     () => computeAutoLayout(
@@ -770,11 +958,15 @@ export default function FreeformCorkboard() {
   );
 
   // Story-order scene numbers ("SC 07") for the notecard-style event cards:
-  // every alive event, container members included, numbered by the PRECEDES
-  // spine (disconnected events append in insertion order after the chain).
+  // alive ON-SCREEN events, container members included, numbered by the
+  // PRECEDES spine (disconnected events append in insertion order after the
+  // chain). BACKSTORY never consumes an SC number (a scene number is a
+  // screenplay position; backstory is outside audience-time) — same rule as
+  // the script view's navigator, so the two surfaces always agree. A
+  // backstory card falls back to its type label; its status chip says the rest.
   const sceneNoById = useMemo(() => {
     const sorted = topoSortEventsByPrecedes(
-      aliveEntities.filter((e) => e.type === 'event'),
+      aliveEntities.filter((e) => e.type === 'event' && e.narrative_status !== 'backstory'),
       data?.edges?.precedes ?? [],
     );
     const m = new Map<string, number>();
@@ -827,6 +1019,21 @@ export default function FreeformCorkboard() {
         next[e.id] = stored
           ? { x: stored.x, y: stored.y }
           : (autoPositions[e.id] ?? { x: 0, y: 0 });
+      }
+      // LIVE RE-STACK while a run is inflight: cards born THIS run keep
+      // re-taking their computed slot instead of freezing at arrival. The
+      // optimistic streamed edges reorder the PRECEDES ranks between arrivals,
+      // so frozen arrival positions collide (two cards computed for the same
+      // slot at different moments = the stacked-scenes cluster) and late
+      // sequences wrap diagonal member blobs. Writer intent still wins: a
+      // dragged card (webDrag / mid-drag) is never re-placed. On completion
+      // the ids clear and everything freezes at its final ordered slot.
+      if (inflightBraindumpRef.current) {
+        for (const id of streamedIdsRef.current) {
+          if (!autoPositions[id]) continue;
+          if (webDrag[id] || id === draggingId || layouts[id]) continue; // writer's hand wins
+          next[id] = autoPositions[id];
+        }
       }
       // Member scenes keep the position computeAutoLayout already gave them above
       // (a SINGLE COLUMN in PRECEDES/story order directly under their sequence
@@ -1537,6 +1744,10 @@ export default function FreeformCorkboard() {
     const expandedSeqs: SeqInfo[] = [];
     const seqObstacles: SeqRect[] = [];
     const allSeqMemberIds = new Set<string>();
+    // Collapsed containers, collected so the reflow pass can reclaim the space
+    // they free (the box push is deferred until after the reflow).
+    type CollapsedBox = { seqId: string; name: string; count: number; color: string; x: number; y: number; w: number; collapsedH: number; originalBottom: number; freed: number };
+    const collapsedBoxes: CollapsedBox[] = [];
     for (const [seqId, memberIds] of containsBySeq) {
       const seqEnt = aliveEntities.find((e) => e.id === seqId && e.type === 'sequence' && !e.deleted_at);
       if (!seqEnt) continue;
@@ -1559,9 +1770,13 @@ export default function FreeformCorkboard() {
         // jump when the members sit off the clean column.
         const r = seqBoxRect(members, basePos, anchor);
         if (!r) continue;
-        out.sequenceBoxes.push({
-          seqId, name, collapsed: true, count: members.length, color,
-          x: r.x, y: r.y, w: r.w, h: SEQ_HEADER_H + PAD,
+        // Defer the box push: the reflow pass below shifts it (and everything
+        // under it) up to reclaim the freed vertical space. Record the freed
+        // height (expanded box height minus the collapsed header height).
+        collapsedBoxes.push({
+          seqId, name, count: members.length, color,
+          x: r.x, y: r.y, w: r.w, collapsedH: SEQ_HEADER_H + PAD,
+          originalBottom: r.y + r.h, freed: r.h - (SEQ_HEADER_H + PAD),
         });
         continue;
       }
@@ -1571,6 +1786,52 @@ export default function FreeformCorkboard() {
       const memberSet = new Set(members.map((m) => m.id));
       expandedSeqs.push({ seqId, name, color, members, memberIds: memberSet, anchor });
       seqObstacles.push({ seqId, memberIds: memberSet, ...prelim });
+    }
+
+    // ---- Pass 1b: COLLAPSE REFLOW. A collapsed container frees the vertical
+    // space its members occupied; everything BELOW it in the story column slides
+    // UP to fill the gap (and slides back down when re-expanded — this recomputes
+    // from base positions every render, so expand just omits the shift). Applied
+    // by rewriting out.overrides, which basePos reads, so pass 2/3 + the render
+    // all see the reflowed layout. (This container-box pass is the Master view;
+    // the throughline view returned earlier with its own layout.) ----
+    const reflowOn = viewMode === 'master' && collapsedBoxes.length > 0;
+    // upShift = total space freed by every collapsed box whose ORIGINAL
+    // (expanded) bottom sits at/above the card AND whose COLUMN the card
+    // shares (x-ranges overlap). Column-scoped so collapsing a sequence never
+    // moves the cast grid or any other lane beside the story column (the
+    // "characters seem to move" bug). Order-independent, sums cleanly for
+    // stacked collapses. Elements inside a box's old span are its hidden members.
+    const upShift = (x: number, w: number, y: number): number =>
+      reflowOn
+        ? collapsedBoxes.reduce(
+          (s, b) => (b.originalBottom <= y && x < b.x + b.w && x + w > b.x ? s + b.freed : s), 0)
+        : 0;
+    if (reflowOn) {
+      for (const e of aliveEntities) {
+        if (out.hiddenIds.has(e.id)) continue; // hidden members don't reflow
+        const base = basePos(e.id);
+        if (!base) continue;
+        const esz = collapsedSizeOf(e.type);
+        const shift = upShift(base.x, esz.w, base.y);
+        if (shift > 0) out.overrides.set(e.id, { pos: { x: base.x, y: base.y - shift } });
+      }
+      // Expanded containers captured their anchor + obstacle rect from PRE-reflow
+      // positions; refresh both from the reflowed base so their boxes (pass 3)
+      // and horizontal nudge (pass 2) track the members that just slid up.
+      for (const s of expandedSeqs) s.anchor = basePos(s.seqId);
+      seqObstacles.length = 0;
+      for (const s of expandedSeqs) {
+        const prelim = seqBoxRect(s.members, basePos, s.anchor);
+        if (prelim) seqObstacles.push({ seqId: s.seqId, memberIds: s.memberIds, ...prelim });
+      }
+    }
+    // Push the collapsed boxes now, each at its OWN reflowed top (freeds above it).
+    for (const b of collapsedBoxes) {
+      out.sequenceBoxes.push({
+        seqId: b.seqId, name: b.name, collapsed: true, count: b.count, color: b.color,
+        x: b.x, y: b.y - upShift(b.x, b.w, b.y), w: b.w, h: b.collapsedH,
+      });
     }
 
     // ---- Pass 2: nudge. An expanded container's border should push things out
@@ -1969,11 +2230,17 @@ export default function FreeformCorkboard() {
   // of the way. ONE-SHOT per completion (dockAutoCloseRef, set when extraction
   // completes) — otherwise re-opening the now-empty dock later would auto-close
   // it again. Short delay lets the "Done" status register before the slide-up.
+  // DISARM even when the dock is already closed at completion (Process now
+  // collapses it up front; script-side extractions finish with it closed too)
+  // — an armed flag surviving to the writer's NEXT open slammed the dock shut
+  // the moment they opened it.
   useEffect(() => {
-    if (dockAutoCloseRef.current && braindumpPhase === 'done' && braindumpText.trim() === '' && braindumpOpen) {
+    if (dockAutoCloseRef.current && braindumpPhase === 'done' && braindumpText.trim() === '') {
       dockAutoCloseRef.current = false;
-      const t = window.setTimeout(() => setBraindumpOpen(false), 700);
-      return () => window.clearTimeout(t);
+      if (braindumpOpen) {
+        const t = window.setTimeout(() => setBraindumpOpen(false), 700);
+        return () => window.clearTimeout(t);
+      }
     }
   }, [braindumpPhase, braindumpText, braindumpOpen]);
 
@@ -2404,13 +2671,11 @@ export default function FreeformCorkboard() {
           if (cx >= b.x && cx <= b.x + b.w && cy >= b.y && cy <= b.y + b.h) { dropSeqId = b.seqId; break; }
         }
         if (dropSeqId && dropSeqId !== curSeqId) {
+          // FIL-518 structural queue: local apply is the state; the op
+          // persists + pushes in the background (no revert path).
           setData((prev) => (prev ? { ...prev, edges: { ...prev.edges, contains: [...prev.edges.contains.filter((c) => c.to !== eid), { from: dropSeqId!, to: eid }] } } : prev));
-          tagSequenceContains({ sequenceId: dropSeqId, eventId: eid, projectId: storyId }, auth.token)
-            .then(() => setLinkNotice(curSeqId ? 'Scene moved to sequence' : 'Scene added to sequence'))
-            .catch((err) => {
-              setData((prev) => (prev ? { ...prev, edges: { ...prev.edges, contains: prev.edges.contains.filter((c) => !(c.from === dropSeqId! && c.to === eid)) } } : prev));
-              setLinkError(err?.message ?? String(err));
-            });
+          queueStructOpGlobal(storyId, { kind: 'contains_move', sequenceId: dropSeqId, eventId: eid });
+          setLinkNotice(curSeqId ? 'Scene moved to sequence' : 'Scene added to sequence');
         }
       }
     };
@@ -2686,11 +2951,10 @@ export default function FreeformCorkboard() {
           if ((data?.edges.structural ?? []).some((s) => s.from === from && s.to === target)) return;
           const predicate = 'related';
           setData((prev) => (prev ? { ...prev, edges: { ...prev.edges, structural: [...prev.edges.structural, { from, to: target, predicate }] } } : prev));
-          setStructuralEdge({ projectId: storyId, fromId: from, toId: target, predicate }, auth.token)
-            .catch((err) => {
-              setData((prev) => (prev ? { ...prev, edges: { ...prev.edges, structural: prev.edges.structural.filter((s) => !(s.from === from && s.to === target)) } } : prev));
-              setLinkError(err?.message ?? String(err));
-            });
+          // Queued (not sync) so the label editor's rename queues BEHIND this
+          // placeholder in FIFO order — a sync rename could land first and be
+          // overwritten by a late placeholder push.
+          queueStructOpGlobal(storyId, { kind: 'structural_set', from, to: target, predicate });
           setEditStructural({ from, to: target, predicate, mx: e.clientX, my: e.clientY, isNew: true });
           setStructDraft('');
           return;
@@ -2706,12 +2970,8 @@ export default function FreeformCorkboard() {
             return;
           }
           setData((prev) => (prev ? { ...prev, edges: { ...prev.edges, involves: [...prev.edges.involves, { from: eventId, to: characterId }] } } : prev));
-          tagEventInvolvesCharacter({ eventId, characterId, projectId: storyId }, auth.token)
-            .then(() => setLinkNotice('Character added to the cast'))
-            .catch((err) => {
-              setData((prev) => (prev ? { ...prev, edges: { ...prev.edges, involves: prev.edges.involves.filter((i) => !(i.from === eventId && i.to === characterId)) } } : prev));
-              setLinkError(err?.message ?? String(err));
-            });
+          queueStructOpGlobal(storyId, { kind: 'involves_tag', eventId, characterId });
+          setLinkNotice('Character added to the cast');
           return;
         }
 
@@ -2732,12 +2992,8 @@ export default function FreeformCorkboard() {
             setPositions((p) => ({ ...p, [eventId]: np }));
             updateCardPosition({ userId: auth.userId, projectId: storyId, cardId: eventId, x: np.x, y: np.y }, auth.token).catch(() => {});
           }
-          tagSequenceContains({ sequenceId, eventId, projectId: storyId }, auth.token)
-            .then(() => setLinkNotice(wasMember ? 'Scene moved to sequence' : 'Scene added to sequence'))
-            .catch((err) => {
-              setData((prev) => (prev ? { ...prev, edges: { ...prev.edges, contains: prev.edges.contains.filter((c) => !(c.from === sequenceId && c.to === eventId)) } } : prev));
-              setLinkError(err?.message ?? String(err));
-            });
+          queueStructOpGlobal(storyId, { kind: 'contains_move', sequenceId, eventId });
+          setLinkNotice(wasMember ? 'Scene moved to sequence' : 'Scene added to sequence');
           return;
         }
 
@@ -2765,26 +3021,7 @@ export default function FreeformCorkboard() {
                 }
               : prev,
           );
-          tagCauses(
-            { fromId: from, toId: target, projectId: storyId },
-            auth.token,
-          ).catch((err) => {
-            setData((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    edges: {
-                      ...prev.edges,
-                      causes: prev.edges.causes.filter(
-                        (c) => !(c.from === from && c.to === target),
-                      ),
-                    },
-                  }
-                : prev,
-            );
-            setLinkError(err?.message ?? String(err));
-            console.warn('[corkboard] tag-causes failed:', err);
-          });
+          queueStructOpGlobal(storyId, { kind: 'causes_tag', from, to: target });
           return;
         }
 
@@ -2793,9 +3030,6 @@ export default function FreeformCorkboard() {
             (p) => p.from === from && p.to === target,
           );
           if (exists) return;
-          const hadReverse = (data?.edges.precedes ?? []).some(
-            (p) => p.from === target && p.to === from,
-          );
           setData((prev) =>
             prev
               ? {
@@ -2812,29 +3046,9 @@ export default function FreeformCorkboard() {
                 }
               : prev,
           );
-          tagEventPrecedes(
-            { fromEventId: from, toEventId: target, projectId: storyId },
-            auth.token,
-          ).catch((err) => {
-            setData((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    edges: {
-                      ...prev.edges,
-                      precedes: [
-                        ...prev.edges.precedes.filter(
-                          (p) => !(p.from === from && p.to === target),
-                        ),
-                        ...(hadReverse ? [{ from: target, to: from }] : []),
-                      ],
-                    },
-                  }
-                : prev,
-            );
-            setLinkError(err?.message ?? String(err));
-            console.warn('[corkboard] tag-event-precedes failed:', err);
-          });
+          // Local apply above mirrors the server's reverse-auto-flip; the
+          // queued op's overlay transform does the same on refetches.
+          queueStructOpGlobal(storyId, { kind: 'precedes_tag', from, to: target });
           return;
         }
 
@@ -2863,28 +3077,8 @@ export default function FreeformCorkboard() {
                 }
               : prev,
           );
-          tagEventEvokes(
-            { eventId: from, arcId: target, projectId: storyId },
-            auth.token,
-          )
-            .then(() => setLinkNotice('Event now evokes arc'))
-            .catch((err) => {
-            setData((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    edges: {
-                      ...prev.edges,
-                      evokes: prev.edges.evokes.filter(
-                        (e) => !(e.event_id === from && e.arc_id === target),
-                      ),
-                    },
-                  }
-                : prev,
-            );
-            setLinkError(err?.message ?? String(err));
-            console.warn('[corkboard] tag-event-evokes failed:', err);
-          });
+          queueStructOpGlobal(storyId, { kind: 'evokes_tag', eventId: from, arcId: target });
+          setLinkNotice('Event now evokes arc');
           return;
         }
         return;
@@ -2918,44 +3112,10 @@ export default function FreeformCorkboard() {
               }
             : prev,
         );
-        (async () => {
-          try {
-            await untagEventPrecedes(
-              { fromEventId: oldFrom, toEventId: oldTo, projectId: storyId },
-              auth.token,
-            );
-            await tagEventPrecedes(
-              { fromEventId: oldFrom, toEventId: from, projectId: storyId },
-              auth.token,
-            );
-            await tagEventPrecedes(
-              { fromEventId: from, toEventId: oldTo, projectId: storyId },
-              auth.token,
-            );
-          } catch (err: any) {
-            // Revert: restore old, drop the two new.
-            setData((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    edges: {
-                      ...prev.edges,
-                      precedes: [
-                        ...prev.edges.precedes.filter(
-                          (p) =>
-                            !(p.from === oldFrom && p.to === from) &&
-                            !(p.from === from && p.to === oldTo),
-                        ),
-                        { from: oldFrom, to: oldTo },
-                      ],
-                    },
-                  }
-                : prev,
-            );
-            setLinkError(err?.message ?? String(err));
-            console.warn('[corkboard] PRECEDES splice failed:', err);
-          }
-        })();
+        // FIL-518 structural queue: the splice queues as ONE atomic op
+        // (untag + tag + tag expand at push time), so a reload can never
+        // replay half of it and a failed push retries instead of reverting.
+        queueStructOpGlobal(storyId, { kind: 'precedes_splice', anchorFrom: oldFrom, anchorTo: oldTo, insertId: from });
         return;
       }
     };
@@ -2995,24 +3155,7 @@ export default function FreeformCorkboard() {
             }
           : prev,
       );
-      untagEventPrecedes(
-        { fromEventId: fromId, toEventId: toId, projectId: storyId },
-        auth.token,
-      ).catch((err) => {
-        // Revert.
-        setData((prev) =>
-          prev
-            ? {
-                ...prev,
-                edges: {
-                  ...prev.edges,
-                  precedes: [...prev.edges.precedes, { from: fromId, to: toId }],
-                },
-              }
-            : prev,
-        );
-        console.warn('[corkboard] untag-event-precedes failed:', err);
-      });
+      queueStructOpGlobal(storyId, { kind: 'precedes_untag', from: fromId, to: toId });
     },
     [auth, storyId],
   );
@@ -3035,20 +3178,7 @@ export default function FreeformCorkboard() {
             }
           : prev,
       );
-      untagCauses({ fromId, toId, projectId: storyId }, auth.token).catch((err) => {
-        setData((prev) =>
-          prev
-            ? {
-                ...prev,
-                edges: {
-                  ...prev.edges,
-                  causes: [...prev.edges.causes, { from: fromId, to: toId }],
-                },
-              }
-            : prev,
-        );
-        console.warn('[corkboard] untag-causes failed:', err);
-      });
+      queueStructOpGlobal(storyId, { kind: 'causes_untag', from: fromId, to: toId });
     },
     [auth, storyId],
   );
@@ -3079,6 +3209,8 @@ export default function FreeformCorkboard() {
     const isWindowed = opts?.sourceFormat === 'screenplay' && prose.length > 40000;
     windowedRunRef.current = isWindowed;
     edgeCountAtSubmitRef.current = edgeCountOf(dataRef.current); // baseline for the lost-WS belt
+    deltaEdgesRef.current = 0; // FIL-516: fresh run, the belt stands ready until a delta arrives
+    beginWriteSettling(); // peer gate holds until braindump_complete (done-split)
     cardCountAtSubmitRef.current = (dataRef.current?.entities ?? []).filter((e) => !e.deleted_at).length;
     if (isWindowed) {
       windowedStartRef.current = Date.now();
@@ -3125,6 +3257,9 @@ export default function FreeformCorkboard() {
           inflightBraindumpRef.current = null;
           windowedRunRef.current = false;
           if (windowedPollRef.current) { window.clearInterval(windowedPollRef.current); windowedPollRef.current = null; }
+          endWriteSettling();
+          streamedEdgesRef.current = [];
+          setWeaving(null);
           setBraindumpPhase('done'); // stops the shimmer + tracker + meter
           setBraindumpMsg('Done reading the script.');
           setBraindumpText('');
@@ -3158,7 +3293,18 @@ export default function FreeformCorkboard() {
           const sig = `${n}:${e}:${s}`;
           const spineLanded = e > edgeCountAtSubmitRef.current;
           if (sig !== lastSig) { lastSig = sig; stableSince = Date.now(); }
-          else if (n > 0 && spineLanded && Date.now() - stableSince > STABLE_MS) { resolveWindowed(); }
+          // Resolve on stability ONLY as a lost-WS BACKSTOP: if the socket is
+          // still alive (braindump_progress phase pings, import_pages, cards
+          // all bump wsActivityRef), braindump_complete is coming and is the
+          // authoritative resolve — don't drop the meter during the lull
+          // between window writes and the global spine + arcs tail (the "meter
+          // went away before the edges completed" bug). Quiet socket for
+          // STABLE_MS + a stable graph = the WS truly died; then we resolve.
+          else if (
+            n > 0 && spineLanded &&
+            Date.now() - stableSince > STABLE_MS &&
+            Date.now() - wsActivityRef.current > STABLE_MS
+          ) { resolveWindowed(); }
         }, 15000);
         // Hard backstop past the Lambda ceiling, in case the graph never stabilizes.
         window.setTimeout(() => {
@@ -3166,39 +3312,48 @@ export default function FreeformCorkboard() {
         }, 960000);
       } else {
         setBraindumpMsg('Extracting, usually 15-30s. New cards will appear when ready.');
+        // LIVENESS deadline, not a fixed clock (the 20pp-import lesson: a
+        // legitimate single-call extraction streams for 2-3 minutes, and the
+        // old fixed 100s stop dropped the meter mid-run and left an edgeless
+        // board). Base ceiling scales with input size; any WS sign of life
+        // (streamed cards, extraction_progress ticks) extends 60s past itself.
+        const startAt = Date.now();
+        wsActivityRef.current = startAt;
+        const HARD_MS = Math.max(100000, Math.min(330000, prose.length * 8));
         // Steady fallback poll while inflight (every 8s): keeps the board filling
-        // even when the braindump_complete WS is lost, and gives the stability
+        // even when the braindump_complete WS is lost, gives the stability
         // belt the consecutive reads it needs to judge "settled" instead of
-        // resolving on the first partial mid-write read. Self-terminates when
-        // the run resolves (WS handler / belt / hard stop clear inflight).
+        // resolving on the first partial mid-write read, and checks the
+        // liveness deadline. Self-terminates when the run resolves.
         const pollIv = window.setInterval(() => {
           if (inflightBraindumpRef.current !== idAtSubmit) {
             window.clearInterval(pollIv);
             return;
           }
           refreshEntitiesRef.current();
-        }, 8000);
-        // At 45s, keep the writer informed — but DON'T flip to done: the write +
-        // worker tail can legitimately still be landing, and a premature 'done'
-        // is exactly what dropped the tracker early and let the wow walkthrough
-        // build from a half-written graph.
-        window.setTimeout(() => {
-          if (inflightBraindumpRef.current === idAtSubmit) {
-            setBraindumpMsg('Still working. A big idea can take a minute…');
-          }
-        }, 45000);
-        // Hard stop: if neither braindump_complete nor the stability belt ever
-        // resolved (truly lossy run), resolve authoritatively at 100s.
-        window.setTimeout(() => {
-          if (inflightBraindumpRef.current === idAtSubmit) {
+          const deadline = Math.max(startAt + HARD_MS, wsActivityRef.current + 60000);
+          if (Date.now() > deadline) {
+            // Truly dead run (no WS activity for 60s past the scaled ceiling):
+            // resolve authoritatively instead of hanging forever.
             inflightBraindumpRef.current = null;
+            endWriteSettling();
             setBraindumpPhase('done');
             setBraindumpMsg('Extraction took longer than expected. Check for new cards.');
             setBraindumpText('');
             dockAutoCloseRef.current = true;
+            streamedEdgesRef.current = [];
+            setWeaving(null);
             refreshEntitiesRef.current();
           }
-        }, 100000);
+        }, 8000);
+        // At 45s, keep the writer informed — but DON'T flip to done, and don't
+        // clobber a live "weaving" tick (recent WS activity means the meter
+        // already carries better information than this generic line).
+        window.setTimeout(() => {
+          if (inflightBraindumpRef.current === idAtSubmit && Date.now() - wsActivityRef.current > 20000) {
+            setBraindumpMsg('Still working. A big idea can take a minute…');
+          }
+        }, 45000);
       }
     } catch (err: any) {
       setBraindumpPhase('error');
@@ -3214,6 +3369,11 @@ export default function FreeformCorkboard() {
       setBraindumpPhase('error');
       return;
     }
+    // Collapse the dock the moment you Process, so the board — streaming cards +
+    // the meter — is the focus, not the composer you just finished with. The
+    // text stays in state (the meter carries progress from here); the dock's
+    // own done-and-empty auto-close is now a no-op on this path.
+    setBraindumpOpen(false);
     // During the wow, force the card-by-card streaming reveal regardless of env.
     await runBraindumpExtraction(prose, { wow: wowActive });
   }, [braindumpText, runBraindumpExtraction, wowActive]);
@@ -3867,21 +4027,12 @@ export default function FreeformCorkboard() {
           }
         }
       } catch (err) {
-        // Revert + rethrow so EditableName knows the save failed.
-        setData((prev) => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-            entities: prev.entities.map((e) => {
-              if (e.id !== cardId) return e;
-              const reverted = { ...e, working_name: prevName };
-              if (e.working_title !== undefined) reverted.working_title = prevName;
-              return reverted;
-            }),
-          };
-        });
-        console.warn('[corkboard] rename failed:', err);
-        throw err;
+        // FIL-518 stage 3: a failed rename push ENQUEUES instead of
+        // reverting — the optimistic value stays, the session retries in
+        // the background (persisted across reload), and the belt reverts
+        // visibly if it never lands.
+        storySessionRef.current?.queueEdit({ cardId, field: 'working_name', value: trimmed });
+        console.warn('[corkboard] rename push failed; queued for retry', err);
       }
     },
     [auth, storyId, data, refreshEntities],
@@ -3956,21 +4107,15 @@ export default function FreeformCorkboard() {
         // re-saves of the same content cost nothing.
         kickExtraction(cardId, newDescription);
       } catch (err) {
-        // Revert + rethrow so the editor knows the save failed.
-        setData((prev) => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-            entities: prev.entities.map((e) => {
-              if (e.id !== cardId) return e;
-              const reverted = { ...e, description: prevDesc };
-              if (isEvent) reverted.summary = prevSummary;
-              return reverted;
-            }),
-          };
-        });
-        console.warn('[corkboard] description update failed:', err);
-        throw err;
+        // FIL-518 stage 3: a failed description push ENQUEUES instead of
+        // reverting — optimistic value stays, session retries (persisted),
+        // the extraction kick rides the eventual push, belt reverts visibly
+        // if it never lands.
+        storySessionRef.current?.queueEdit(
+          { cardId, field: 'description', value: newDescription },
+          { onPushed: () => kickExtraction(cardId, newDescription) },
+        );
+        console.warn('[corkboard] description push failed; queued for retry', err);
       }
     },
     [auth, storyId, data, kickExtraction],
@@ -4158,43 +4303,94 @@ export default function FreeformCorkboard() {
     () => {},
   );
   const userIdForWs = auth?.userId ?? null;
+  const storySessionRef = useRef<StorySessionHandle | null>(null);
+  // Cross-view extraction pulse (script-side syncs/extractions): while the
+  // stamp is live the board's cards shimmer exactly like a board-initiated
+  // run. Expiry re-render is scheduled below; braindump_complete clears early.
+  const [scriptPulseUntil, setScriptPulseUntil] = useState(0);
+  const scriptExtractionActive = scriptPulseUntil > Date.now();
+  useEffect(() => {
+    if (scriptPulseUntil <= Date.now()) return;
+    const t = window.setTimeout(() => setScriptPulseUntil((v) => (v <= Date.now() ? 0 : v - 1)), scriptPulseUntil - Date.now() + 150);
+    return () => window.clearTimeout(t);
+  }, [scriptPulseUntil]);
 
   useEffect(() => {
     if (!userIdForWs || !storyId) return;
-    const wsEndpoint = process.env.REACT_APP_WEBSOCKET_ENDPOINT;
-    if (!wsEndpoint) return;
+
+    // FIL-518 stage 3 — the story SESSION owns the WebSocket now (it
+    // survives board↔script switches, applies graph_delta to the local
+    // copy + shelf even while this view is unmounted, and runs the writer-
+    // edit queue). This view subscribes for its own concerns: meter,
+    // done-split, streamed cards, refetch nudges.
+    const session = acquireStorySession(
+      storyId,
+      auth ? { userId: userIdForWs, token: auth.token } : null,
+    );
+    storySessionRef.current = session;
+    setScriptPulseUntil(session.extractionPulseUntil());
+    const offPulse = session.onExtractionPulse(() => setScriptPulseUntil(session.extractionPulseUntil()));
 
     let cancelled = false;
-    const ws = new WebSocket(wsEndpoint);
-
-    ws.onopen = () => {
+    const offMessage = session.onMessage((msg: any) => {
       if (cancelled) return;
-      try {
-        ws.send(JSON.stringify({
-          action: 'identify',
-          userId: userIdForWs,
-          storyId,
-          timestamp: Date.now(),
-        }));
-      } catch { /* ignore */ }
-    };
 
-    ws.onmessage = (raw) => {
-      if (cancelled) return;
-      let msg: any;
-      try { msg = JSON.parse(raw.data); } catch { return; }
-      if (msg?.projectId !== storyId) return;
+      // LIVENESS (windowed meter): ANY WS traffic during an inflight run proves
+      // the socket is alive, so the stability belt defers to braindump_complete
+      // instead of dropping the meter early. Covers the arc-suggestion tail
+      // (arc_suggestion carries no braindumpId + evokes/causes) that lands AFTER
+      // the 'wiring' phase and can exceed the stability window. The session is
+      // per-story, so any traffic here is this story's. Per-type bumps below are
+      // redundant with this but harmless.
+      if (inflightBraindumpRef.current) {
+        wsActivityRef.current = Date.now();
+      }
 
       // Dev streaming: a vertex finished extracting — drop its card on the
       // board immediately (card-by-card reveal). The final braindump_complete
       // refetch reconciles edges + authoritative fields. Ids match the backend
       // (slug), so the refetch dedups instead of duplicating.
+      // FIL-516 — the graph delta channel: the resolved extraction (cards,
+      // edges, facts, final vids) arrives at model-complete, BEFORE the
+      // Neptune write. Apply it to the local graph — the board is reading
+      // local state, so everything renders now; the flush lands behind it
+      // and the completion refetch dedupes to a no-op.
+      if (msg.type === 'graph_delta' && msg.delta) {
+        const delta = msg.delta as GraphDelta;
+        const freshEdges = countFreshDeltaEdges(dataRef.current, delta);
+        deltaEdgesRef.current += freshEdges;
+        pendingDeltasRef.current.push({ at: Date.now(), delta });
+        setData((prev) => (prev ? overlayPending(storyId!, mergeGraphDelta(prev, delta)) : prev));
+        // Shelf save happens in the story session (which also applies this
+        // delta to its own payload copy) — no duplicate write here.
+        // DONE-SPLIT: the board is now visually complete — resolve the run's
+        // user-facing state (meter finishes, shimmer clears, the wow tour
+        // proceeds) without waiting out the Neptune burst (measured 36s on a
+        // cold cluster). inflight stays SET (additive preservation + the 8s
+        // reconciliation poll keep running) and writeSettling keeps the peer
+        // gated until braindump_complete says the write truly landed.
+        if (inflightBraindumpRef.current && msg.braindumpId === inflightBraindumpRef.current && !windowedRunRef.current) {
+          setBraindumpPhase('done');
+          setBraindumpMsg('On your board. Saving in the background…');
+          setBraindumpText('');
+          dockAutoCloseRef.current = true;
+        }
+        console.info('[graph-delta] applied', {
+          entities: delta.entities?.length ?? 0,
+          information: delta.information?.length ?? 0,
+          freshEdges,
+        });
+        return;
+      }
+
       if (msg.type === 'entity_streamed' && msg.entity?.id) {
         const e = msg.entity;
+        wsActivityRef.current = Date.now();
         streamedIdsRef.current.add(e.id);
+        noteStreamedEdges(e);
         setData((prev) => {
           if (!prev) return prev;
-          if (prev.entities.some((x) => x.id === e.id)) return prev;
+          if (prev.entities.some((x) => x.id === e.id)) return mergeStreamedEdges(prev);
           const ent = {
             id: e.id,
             type: e.type,
@@ -4204,8 +4400,25 @@ export default function FreeformCorkboard() {
             description: e.description ?? e.summary ?? '',
             int_ext: e.int_ext,
           } as ProjectEntity;
-          return { ...prev, entities: [...prev.entities, ent] };
+          return mergeStreamedEdges({ ...prev, entities: [...prev.entities, ent] });
         });
+        return;
+      }
+
+      if (msg.type === 'extraction_progress') {
+        // The tail of a big extraction (information / relationships /
+        // knowledge) streams no cards; these throttled counts keep the meter
+        // alive and honest through the otherwise-silent minutes, and count as
+        // liveness for the hard-stop deadline.
+        if (inflightBraindumpRef.current) {
+          wsActivityRef.current = Date.now();
+          const c = msg.counts ?? {};
+          setWeaving({
+            information: c.information ?? 0,
+            relationships: c.relationships ?? 0,
+            knowledge_edges: c.knowledge_edges ?? 0,
+          });
+        }
         return;
       }
 
@@ -4216,6 +4429,9 @@ export default function FreeformCorkboard() {
         // and refetch so the board builds window-by-window. These pings are the
         // fast path; the FE ticker carries the meter when the socket has died.
         if (inflightBraindumpRef.current) {
+          // Liveness: a phase ping proves the socket is alive, so the windowed
+          // stability belt must NOT resolve on it (braindump_complete will).
+          wsActivityRef.current = Date.now();
           if (msg.phase && ['reading', 'structuring', 'processing', 'wiring'].includes(msg.phase)) {
             bumpWinPhase(msg.phase as WinPhase);
           }
@@ -4231,6 +4447,18 @@ export default function FreeformCorkboard() {
         return;
       }
 
+      if (msg.type === 'import_pages') {
+        // FIL-532: a window's script pages were written server-side. Liveness
+        // ping (keeps the windowed meter alive through the page-writing tail),
+        // and a refetch so a board watcher sees the run is still progressing.
+        if (inflightBraindumpRef.current) {
+          wsActivityRef.current = Date.now();
+          winLastGrowthRef.current = Date.now();
+          refreshEntitiesRef.current();
+        }
+        return;
+      }
+
       if (msg.type === 'braindump_complete') {
         const counts = msg.counts ?? {};
         const total =
@@ -4238,6 +4466,7 @@ export default function FreeformCorkboard() {
           (counts.events ?? 0) +
           (counts.locations ?? 0) +
           (counts.relationships ?? 0);
+        endWriteSettling(); // the write landed — the peer may slice Neptune again
         setBraindumpPhase('done');
         setBraindumpMsg(
           total === 0
@@ -4260,6 +4489,8 @@ export default function FreeformCorkboard() {
           relayoutAfterStreamRef.current = [...streamedIdsRef.current];
         }
         streamedIdsRef.current.clear();
+        streamedEdgesRef.current = [];
+        setWeaving(null);
         refreshEntitiesRef.current();
         return;
       }
@@ -4354,20 +4585,65 @@ export default function FreeformCorkboard() {
         });
         return;
       }
-    };
-
-    ws.onclose = () => { /* ignore — reopen on remount */ };
-    ws.onerror = () => { /* onclose follows */ };
+    });
 
     return () => {
       cancelled = true;
-      try { ws.close(1000, 'unmount'); } catch { /* ignore */ }
+      offMessage();
+      offPulse();
+      storySessionRef.current = null;
+      session.release(); // linger keeps the socket alive across view swaps
     };
-    // Deps: only userId + storyId. NOT auth (which rotates on token refresh)
-    // and NOT refreshEntities (which is invoked via ref so its latest version
-    // is always called). This keeps the WS connection stable across token
+    // Deps: only userId + storyId. NOT auth (which rotates on token refresh;
+    // the session gets fresh tokens via setAuth below) and NOT refreshEntities
+    // (invoked via ref). This keeps the subscription stable across token
     // rotations — prior bug had reconnects mid-stream losing WS events.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userIdForWs, storyId]);
+
+  // Token rotation → the session's background pushes keep working.
+  useEffect(() => {
+    if (auth && userIdForWs) storySessionRef.current?.setAuth({ userId: userIdForWs, token: auth.token });
+  }, [auth, userIdForWs]);
+
+  // Mirror the freshest payload into the session (quiet: this view already
+  // renders it) so the script view and the shelf see the same local truth.
+  useEffect(() => {
+    if (data) storySessionRef.current?.setPayload(data, { quiet: true });
+  }, [data]);
+
+  // FIL-518 (last piece) — streamed-card replay: cards that streamed while
+  // this view was UNMOUNTED sit in the session's provisional side-buffer.
+  // Fold them in exactly like live entity_streamed messages (same minimal
+  // shape, same dedup, same relayout tracking) so hopping to the board
+  // mid-run shows the reveal instead of an empty board until the delta.
+  // Idempotent: already-present ids fold to a no-op, and the buffer clears
+  // itself at graph_delta / braindump_complete.
+  useEffect(() => {
+    if (!data) return;
+    const buffered = storySessionRef.current?.getStreamedEntities() ?? [];
+    if (!buffered.length) return;
+    const fresh = buffered.filter((e: any) => e?.id && !data.entities.some((x) => x.id === e.id));
+    if (!fresh.length) return;
+    for (const e of fresh) { streamedIdsRef.current.add(e.id); noteStreamedEdges(e); }
+    setData((prev) => {
+      if (!prev) return prev;
+      const add = fresh
+        .filter((e: any) => !prev.entities.some((x) => x.id === e.id))
+        .map((e: any) => ({
+          id: e.id,
+          type: e.type,
+          working_name: e.working_name,
+          working_title: e.working_title,
+          narrative_status: e.narrative_status,
+          description: e.description ?? e.summary ?? '',
+          int_ext: e.int_ext,
+        } as ProjectEntity));
+      if (!add.length) return prev;
+      console.info('[graph-store] replayed streamed cards from session buffer', { count: add.length });
+      return mergeStreamedEdges({ ...prev, entities: [...prev.entities, ...add] });
+    });
+  }, [data, noteStreamedEdges, mergeStreamedEdges]);
 
   // -------- Lazy fetch per-card questions when expanded --------
 
@@ -4705,6 +4981,7 @@ export default function FreeformCorkboard() {
           }
           onClick={() => storyId && routerNavigate(`/freeform/${storyId}/script`)}
           title="Write the screenplay: your scenes in story order, ready to draft"
+          tourId="toolbar-script"
         />
         <ToolbarButton
           label="Arrange"
@@ -5064,6 +5341,7 @@ export default function FreeformCorkboard() {
           winPhase={winPhase}
           winProg={winProg}
           elapsedMs={winElapsed}
+          weaving={weaving}
         />
       )}
 
@@ -5159,6 +5437,14 @@ export default function FreeformCorkboard() {
           position: 'relative',
           width: canvasW,
           height: canvasH,
+          // Scroll anchoring OFF for the canvas subtree: Chrome picks a card
+          // as its scroll anchor, and during extraction cards move constantly
+          // (stream placement, nudges, SC renumbering, position transitions),
+          // so the browser counter-scrolls after the moving anchor and fights
+          // every wheel input — the "board shakes and won't scroll while
+          // processing" bug. Cards are absolutely positioned; anchoring buys
+          // nothing here.
+          overflowAnchor: 'none',
           // In-board zoom: CSS `zoom` scales the whole board and its used size, so
           // page scroll still pans and fixed chrome (toolbar/panels) is untouched.
           zoom,
@@ -5549,7 +5835,7 @@ export default function FreeformCorkboard() {
               animatePosition={!!(override || displacement || relMid || (arcBall && !draggingId && !draggingSeqId) || peerClear.has(entity.id) || (isFocalCard && peerFocusPos) || focusExiting)}
               ballColor={arcBall?.color}
               ballCompact={!!arcBall && (arcsMoving || !!draggingId || !!draggingSeqId) && !expanded}
-              processing={edgesGenerating && !expanded}
+              processing={(edgesGenerating || scriptExtractionActive) && !expanded}
               onMouseDown={(e) => { if (tourBlocks('expand')) return; onCardMouseDown(e, entity.id); }}
               sceneNo={entity.type === 'event' ? sceneNoById.get(entity.id) : undefined}
               onHoverChange={
@@ -5629,7 +5915,7 @@ export default function FreeformCorkboard() {
               autoFocus
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && structDraft.trim() && !structBusy) {
-                  runStructural(() => setStructuralEdge({ projectId: storyId!, fromId: editStructural.from, toId: editStructural.to, predicate: structDraft.trim() }, auth!.token));
+                  queueStructuralSet(editStructural.from, editStructural.to, structDraft.trim());
                 }
               }}
               style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', fontSize: 12, border: dark ? '1px solid #2a2a30' : '1px solid #e2e8f0', borderRadius: 6, outline: 'none', color: dark ? '#e6e6ea' : '#222' }}
@@ -5637,7 +5923,7 @@ export default function FreeformCorkboard() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10 }}>
               <button
                 disabled={structBusy || !structDraft.trim()}
-                onClick={() => runStructural(() => setStructuralEdge({ projectId: storyId!, fromId: editStructural.from, toId: editStructural.to, predicate: structDraft.trim() }, auth!.token))}
+                onClick={() => queueStructuralSet(editStructural.from, editStructural.to, structDraft.trim())}
                 style={{ padding: '5px 12px', fontSize: 11.5, fontWeight: 500, border: 'none', borderRadius: 6, background: structBusy || !structDraft.trim() ? '#eee' : PEER_BLUE, color: structBusy || !structDraft.trim() ? '#999' : '#fff', cursor: structBusy || !structDraft.trim() ? 'not-allowed' : 'pointer' }}
               >
                 Save
@@ -5652,7 +5938,7 @@ export default function FreeformCorkboard() {
               </button>
               <button
                 disabled={structBusy}
-                onClick={() => runStructural(() => deleteStructuralEdge({ projectId: storyId!, fromId: editStructural.from, toId: editStructural.to }, auth!.token))}
+                onClick={() => queueStructuralDelete(editStructural.from, editStructural.to)}
                 style={{ marginLeft: 'auto', padding: '5px 10px', fontSize: 11.5, fontWeight: 500, border: 'none', borderRadius: 6, background: 'none', color: '#dc2626', cursor: structBusy ? 'not-allowed' : 'pointer' }}
               >
                 Delete
@@ -5724,6 +6010,8 @@ export default function FreeformCorkboard() {
             onCardQuestionsChanged={() => refreshCardQuestions(peerEntity.id)}
             onCascadeFallbackRefresh={() => refreshEntitiesRef.current()}
             onResponseSubmitted={() => { setSubmissionCount((c) => c + 1); setPendingCascades((c) => c + 1); }}
+            getGraphPayload={() => dataRef.current}
+            getFocalStreaming={(id) => streamedIdsRef.current.has(id)}
           />
         )}
       </div>

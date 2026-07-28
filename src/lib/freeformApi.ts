@@ -505,6 +505,11 @@ export interface ProjectEntity {
   character_a?: string;
   character_b?: string;
   kind?: string;
+  /** Per-participant roles (2026-07-25 bond convention): kind is the
+   *  symmetric bond noun; asymmetry lives here (guardian/ward, mentor/
+   *  mentee). Identical on both sides for symmetric bonds. */
+  role_a?: string;
+  role_b?: string;
   rationale?: string;
   // Arc-specific (FIL-504 / D'-1). `working_name` and `description` are shared
   // with other entity types above; `kind` for Arc holds an `ArcKind`, not a
@@ -520,12 +525,14 @@ export interface ProjectEntity {
 }
 
 export interface ProjectEdges {
-  /** Event/Relationship → Character */
-  involves: Array<{ from: string; to: string }>;
+  /** Event/Relationship → Character. `streamed` marks a provisional edge the
+   *  FE derived from a streamed card mid-extraction (never sent by the server;
+   *  the authoritative refetch replaces it). */
+  involves: Array<{ from: string; to: string; streamed?: boolean }>;
   /** Event → Location */
   occurs_in: Array<{ from: string; to: string }>;
-  /** Event → Event (forward only) */
-  precedes: Array<{ from: string; to: string }>;
+  /** Event → Event (forward only). `streamed` as on involves. */
+  precedes: Array<{ from: string; to: string; streamed?: boolean }>;
   /** Sequence → Sequence (forward only) — the sequence throughline, auto-chained
    *  in plot order at extraction time. Same edge label as precedes, Sequence ends. */
   sequence_precedes: Array<{ from: string; to: string }>;
@@ -534,6 +541,10 @@ export interface ProjectEdges {
     from: string;
     to: string;
     predicate: string;
+    /** Dual-wording convention (2026-07-25): the to-side's reading of the
+     *  same fact ('created_by' for a 'creator_of' edge). Empty on legacy
+     *  edges — fall back to the forward wording. */
+    inverse_predicate?: string;
     evidence_quote?: string;
   }>;
   /** Character/Audience → Information with knowledge state. */
@@ -1315,8 +1326,32 @@ export async function getSceneText(
  *  block id (may be '' until minted), normalized content hash, text length. */
 export type SceneLedgerBlock = { b: string; h: string; l: number };
 
+/** FIL-518 slice cutover — Dynamo-only priors for a client-composed slice.
+ *  Returns focal + per-character iteration history; no Neptune read. */
+export async function getSlicePriors(
+  req: { projectId: string; cardId: string; charIds: string[] },
+  token: string,
+): Promise<{ focal: { prior_responses: any[]; open_questions: any[] }; byChar: Record<string, { prior_responses: any[]; open_questions: any[] }> }> {
+  const result = await freshApiCall(apiPath!, { event: 'get-slice-priors', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'get-slice-priors failed');
+  return (result.data?.body ?? result.data) as { focal: { prior_responses: any[]; open_questions: any[] }; byChar: Record<string, { prior_responses: any[]; open_questions: any[] }> };
+}
+
+/** FIL-520 round 4 — the writer chose KEEP on a cleared scene: acknowledge
+ *  the clear so the navigator's red decision state settles back to a plain
+ *  unwritten outline slot. A later real save lifts both stamps. */
+export async function ackSceneCleared(
+  req: { projectId: string; eventId: string },
+  token: string,
+): Promise<{ acknowledged: true; eventId: string }> {
+  if (useMock) return Promise.resolve({ acknowledged: true, eventId: req.eventId });
+  const result = await freshApiCall(apiPath!, { event: 'ack-scene-cleared', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'ack-scene-cleared failed');
+  return (result.data?.body ?? result.data) as { acknowledged: true; eventId: string };
+}
+
 export async function saveSceneText(
-  req: { projectId: string; eventId: string; html: string; ledger?: SceneLedgerBlock[] },
+  req: { projectId: string; eventId: string; html: string; ledger?: SceneLedgerBlock[]; stampExtracted?: boolean },
   token: string,
 ): Promise<{ saved: true; eventId: string; updatedAt: string }> {
   if (useMock) {
@@ -1333,11 +1368,11 @@ export async function saveSceneText(
 export async function listSceneTexts(
   req: { projectId: string },
   token: string,
-): Promise<{ projectId: string; sceneTexts: Array<{ eventId: string; html: string; updatedAt: string }> }> {
+): Promise<{ projectId: string; sceneTexts: Array<{ eventId: string; html: string; updatedAt: string; stale?: boolean }> }> {
   if (useMock) return Promise.resolve({ projectId: req.projectId, sceneTexts: [] });
   const result = await freshApiCall(apiPath!, { event: 'list-scene-texts', ...req }, token);
   if (!result.success) throw new Error(result.error || 'list-scene-texts failed');
-  return (result.data?.body ?? result.data) as { projectId: string; sceneTexts: Array<{ eventId: string; html: string; updatedAt: string }> };
+  return (result.data?.body ?? result.data) as { projectId: string; sceneTexts: Array<{ eventId: string; html: string; updatedAt: string; stale?: boolean }> };
 }
 
 /** Scene-exit extraction trigger — async (202 + messageId); the worker gates,
@@ -1359,6 +1394,159 @@ export async function enqueueSceneExtraction(
   const result = await freshApiCall(apiPath!, { event: 'enqueue-scene-extraction', ...req }, token);
   if (!result.success) throw new Error(result.error || 'enqueue-scene-extraction failed');
   return (result.data?.body ?? result.data) as { queued?: boolean; skipped?: boolean; messageId?: string; eventId?: string };
+}
+
+// ============================================
+// Step 8 (FIL-528) — screenplay peer notes on a scene.
+// ============================================
+
+export type NoteTier = 'concept' | 'character' | 'structure' | 'scene' | 'dialogue';
+export interface ScreenplayNote {
+  id: string;
+  /** The scene (Event vid) this note is anchored to. Present on
+   *  list-project-notes; empty from the single-scene request path. */
+  event_id?: string;
+  anchor: string;
+  tier: NoteTier;
+  intent_gap: boolean;
+  diagnosis: string;
+  state: string;
+  created_at: string;
+  /** Who settled a non-open note: 'writer' | 'auto' (the §5 re-eval pass). */
+  settled_by?: string;
+  /** The auto-resolve rationale (present when settled_by === 'auto'). */
+  resolve_note?: string;
+  /** JSON array of {note, at, pages_sha} progression entries; note stays open. */
+  progress_log?: string;
+  state_changed_at?: string;
+  /** Range anchor: verbatim LAST line of a span (anchor carries the first). */
+  anchor_end?: string;
+  /** 'scene' (Mode A) | 'sequence' (Mode B) | 'draft' (Mode C). */
+  mode?: string;
+  /** The Sequence vid a sequence-mode note came from. */
+  seq_id?: string;
+  /** Deterministic anchor identity: the paragraph block ids at write time. */
+  anchor_block_id?: string;
+  anchor_end_block_id?: string;
+  /** Mode B/C: which member scene the anchor lives in ("SC 3"). */
+  anchor_scene?: string;
+  /** Mode C: how many of the three blind readers gave this note ("2" | "3"). */
+  votes?: string;
+  /** Mode C: JSON array of implicated SC numbers / Event vids. */
+  implicated_scenes?: string | number[];
+  implicated_event_ids?: string | string[];
+}
+
+/** Mode C — a scene multiple blind readers implicated (the producer heatmap). */
+export interface DraftHotspot {
+  sc: number;
+  mentions: number;
+  event_id: string;
+  title: string;
+}
+
+/** Mode C — the draft read: 3 blind spine reads + collation; commits 2-of-3
+ *  consensus notes (unanchored) + hotspots. Ground with groundDraftNotes. */
+export async function requestDraftNotes(
+  req: { projectId: string },
+  token: string,
+): Promise<{ summary: string; clean_bill?: boolean; notes: ScreenplayNote[]; hotspots?: DraftHotspot[]; skipped?: boolean; reason?: string; latencyMs?: number }> {
+  if (useMock) return Promise.resolve({ summary: '', notes: [] });
+  const result = await freshApiCall(apiPath!, { event: 'draft-notes', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'draft-notes failed');
+  return (result.data?.body ?? result.data) as { summary: string; clean_bill?: boolean; notes: ScreenplayNote[]; hotspots?: DraftHotspot[]; skipped?: boolean; reason?: string; latencyMs?: number };
+}
+
+/** Mode C — anchor the committed draft notes to verbatim lines in the
+ *  implicated scenes' pages; pages-disproven notes come back retired. */
+export async function groundDraftNotes(
+  req: { projectId: string; noteIds?: string[] },
+  token: string,
+): Promise<{ notes: ScreenplayNote[]; grounded?: number; disproven?: number; unanchorable?: number; skipped?: boolean }> {
+  if (useMock) return Promise.resolve({ notes: [] });
+  const result = await freshApiCall(apiPath!, { event: 'draft-notes-ground', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'draft-notes-ground failed');
+  return (result.data?.body ?? result.data) as { notes: ScreenplayNote[]; grounded?: number; disproven?: number; unanchorable?: number; skipped?: boolean };
+}
+
+/** Request the screenplay peer's coverage of one scene: reads the scene's pages
+ *  + its graph intent envelope, returns anchored execution notes (also
+ *  persisted as Note vertices on the Event). */
+export async function requestScreenplayNotes(
+  req: { projectId: string; cardId: string; focalId: string; focalType?: 'event' | 'sequence' },
+  token: string,
+): Promise<{ summary: string; notes: ScreenplayNote[]; skipped?: boolean; reason?: string; latencyMs?: number }> {
+  if (useMock) return Promise.resolve({ summary: '', notes: [] });
+  const result = await freshApiCall(apiPath!, { event: 'screenplay-notes', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'screenplay-notes failed');
+  return (result.data?.body ?? result.data) as { summary: string; notes: ScreenplayNote[]; skipped?: boolean; reason?: string; latencyMs?: number };
+}
+
+/** The open (+ optionally resolved) peer notes anchored to a scene. */
+export async function listSceneNotes(
+  req: { projectId: string; eventId: string; includeResolved?: boolean },
+  token: string,
+): Promise<{ notes: ScreenplayNote[] }> {
+  if (useMock) return Promise.resolve({ notes: [] });
+  const result = await freshApiCall(apiPath!, { event: 'list-scene-notes', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'list-scene-notes failed');
+  return (result.data?.body ?? result.data) as { notes: ScreenplayNote[] };
+}
+
+/** EVERY peer note across the story in one read (each carries event_id), for
+ *  the document-wide Pins + drawer + Passes surface. */
+export async function listProjectNotes(
+  req: { projectId: string; includeResolved?: boolean },
+  token: string,
+): Promise<{ notes: ScreenplayNote[] }> {
+  if (useMock) return Promise.resolve({ notes: [] });
+  const result = await freshApiCall(apiPath!, { event: 'list-project-notes', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'list-project-notes failed');
+  return (result.data?.body ?? result.data) as { notes: ScreenplayNote[] };
+}
+
+/** The writer's declared resolution of a note (the manual path complementing
+ *  auto-resolve). Keep-bias: stamps state, never deletes; recoverable. */
+export async function setNoteState(
+  req: { projectId: string; noteId: string; state: 'open' | 'resolved' | 'dismissed' | 'progressed' },
+  token: string,
+): Promise<{ note: ScreenplayNote }> {
+  if (useMock) return Promise.resolve({ note: { id: req.noteId, anchor: '', tier: 'scene' as NoteTier, intent_gap: false, diagnosis: '', state: req.state, created_at: '' } });
+  const result = await freshApiCall(apiPath!, { event: 'set-note-state', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'set-note-state failed');
+  return (result.data?.body ?? result.data) as { note: ScreenplayNote };
+}
+
+/** FIL-528 §6 — one turn of a note's discussion thread. */
+export interface NoteThreadTurn {
+  turnId?: string;
+  role: 'writer' | 'peer' | string;
+  content: string;
+  createdAt?: string;
+}
+
+/** Send a writer message on a note's thread; the peer replies in the note's
+ *  voice with the CURRENT pages + the note's trajectory as context. Creates
+ *  the thread on first message (one persistent thread per note). */
+export async function noteDiscuss(
+  req: { projectId: string; noteId: string; message: string },
+  token: string,
+): Promise<{ threadId: string; writerTurn: NoteThreadTurn; peerTurn: NoteThreadTurn; turnCount: number }> {
+  if (useMock) return Promise.resolve({ threadId: `notethread_${req.noteId}`, writerTurn: { role: 'writer', content: req.message }, peerTurn: { role: 'peer', content: 'Mock peer reply.' }, turnCount: 2 });
+  const result = await freshApiCall(apiPath!, { event: 'note-discuss', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'note-discuss failed');
+  return (result.data?.body ?? result.data) as { threadId: string; writerTurn: NoteThreadTurn; peerTurn: NoteThreadTurn; turnCount: number };
+}
+
+/** Load a note's thread for restore (empty turns when never discussed). */
+export async function getNoteThread(
+  req: { projectId: string; noteId: string },
+  token: string,
+): Promise<{ threadId: string | null; turns: NoteThreadTurn[]; status: string }> {
+  if (useMock) return Promise.resolve({ threadId: null, turns: [], status: 'none' });
+  const result = await freshApiCall(apiPath!, { event: 'get-note-thread', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'get-note-thread failed');
+  return (result.data?.body ?? result.data) as { threadId: string | null; turns: NoteThreadTurn[]; status: string };
 }
 
 /** Step 7 — is a scene's graph behind its stored pages? Ledger diff on the

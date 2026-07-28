@@ -288,14 +288,16 @@ const LoginRoute = ({ children }: { children: React.ReactNode }) => {
 const LandingRoute = ({ children }: { children: React.ReactNode }) => {
   const authStatus = useAuthStatus();
   const navigate = useNavigate();
+  // ?preview lets authenticated users view the landing page (marketing review)
+  const isPreview = window.location.search.includes('preview');
 
   useEffect(() => {
-    if (authStatus === 'authenticated') {
+    if (authStatus === 'authenticated' && !isPreview) {
       navigate('/dashboard');
     }
-  }, [authStatus, navigate]);
+  }, [authStatus, navigate, isPreview]);
 
-  return authStatus !== 'authenticated' ? <>{children}</> : null;
+  return authStatus !== 'authenticated' || isPreview ? <>{children}</> : null;
 };
 
 // ============================================================================
@@ -2049,4 +2051,4 @@ function AppContent() {
   );
 }
 
-export default App;
+export default App;

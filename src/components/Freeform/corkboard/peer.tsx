@@ -3,15 +3,22 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { type ChatTurn } from '../../../components/Freeform/ChatContinuation';
 import { getEntityColor, hexToRgba } from '../../../components/Freeform/entityColors';
 import InternIcon from '../../../components/Freeform/InternIcon';
-import { PEER_BLUE } from '../../../components/Freeform/tokens';
-import { type EntityType, type PeerQuestion } from '../../../components/Freeform/types';
-import { buildSlice, checkSceneStaleness, closePeerThread, createWriterQuestion, enqueuePeerFirstPass, enqueueSceneExtraction, peerContinue, saveCardResponseDraft, startPeerThread, submitCardResponse, updateQuestionStatus as updateQuestionStatusApi, type GraphSlice, type PersistedQuestion, type ProjectEntity } from '../../../lib/freeformApi';
+import { NOTE_FONT_SANS, NOTE_FONT_SERIF, noteSurface, PEER_BLUE } from '../../../components/Freeform/tokens';
+import { type EntityType, type PeerCardState, type PeerQuestion } from '../../../components/Freeform/types';
+import { buildSlice, checkSceneStaleness, closePeerThread, createWriterQuestion, enqueuePeerFirstPass, enqueueSceneExtraction, getSlicePriors, listCardQuestions, peerContinue, saveCardResponseDraft, startPeerThread, submitCardResponse, updateQuestionStatus as updateQuestionStatusApi, type GraphSlice, type ListProjectEntitiesResponse, type PersistedQuestion, type ProjectEntity } from '../../../lib/freeformApi';
+import { buildLocalSlice, mergePriorsIntoSlice, diffSlices } from '../../../lib/localSlice';
 import { useStreamingPeer } from '../../../lib/useStreamingPeer';
 import { AskPeerButton, Section } from './cards';
 import { EXPANDED_W, PEER_CARD_W, PEER_GAP, PEER_PROSE_COL_W, type Pos } from './constants';
 import { relativeTimeShort } from './labels';
 import { EventSheet, SubEventSubcards } from './sheets';
 import { liftColor, useThemeMode } from './theme';
+
+// FIL-518 slice cutover: while true, every local-slice ask also fires a
+// fire-and-forget server build-slice + diff (logged as [slice-verify]) so we
+// keep watching local==server during rollout. Flip to false to stop paying
+// the background Neptune read once the local path is trusted.
+const SLICE_VERIFY = false;
 
 // =====================================================================
 // Response-submission queue — submissions are serialized app-wide. Each
@@ -33,6 +40,18 @@ const extractionWaiters = new Map<string, () => void>();
 export const peerWriteGate = { active: false };
 export function setPeerWriteActive(active: boolean) {
   peerWriteGate.active = active;
+}
+
+// WOW-tour gate: while the first-run tour is walking the OPENED bento card, the
+// bento's own "Ask peer" button must not fire — the tour drives the peer via
+// its "Now try the peer" step and the canvas footer button, so a stray bento
+// click would open the peer out of the scripted sequence. Scoped to the bento
+// OpenQuestionsPanel only (NOT the shared ask() or the canvas FloatingPeerCard,
+// which the tour's guide-ask step still needs). WowFlow ties it to its phase so
+// it always clears (any non-bento phase, skip, or unmount).
+export const wowBentoPeerGate = { active: false };
+export function setWowBentoPeerActive(active: boolean) {
+  wowBentoPeerGate.active = active;
 }
 
 /** Called by the corkboard page when cascade_complete lands for a response —
@@ -87,6 +106,8 @@ export function usePeerSession({
   token,
   onCardQuestionsChanged,
   onCascadeFallbackRefresh,
+  getGraphPayload,
+  getFocalStreaming,
 }: {
   entity: ProjectEntity;
   projectId: string;
@@ -94,6 +115,16 @@ export function usePeerSession({
   token: string;
   onCardQuestionsChanged: () => void;
   onCascadeFallbackRefresh: () => void;
+  /** FIL-518 stage 2b (shadow mode): freshest client-held list-project-entities
+   *  payload for the slice shadow diff. Optional; when absent the shadow falls
+   *  back to the IndexedDB shelf, and skips silently if that misses too. */
+  getGraphPayload?: () => ListProjectEntitiesResponse | null;
+  /** True while `cardId` is still an optimistic mid-stream shell from an
+   *  in-flight braindump (in the board's streamedIdsRef) — i.e. its full
+   *  extracted content has NOT merged into local state yet. Used by the
+   *  readiness gate to distinguish a settled card (read now) from a shell
+   *  still being written (wait for the local merge). */
+  getFocalStreaming?: (cardId: string) => boolean;
 }) {
   const cardId = entity.id;
   const focalType = entity.type as 'character' | 'event' | 'relationship' | 'sequence';
@@ -119,6 +150,13 @@ export function usePeerSession({
   const aliveRef = useRef(true);
   useEffect(() => () => { aliveRef.current = false; }, []);
 
+  // Mirror the streaming state into a ref so the recovery watchdog (a timer
+  // chain captured inside ask()) reads the CURRENT state, not a stale closure.
+  const streamingStateRef = useRef<PeerCardState | null>(streaming.state);
+  useEffect(() => { streamingStateRef.current = streaming.state; }, [streaming.state]);
+  // Monotonic ask sequence — a recovery chain bails when a newer ask started.
+  const askSeqRef = useRef(0);
+
   // Build the slice + kick the async first-pass. Called on mount (canvas) or
   // explicitly (sheet). Safe to call again for a re-ask.
   const ask = useCallback(async () => {
@@ -130,12 +168,34 @@ export function usePeerSession({
     }
     try {
       setSetupError(null);
-      // Hold off while a braindump's extraction + graph write is still in flight.
-      // Building the slice mid-write reads a half-written graph and grounds the
-      // peer on partial context (the focal card may not be persisted yet). Poll
-      // until the write settles; fail-open after a generous cap so a lost
-      // braindump_complete can never hard-block the peer.
-      if (peerWriteGate.active) {
+      // READINESS GATE (replaces the old write-gate). The peer slices from the
+      // LOCAL graph copy and hands that slice to the backend, so it never needs
+      // the Neptune WRITE to finish — only the local copy to hold the focal
+      // card's content. So: if the card is already in local state and settled,
+      // read now (covers every ask on a pre-existing/untouched card, and any
+      // ask made with no braindump running — the common case). Only wait when
+      // the card is absent locally or is still an optimistic mid-stream shell,
+      // and wait on the LOCAL merge (graph_delta clears streamedIdsRef), never
+      // on a server signal — so a lost braindump_complete can't hard-block us.
+      // No local payload (the sheet / server-build-slice path) keeps the old
+      // write-gate, since THAT path reads Neptune and does need the write down.
+      const localPayload = getGraphPayload?.() ?? null;
+      if (localPayload) {
+        const focalReady = () => {
+          const p = getGraphPayload?.();
+          const present = !!p && (p.entities ?? []).some((e: any) => e?.id === cardId);
+          const shell = getFocalStreaming?.(cardId) ?? false;
+          return present && !shell;
+        };
+        if (!focalReady()) {
+          setStatusLine('Finishing saving your story…');
+          const start = Date.now();
+          while (!focalReady() && Date.now() - start < 20000) {
+            await new Promise((r) => setTimeout(r, 200));
+            if (!aliveRef.current) return;
+          }
+        }
+      } else if (peerWriteGate.active) {
         setStatusLine('Finishing saving your story…');
         const start = Date.now();
         while (peerWriteGate.active && Date.now() - start < 35000) {
@@ -208,16 +268,83 @@ export function usePeerSession({
               open_dimensions: entity.open_dimensions,
               evidence_quote: entity.evidence_quote,
             };
-      const sliceRes = await buildSlice(
-        { projectId, cardId, focalType, focalId, focalSeed },
-        token,
-      );
+      // FIL-518 SLICE CUTOVER: compose the slice from the client-held graph
+      // copy (verified equivalent to Neptune via the shadow) and fetch only
+      // priors from Dynamo — skipping the ~5.5s Neptune neighborhood build.
+      // Server build-slice is the fallback (seed flow, relationship focals,
+      // missing payload, or any local error). SLICE_VERIFY keeps a
+      // fire-and-forget background diff vs the full server build during
+      // rollout; flip it off to stop paying that background read.
+      let slice: any = null;
+      let usedLocal = false;
+      const tLocal = performance.now();
+      try {
+        const payload = getGraphPayload?.() ?? null;
+        if (payload) {
+          const local = buildLocalSlice(payload, { focalType, focalId, cardId });
+          if (local) {
+            const charIds = [
+              ...(local.slice.co_characters ?? []),
+              ...(local.slice.mentioned_characters ?? []),
+              ...(local.slice.characters_involved ?? []),
+            ].map((c: any) => c?.id).filter(Boolean);
+            const priors = await getSlicePriors({ projectId, cardId, charIds }, token);
+            mergePriorsIntoSlice(local.slice, priors);
+            slice = local.slice;
+            usedLocal = true;
+            console.info('[slice-local] used', { focalType, focalId, ms: Math.round(performance.now() - tLocal) });
+          }
+        }
+      } catch (e) {
+        console.warn('[slice-local] failed; falling back to server build-slice', e);
+        slice = null;
+        usedLocal = false;
+      }
+
+      if (!slice) {
+        const sliceRes = await buildSlice(
+          { projectId, cardId, focalType, focalId, focalSeed },
+          token,
+        );
+        slice = sliceRes.slice;
+      }
       if (!aliveRef.current) return;
-      setSlice(sliceRes.slice);
+      setSlice(slice);
+
+      // Transitional background verify: local slice (incl. merged priors) vs
+      // the full server build. Fired AFTER the fast local slice is committed,
+      // so the ask never waits on Neptune. Un-skips the prior tiers (they are
+      // real now, not Dynamo-absent). Remove once trusted.
+      if (usedLocal && SLICE_VERIFY) {
+        const localSliceForVerify = slice;
+        void buildSlice({ projectId, cardId, focalType, focalId, focalSeed }, token)
+          .then((sr) => {
+            try {
+              const d = diffSlices(localSliceForVerify, sr.slice, []);
+              console.info('[slice-verify]', {
+                focalType, focalId, equal: d.equal, mismatchCount: d.mismatches.length,
+                first: d.mismatches.slice(0, 8).map((m) => ({ p: m.path, k: m.kind })),
+              });
+            } catch { /* verify only */ }
+          })
+          .catch(() => {});
+      }
 
       const clientRequestId = `cb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       streaming.beginStream(clientRequestId);
       setStatusLine('Queued — peer is thinking…');
+
+      // SOCKET-READY BARRIER: the peer card mounts its own WS and ask() fires
+      // on the same mount. Since the local-slice cutover, the enqueue can beat
+      // the socket's identify write, so the backend's connection scan misses
+      // this tab and the whole stream goes elsewhere (the worked-once-then-
+      // hangs race). Hold the enqueue until the socket is open + identified
+      // (~400ms grace); fail-open on timeout — recovery below still lands it.
+      await streaming.waitReady(5000);
+      if (!aliveRef.current) return;
+
+      const askSeq = ++askSeqRef.current;
+      const askStartedAt = Date.now();
 
       await enqueuePeerFirstPass(
         {
@@ -225,12 +352,73 @@ export function usePeerSession({
           cardId,
           focalType,
           focalId,
-          slice: sliceRes.slice,
+          slice,
           userId,
           clientRequestId,
         },
         token,
       );
+
+      // LOST-STREAM RECOVERY: the backend persists the ask's questions at
+      // stream-done whether or not any socket got the bytes. If our stream
+      // goes quiet (identify race lost anyway, socket died mid-ask), fetch
+      // the persisted questions over HTTP and hydrate the panel instead of
+      // hanging on "peer is thinking" forever. Prose is not recoverable on
+      // this path (questions are the deliverable); the card cache refreshes
+      // so the questions are answerable either way.
+      const RECOVERY_AT_MS = [14000, 26000, 40000];
+      // Read via a call so TS doesn't narrow the ref across awaits (timers
+      // mutate it out-of-band).
+      const curStreamState = () => streamingStateRef.current;
+      const tryRecover = async (i: number) => {
+        if (!aliveRef.current || askSeqRef.current !== askSeq) return;
+        if (curStreamState() === 'complete') return;
+        const lastEvent = streaming.getLastEventAt();
+        const quietMs = Date.now() - (lastEvent ?? askStartedAt);
+        // Stream is actively flowing — give it another window.
+        if (lastEvent && quietMs < 10000) {
+          if (i + 1 < RECOVERY_AT_MS.length) window.setTimeout(() => void tryRecover(i + 1), RECOVERY_AT_MS[i + 1] - RECOVERY_AT_MS[i]);
+          return;
+        }
+        try {
+          const res = await listCardQuestions({ cardId }, token);
+          if (!aliveRef.current || askSeqRef.current !== askSeq || curStreamState() === 'complete') return;
+          const fresh = (res.questions ?? []).filter(
+            (q) => q.authoredBy === 'peer' && new Date(q.createdAt).getTime() >= askStartedAt - 8000,
+          );
+          if (fresh.length > 0) {
+            streaming.hydratePersisted(fresh.map((q) => ({
+              questionId: q.questionId,
+              askId: q.askId ?? '',
+              cardId: q.cardId,
+              projectId: q.projectId,
+              orderIndex: q.orderIndex,
+              questionText: q.questionText,
+              workingSectionLabel: q.workingSectionLabel,
+              rationale: q.rationale,
+              authoredBy: q.authoredBy,
+              status: q.status,
+              threadId: q.threadId,
+              responseId: q.responseId,
+              responseProse: q.responseProse ?? undefined,
+              createdAt: q.createdAt,
+              updatedAt: q.updatedAt,
+            })));
+            // (hydrate flips state to 'complete', which clears the status line)
+            console.info('[peer] lost-stream recovery hydrated', { count: fresh.length, attempt: i + 1 });
+            onCardQuestionsChanged();
+            return;
+          }
+        } catch (e) {
+          console.warn('[peer] lost-stream recovery fetch failed', e);
+        }
+        if (i + 1 < RECOVERY_AT_MS.length) {
+          window.setTimeout(() => void tryRecover(i + 1), RECOVERY_AT_MS[i + 1] - RECOVERY_AT_MS[i]);
+        } else if (aliveRef.current && askSeqRef.current === askSeq && curStreamState() !== 'complete') {
+          setStatusLine('The peer ran but nothing came back. Try asking again.');
+        }
+      };
+      window.setTimeout(() => void tryRecover(0), RECOVERY_AT_MS[0]);
     } catch (err: any) {
       if (!aliveRef.current) return;
       setSetupError(err?.message ?? String(err));
@@ -330,6 +518,8 @@ export function FloatingPeerCard({
   onCardQuestionsChanged,
   onCascadeFallbackRefresh,
   onResponseSubmitted,
+  getGraphPayload,
+  getFocalStreaming,
 }: {
   entity: ProjectEntity;
   projectId: string;
@@ -346,6 +536,12 @@ export function FloatingPeerCard({
   onCascadeFallbackRefresh: () => void;
   /** Fired immediately when the writer submits a response (before cascade). */
   onResponseSubmitted?: () => void;
+  /** FIL-518 stage 2b (shadow mode): freshest client-held graph payload for
+   *  the silent slice shadow diff. */
+  getGraphPayload?: () => ListProjectEntitiesResponse | null;
+  /** True while the focal card is still an optimistic mid-stream shell (in the
+   *  board's streamedIdsRef) — feeds the peer's readiness gate. */
+  getFocalStreaming?: (cardId: string) => boolean;
 }) {
   const dark = useThemeMode() === 'dark';
   const {
@@ -372,6 +568,8 @@ export function FloatingPeerCard({
     token,
     onCardQuestionsChanged,
     onCascadeFallbackRefresh,
+    getGraphPayload,
+    getFocalStreaming,
   });
   // A chat takeover fills the card's whole workable area: the prose column
   // morphs away (width → 0) and the chat column stretches across.
@@ -433,10 +631,13 @@ export function FloatingPeerCard({
         // Above the board-scoped focus scrim (100), BELOW the toolbar (140)
         // so the pair scrolls under the chrome like real board content.
         zIndex: 120,
-        background: dark ? '#15181c' : '#fff',
+        background: noteSurface(dark).panel,
         border: `1px solid ${hexToRgba(PEER_BLUE, 0.45)}`,
         borderLeft: `4px solid ${PEER_BLUE}`,
         borderRadius: 12,
+        // Clip children (header strip, column fills) to the rounded frame —
+        // without this their square corners poke past the radius.
+        overflow: 'hidden',
         // The peer's glow is the blue analog of the braindump dock's orange —
         // layered soft halo + a deep drop for lift off the dimmed board.
         boxShadow: dark
@@ -451,7 +652,10 @@ export function FloatingPeerCard({
       <div
         style={{
           padding: '10px 14px',
-          borderBottom: `1px solid ${hexToRgba(PEER_BLUE, 0.15)}`,
+          // A line the eye actually gets: neutral hairline + the header strip
+          // sitting one tone off the panel.
+          borderBottom: `1px solid ${dark ? '#26262c' : noteSurface(dark).hair}`,
+          background: dark ? '#121215' : 'rgba(0,0,0,0.02)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -474,8 +678,12 @@ export function FloatingPeerCard({
           >
             <InternIcon size={15} />
           </span>
-          <span style={{ fontSize: 11, letterSpacing: 0.5, fontWeight: 600 }}>
-            PEER · {focalType.toUpperCase()}
+          {/* One quiet eyebrow, sentence case — the docket grammar. */}
+          <span style={{ fontFamily: NOTE_FONT_SANS, fontSize: 12, fontWeight: 600, color: PEER_BLUE }}>
+            Peer
+          </span>
+          <span style={{ fontFamily: NOTE_FONT_SANS, fontSize: 11, color: noteSurface(dark).faint }}>
+            · on this {focalType === 'event' ? 'scene' : focalType}
           </span>
         </div>
         <button
@@ -508,10 +716,12 @@ export function FloatingPeerCard({
             style={{
               width: chatActive ? 0 : proseW,
               flexShrink: 0,
-              padding: chatActive ? '12px 0' : '12px 14px',
-              fontSize: 13,
-              lineHeight: 1.55,
-              color: dark ? '#dcdce2' : '#333',
+              padding: chatActive ? '14px 0' : '14px 16px',
+              // The peer's VOICE — serif, the hero (script-side type role).
+              fontFamily: NOTE_FONT_SERIF,
+              fontSize: 13.5,
+              lineHeight: 1.6,
+              color: noteSurface(dark).voice,
               minHeight: chatActive || streaming.prose ? 0 : 60,
               maxHeight: '70vh',
               overflowY: 'auto',
@@ -524,11 +734,10 @@ export function FloatingPeerCard({
                 : 'width 300ms cubic-bezier(0.22, 1, 0.36, 1), padding 300ms cubic-bezier(0.22, 1, 0.36, 1), opacity 200ms ease',
             }}
           >
-            <div style={{ width: proseW - 28, whiteSpace: 'pre-wrap' }}>
-              {streaming.prose || (streaming.state === 'loading' ? '…' : '')}
-              {streaming.state === 'streaming' && (
-                <span style={{ color: PEER_BLUE, marginLeft: 2, animation: 'cb-blink 1s step-end infinite' }}>▍</span>
-              )}
+            <div style={{ width: proseW - 32 }}>
+              {streaming.prose
+                ? <PeerReadProse text={streaming.prose} caret={streaming.state === 'streaming'} dark={dark} />
+                : (streaming.state === 'loading' ? '…' : '')}
             </div>
           </div>
 
@@ -642,14 +851,16 @@ export function PeerQuestionBubble({
   const isAnswered = status === 'answered' || isExtractedLocal;
   const isStashed = status === 'stashed';
 
+  const s = noteSurface(dark);
   return (
     <div
       style={{
-        background: isStashed ? '#fafafa' : '#fff',
+        // Theme-aware raise (was hardcoded white — unreadable in dark).
+        background: s.raise,
         border: `1px solid ${
           isAnswered ? hexToRgba('#10b981', 0.35) : hexToRgba(PEER_BLUE, 0.15)
         }`,
-        borderRadius: 4,
+        borderRadius: 6,
         padding: '8px 10px',
         opacity: isStashed ? 0.7 : 1,
         transition: 'opacity 200ms, border-color 200ms',
@@ -660,19 +871,18 @@ export function PeerQuestionBubble({
           display: 'flex',
           alignItems: 'center',
           gap: 6,
-          fontSize: 9,
-          letterSpacing: 0.5,
-          textTransform: 'uppercase',
+          fontFamily: NOTE_FONT_SANS,
+          fontSize: 10,
           color: PEER_BLUE,
           fontWeight: 600,
-          marginBottom: 3,
+          marginBottom: 4,
         }}
       >
         <span>{question.workingSectionLabel}</span>
-        {isAnswered && <span style={{ color: '#10b981' }}>✓ ANSWERED</span>}
-        {isStashed && <span style={{ color: '#94a3b8' }}>STASHED</span>}
+        {isAnswered && <span style={{ color: '#10b981' }}>✓ Answered</span>}
+        {isStashed && <span style={{ color: '#94a3b8' }}>Stashed</span>}
       </div>
-      <div style={{ fontSize: 12, color: dark ? '#e6e6ea' : '#222', lineHeight: 1.4 }}>
+      <div style={{ fontFamily: NOTE_FONT_SERIF, fontSize: 13, color: s.voice, lineHeight: 1.5 }}>
         {question.questionText}
       </div>
       {question.rationale && (
@@ -680,22 +890,23 @@ export function PeerQuestionBubble({
           <button
             onClick={() => setShowRationale((s) => !s)}
             style={{
-              ...miniActionBtn,
+              ...peerActionBtn,
               padding: '2px 0',
               marginTop: 4,
               color: PEER_BLUE,
             }}
           >
-            {showRationale ? 'hide why' : 'why'}
+            {showRationale ? 'Hide why' : 'Why'}
           </button>
           {showRationale && (
             <div
               style={{
-                fontSize: 11,
-                color: dark ? '#82828c' : '#888',
+                fontFamily: NOTE_FONT_SERIF,
+                fontSize: 11.5,
+                color: s.quiet,
                 fontStyle: 'italic',
                 marginTop: 4,
-                lineHeight: 1.4,
+                lineHeight: 1.5,
               }}
             >
               {question.rationale}
@@ -718,6 +929,67 @@ export const miniActionBtn: React.CSSProperties = {
   fontFamily: 'system-ui, sans-serif',
   textTransform: 'uppercase',
   letterSpacing: 0.3,
+};
+
+// PeerReadProse — the peer's read with typographic hierarchy instead of a
+// flat block. The prompt's lead-with-position law means the FIRST SENTENCE
+// is always the peer's position; set it as the lede (larger, ink), then the
+// argument as body paragraphs (voice, real paragraph spacing). Split on
+// newlines when the prose carries them; the lede split works either way.
+export function PeerReadProse({ text, caret, dark }: { text: string; caret?: boolean; dark: boolean }) {
+  const s = noteSurface(dark);
+  const paras = text.split(/\n+/).map((p) => p.trim()).filter(Boolean);
+  if (paras.length === 0) return null;
+  const m = paras[0].match(/^(.+?[.!?]["')\]]?)(?:\s+([\s\S]*))?$/);
+  const lede = m ? m[1] : paras[0];
+  // The streamed prose usually carries no newlines, so a long argument reads
+  // as a slab. Paragraph it: split sentences, group in twos. A trailing
+  // partial sentence (mid-stream) rides as its own tail group.
+  const paragraphize = (t: string): string[] => {
+    if (t.length < 240) return [t];
+    const sents: string[] = [];
+    let restTxt = t;
+    for (;;) {
+      const sm = restTxt.match(/^([\s\S]*?[.!?]["')\]]?)\s+(?=\S)/);
+      if (!sm) break;
+      sents.push(sm[1]);
+      restTxt = restTxt.slice(sm[0].length);
+    }
+    if (restTxt.trim()) sents.push(restTxt.trim());
+    const groups: string[] = [];
+    for (let i = 0; i < sents.length; i += 2) groups.push(sents.slice(i, i + 2).join(' '));
+    return groups.length ? groups : [t];
+  };
+  const rest = (m?.[2] ? [m[2], ...paras.slice(1)] : paras.slice(1)).flatMap(paragraphize);
+  const caretEl = <span style={{ color: PEER_BLUE, marginLeft: 2, animation: 'cb-blink 1s step-end infinite' }}>▍</span>;
+  return (
+    <div style={{ fontFamily: NOTE_FONT_SERIF }}>
+      <p style={{ margin: 0, fontSize: 15, lineHeight: 1.5, letterSpacing: 0.1, color: s.ink }}>
+        {lede}
+        {caret && rest.length === 0 && caretEl}
+      </p>
+      {rest.map((p, i) => (
+        <p key={i} style={{ margin: '9px 0 0', fontSize: 13.5, lineHeight: 1.6, color: s.voice }}>
+          {p}
+          {caret && i === rest.length - 1 && caretEl}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+// Peer-surface variant: sentence case, quiet (the script side's action
+// grammar — no uppercase shouting on any peer surface). miniActionBtn stays
+// as-is for the non-peer editors that share it.
+export const peerActionBtn: React.CSSProperties = {
+  background: 'transparent',
+  border: 'none',
+  color: '#888',
+  cursor: 'pointer',
+  fontSize: 10.5,
+  fontWeight: 600,
+  padding: '2px 6px',
+  fontFamily: NOTE_FONT_SANS,
 };
 
 // =====================================================================
@@ -1201,7 +1473,7 @@ export function QuestionComposer({
               padding: chatOpen ? '8px 10px' : '10px 10px',
             }
           : {
-              borderBottom: `1px solid ${hexToRgba(PEER_BLUE, 0.1)}`,
+              borderBottom: `1px solid ${noteSurface(dark).hairSoft}`,
               padding: chatOpen ? '8px 12px' : '12px 16px',
             }
       }
@@ -1217,10 +1489,10 @@ export function QuestionComposer({
                 {isOpen ? '▾' : '▸'}
               </span>
             )}
-            <div style={{ flex: 1, minWidth: 0, fontSize: 10, letterSpacing: 0.5, color: PEER_BLUE, fontWeight: 600 }}>
-              {question.workingSectionLabel?.toUpperCase()}
+            <div style={{ flex: 1, minWidth: 0, fontFamily: NOTE_FONT_SANS, fontSize: 10.5, color: PEER_BLUE, fontWeight: 600, lineHeight: 1.45 }}>
+              {question.workingSectionLabel}
               {isAnswered && (
-                <span style={{ color: '#10b981', marginLeft: 8 }}>✓ ANSWERED</span>
+                <span style={{ color: '#10b981', marginLeft: 8, whiteSpace: 'nowrap' }}>✓ Answered</span>
               )}
             </div>
             <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
@@ -1235,7 +1507,7 @@ export function QuestionComposer({
                     e.preventDefault();
                     setChatOpen((o) => !o);
                   }}
-                  style={{ ...miniActionBtn, color: chatTurns.length > 0 ? PEER_BLUE : '#888' }}
+                  style={{ ...peerActionBtn, color: chatTurns.length > 0 ? PEER_BLUE : undefined }}
                   title={
                     chatClosed && chatTurns.length > 0
                       ? `Closed thread — ${chatTurns.length} turn${chatTurns.length === 1 ? '' : 's'} (read-only)`
@@ -1244,7 +1516,7 @@ export function QuestionComposer({
                       : 'Continue the conversation with the peer about this question'
                   }
                 >
-                  {chatOpen ? '▾' : '▸'} chat
+                  {chatOpen ? '▾' : '▸'} Chat
                   {chatTurns.length > 0 && (
                     <span style={{ marginLeft: 4, opacity: 0.8 }}>
                       · {chatTurns.length}
@@ -1261,10 +1533,10 @@ export function QuestionComposer({
                     e.stopPropagation();
                     setPersistedStatus('stashed');
                   }}
-                  style={miniActionBtn}
+                  style={peerActionBtn}
                   title="Stash — moves this question to the character card for later"
                 >
-                  stash
+                  Stash
                 </button>
               )}
               {!isAnswered && (
@@ -1275,20 +1547,18 @@ export function QuestionComposer({
                     e.stopPropagation();
                     setPersistedStatus('dismissed');
                   }}
-                  style={miniActionBtn}
-                  title="Dismiss"
+                  style={peerActionBtn}
+                  title="Not taking this question"
                 >
-                  dismiss
+                  Dismiss
                 </button>
               )}
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: 7, alignItems: 'flex-start', marginTop: 6 }}>
-            {card && (
-              <span style={{ fontSize: 12, color: hexToRgba(PEER_BLUE, 0.7), lineHeight: 1.5, flexShrink: 0 }}>?</span>
-            )}
-            <div style={{ flex: 1, fontSize: 13.5, color: dark ? '#e6e6ea' : '#222', lineHeight: 1.5 }}>
+          <div style={{ marginTop: 7 }}>
+            {/* The question IS the peer's voice — serif, the hero. */}
+            <div style={{ fontFamily: NOTE_FONT_SERIF, fontSize: 14, color: noteSurface(dark).voice, lineHeight: 1.55 }}>
               {question.questionText}
             </div>
           </div>
@@ -1309,13 +1579,12 @@ export function QuestionComposer({
                   cursor: 'pointer',
                   padding: 0,
                   fontSize: 10.5,
-                  letterSpacing: 0.4,
-                  textTransform: 'uppercase',
-                  fontFamily: 'system-ui, sans-serif',
+                  fontWeight: 600,
+                  fontFamily: NOTE_FONT_SANS,
                 }}
                 title={rationaleOpen ? "Hide the peer's reasoning" : "Show the peer's reasoning for asking this"}
               >
-                {rationaleOpen ? '▾ why' : '▸ why'}
+                {rationaleOpen ? '▾ Why' : '▸ Why'}
               </button>
               {rationaleOpen && (
                 <div
@@ -1323,8 +1592,9 @@ export function QuestionComposer({
                     marginTop: 6,
                     paddingLeft: 10,
                     borderLeft: `2px solid ${hexToRgba(PEER_BLUE, 0.25)}`,
-                    fontSize: 11.5,
-                    color: dark ? '#9a9aa4' : '#666',
+                    fontFamily: NOTE_FONT_SERIF,
+                    fontSize: 12,
+                    color: noteSurface(dark).quiet,
                     lineHeight: 1.55,
                     fontStyle: 'italic',
                   }}
@@ -1341,8 +1611,8 @@ export function QuestionComposer({
         isAnswered && answeredViaChat ? (
           <div style={answeredBandStyle}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-              <div style={{ fontSize: 9, letterSpacing: 0.6, textTransform: 'uppercase', color: '#059669', fontWeight: 700 }}>
-                Answered with chat thread
+              <div style={{ fontFamily: NOTE_FONT_SANS, fontSize: 10, color: '#059669', fontWeight: 600 }}>
+                ✓ Answered in a chat thread
               </div>
               <button
                 onClick={() => setChatOpen(true)}
@@ -1359,7 +1629,7 @@ export function QuestionComposer({
         ) : isAnswered && (question.responseProse || draft.trim()) ? (
           <div style={answeredBandStyle}>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
-              <div style={{ fontSize: 9, letterSpacing: 0.6, textTransform: 'uppercase', color: '#059669', fontWeight: 700 }}>
+              <div style={{ fontFamily: NOTE_FONT_SANS, fontSize: 10, color: '#059669', fontWeight: 600 }}>
                 Your response
               </div>
               {extractionPending && (
@@ -1375,8 +1645,8 @@ export function QuestionComposer({
         ) : isAnswered ? (
           <div style={answeredBandStyle}>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
-              <div style={{ fontSize: 9, letterSpacing: 0.6, textTransform: 'uppercase', color: '#059669', fontWeight: 700 }}>
-                Answered
+              <div style={{ fontFamily: NOTE_FONT_SANS, fontSize: 10, color: '#059669', fontWeight: 600 }}>
+                ✓ Answered
               </div>
               {extractionPending && (
                 <span style={{ fontSize: 9.5, color: '#059669', opacity: 0.65, whiteSpace: 'nowrap' }}>
@@ -1594,18 +1864,21 @@ export function LightChatContinuation({
     el.style.height = `${el.scrollHeight}px`;
   }, [draft]);
   const writerAccent = getEntityColor(parentCardType);
-  // Shared bubble chrome — peer enters from the left (glasses avatar, blue
-  // tint), the writer from the right (entity-accent tint). Tail corner
-  // points at the speaker's edge.
+  const surf = noteSurface(dark);
+  // Shared bubble chrome — the peer speaks in its VOICE (serif slab with the
+  // 2px peer-blue left rule — the script side's Discuss grammar); the writer
+  // replies from the right in sans with the entity accent.
   const peerBubbleStyle: React.CSSProperties = {
-    padding: '8px 12px',
-    fontSize: 13,
+    padding: '10px 13px',
+    fontFamily: NOTE_FONT_SERIF,
+    fontSize: 13.5,
     lineHeight: 1.55,
-    color: dark ? '#dcdce2' : '#333',
+    color: surf.voice,
     whiteSpace: 'pre-wrap',
-    background: dark ? hexToRgba(PEER_BLUE, 0.09) : hexToRgba(PEER_BLUE, 0.06),
-    border: `1px solid ${hexToRgba(PEER_BLUE, 0.22)}`,
-    borderRadius: '12px 12px 12px 4px',
+    background: dark ? '#131316' : '#fff',
+    border: `1px solid ${dark ? '#1f1f24' : surf.hair}`,
+    borderLeft: `2px solid ${PEER_BLUE}`,
+    borderRadius: 11,
   };
   const writerBubbleStyle: React.CSSProperties = {
     padding: '8px 12px',
@@ -1667,7 +1940,7 @@ export function LightChatContinuation({
         border: `1px solid ${hexToRgba(PEER_BLUE, 0.3)}`,
         borderRadius: 10,
         overflow: 'hidden',
-        background: dark ? '#15181c' : '#fff',
+        background: surf.panel,
       }}
     >
       {/* Header bar — back to the question list + what we're chatting about. */}
@@ -1685,16 +1958,16 @@ export function LightChatContinuation({
           <button
             type="button"
             onClick={onExit}
-            style={{ ...miniActionBtn, color: PEER_BLUE, padding: '2px 4px', textTransform: 'none', letterSpacing: 0 }}
+            style={{ ...peerActionBtn, color: PEER_BLUE, padding: '2px 4px' }}
             title="Back to questions"
           >
-            ← back
+            ← Back
           </button>
         )}
         <span
           style={{
             flex: 1, minWidth: 0,
-            fontSize: 10, letterSpacing: 0.6, textTransform: 'uppercase',
+            fontFamily: NOTE_FONT_SANS, fontSize: 10.5,
             color: PEER_BLUE, fontWeight: 600,
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}
@@ -1989,7 +2262,7 @@ export function LightChatContinuation({
                 }}
                 title="Commit this whole conversation as the question's response. Extraction picks up anything relevant for other cards (e.g., Marcus, etc.)."
               >
-                commit thread as response ↗
+                Commit thread as response ↗
               </button>
             </div>
           )}
@@ -2202,9 +2475,9 @@ export function WorkingSectionsBlock({
             e.stopPropagation();
             setShowAll((s) => !s);
           }}
-          style={{ ...miniActionBtn, color: PEER_BLUE, paddingLeft: 0, marginBottom: 6 }}
+          style={{ ...peerActionBtn, color: PEER_BLUE, paddingLeft: 0, marginBottom: 6 }}
         >
-          {showAll ? `↑ show fewer` : `↓ show ${overflow} more`}
+          {showAll ? `↑ Show fewer` : `↓ Show ${overflow} more`}
         </button>
       )}
 
@@ -2240,12 +2513,12 @@ export function WorkingSectionsBlock({
           <button
             onClick={submitNew}
             disabled={busy || !label.trim()}
-            style={{ ...miniActionBtn, color: dark ? '#e6e6ea' : '#222', fontWeight: 500 }}
+            style={{ ...peerActionBtn, color: dark ? '#e6e6ea' : '#222' }}
           >
-            add
+            Add
           </button>
-          <button onClick={() => { setAdding(false); setLabel(''); }} style={miniActionBtn}>
-            cancel
+          <button onClick={() => { setAdding(false); setLabel(''); }} style={peerActionBtn}>
+            Cancel
           </button>
         </div>
       ) : (
@@ -2255,10 +2528,10 @@ export function WorkingSectionsBlock({
             e.stopPropagation();
             setAdding(true);
           }}
-          style={{ ...miniActionBtn, color: dark ? '#c2c2ca' : '#444', paddingLeft: 0 }}
+          style={{ ...peerActionBtn, color: dark ? '#c2c2ca' : '#444', paddingLeft: 0 }}
           title="Add a writer-authored working section"
         >
-          + add my own
+          + Add my own
         </button>
       ))}
     </Section>
@@ -2337,7 +2610,7 @@ export function OpenQuestionsPanel({
       <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
         <AskPeerButton
-          onClick={() => ask()}
+          onClick={() => { if (wowBentoPeerGate.active) return; ask(); }}
           disabled={busy || !focalSupported}
           label={busy ? 'Peer thinking…' : 'Ask peer'}
         />
@@ -2354,13 +2627,12 @@ export function OpenQuestionsPanel({
       {/* Peer's read — collapsible prose lead-in. */}
       {streaming.prose && (
         <div style={{ marginBottom: 10 }}>
-          <button type="button" onClick={() => setShowProse((v) => !v)} style={{ ...miniActionBtn, color: accentColor, padding: '2px 0' }}>
-            {showProse ? '▾ peer’s read' : '▸ peer’s read'}
+          <button type="button" onClick={() => setShowProse((v) => !v)} style={{ ...peerActionBtn, color: accentColor, padding: '2px 0' }}>
+            {showProse ? '▾ The peer’s read' : '▸ The peer’s read'}
           </button>
           {showProse && (
-            <div style={{ fontSize: 13, lineHeight: 1.55, color: dark ? '#dcdce2' : '#333', whiteSpace: 'pre-wrap', marginTop: 4 }}>
-              {streaming.prose}
-              {streaming.state === 'streaming' && <span style={{ color: accentColor, marginLeft: 2 }}>▍</span>}
+            <div style={{ marginTop: 6 }}>
+              <PeerReadProse text={streaming.prose} caret={streaming.state === 'streaming'} dark={dark} />
             </div>
           )}
         </div>

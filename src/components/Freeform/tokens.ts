@@ -26,6 +26,31 @@ export const PEER_BLUE_DARK = '#47a8c7';
 export const PEER_BLUE_LIGHT = '#7dd3f0';
 
 // ===========================================
+// Peer surface language (shared with the script side's note surfaces —
+// freeform-script.tsx holds a local copy of the same values; keep in sync)
+// ===========================================
+
+// Three type roles: SANS for chrome/labels/buttons, SERIF for the peer's
+// VOICE (prose, questions, diagnoses — read like a colleague's written
+// note), MONO for quoted script lines/refs.
+export const NOTE_FONT_SANS = "system-ui, -apple-system, 'Segoe UI', sans-serif";
+export const NOTE_FONT_SERIF = "'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, serif";
+export const NOTE_FONT_MONO = "'SF Mono', ui-monospace, 'Menlo', Menlo, monospace";
+
+// Per-theme surface colors so every peer surface reads as one calm system.
+export const noteSurface = (dark: boolean) => ({
+  panel: dark ? '#0d0d0f' : '#fbf8f1',
+  raise: dark ? '#151518' : '#ffffff',
+  hair: dark ? '#1e1e23' : '#ece4d4',
+  hairSoft: dark ? '#161619' : '#f0e8d8',
+  voice: dark ? '#e7e7ec' : '#26262a',   // the peer's prose
+  ink: dark ? '#ececef' : '#161618',     // headings
+  quiet: dark ? '#9195a0' : '#736b5e',   // secondary (labels, quoted line)
+  faint: dark ? '#63636d' : '#9a9082',   // tertiary / metadata
+  quoteBg: dark ? '#121215' : '#f4eee2',
+});
+
+// ===========================================
 // Card dimensions (Task #2/#3/#4/#6 locks)
 // ===========================================
 

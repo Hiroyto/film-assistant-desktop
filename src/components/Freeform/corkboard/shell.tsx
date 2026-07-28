@@ -40,12 +40,16 @@ const fmtElapsed = (ms?: number) => {
 // throughline — driven by phase pings when the socket delivers them and by the
 // FE's elapsed/poll estimate when it does not (the socket dies on a long run).
 export function BraindumpMeter({
-  aliveCount, edgeCount, winPhase, winProg, elapsedMs,
+  aliveCount, edgeCount, winPhase, winProg, elapsedMs, weaving,
 }: {
   aliveCount: number; edgeCount: number;
   winPhase?: WinPhase | null;
   winProg?: { window?: number; total?: number };
   elapsedMs?: number;
+  /** Tail-generation counts (extraction_progress): what the model is writing
+   *  during the no-new-cards stretch. Keeps the wiring step honest instead of
+   *  "a few seconds…" through a two-minute import. */
+  weaving?: { information: number; relationships: number; knowledge_edges: number } | null;
 }) {
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const draggingRef = useRef(false);
@@ -119,12 +123,24 @@ export function BraindumpMeter({
             active={aliveCount === 0}
             label={aliveCount > 0 ? `Pulled ${aliveCount} card${aliveCount === 1 ? '' : 's'} from your prose` : 'Reading your idea'}
           />
-          <MeterStep
-            done={edgeCount > 0}
-            active={aliveCount > 0 && edgeCount === 0}
-            label="Wiring up connections, the throughline & metadata"
-            hint={aliveCount > 0 && edgeCount === 0 ? 'a few seconds…' : undefined}
-          />
+          {(() => {
+            // With live tail counts, the wiring step stays ACTIVE and ticks the
+            // real numbers (optimistic spine edges land early, so edgeCount>0
+            // alone no longer means the wiring is done). Without counts (small
+            // braindumps, lossy WS) the old shape holds.
+            const w = weaving && (weaving.information + weaving.relationships + weaving.knowledge_edges) > 0 ? weaving : null;
+            const wHint = w
+              ? `${w.information} fact${w.information === 1 ? '' : 's'} · ${w.relationships} relationship${w.relationships === 1 ? '' : 's'} · ${w.knowledge_edges} knowledge tie${w.knowledge_edges === 1 ? '' : 's'} so far…`
+              : undefined;
+            return (
+              <MeterStep
+                done={edgeCount > 0 && !w}
+                active={aliveCount > 0 && (edgeCount === 0 || !!w)}
+                label="Wiring up connections, the throughline & metadata"
+                hint={wHint ?? (aliveCount > 0 && edgeCount === 0 ? 'a few seconds…' : undefined)}
+              />
+            );
+          })()}
         </>
       )}
     </div>
@@ -239,6 +255,14 @@ export function Shell({
         @keyframes cb-shimmer {
           0%, 100% { box-shadow: 0 1px 3px rgba(0,0,0,0.18), 0 0 0 0 var(--cb-sheen, rgba(255,140,66,0)); }
           50%      { box-shadow: 0 1px 3px rgba(0,0,0,0.18), 0 0 0 2px var(--cb-sheen, rgba(255,140,66,0.5)), 0 0 18px 1px var(--cb-sheen, rgba(255,140,66,0.45)); }
+        }
+        /* The SVG-line sibling of cb-shimmer: a provisional STREAMED edge
+           (optimistic spine, mid-extraction) pulses its glow underlay on the
+           same cadence as the streaming cards' ring. Stops when the
+           authoritative refetch replaces the optimistic edges. */
+        @keyframes cb-edge-shimmer {
+          0%, 100% { opacity: 0.06; }
+          50%      { opacity: 0.45; }
         }
         /* Board text isn't selectable (so dragging cards never highlights their
            prose), but editable fields stay selectable so you can still type and

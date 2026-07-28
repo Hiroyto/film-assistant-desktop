@@ -21,6 +21,10 @@ export const DARK_ORANGE = '#ff6b35';
 // Lift a hex color toward white — the light palette's entity colors read
 // muddy on the near-black stage; dark mode uses lifted variants for accents.
 export function liftColor(hex: string, amt: number): string {
+  // Never let a missing color take down a render tree (an unknown entity
+  // type once reached CardBox with no mapped color and white-screened the
+  // board). Neutral gray beats a crash.
+  if (typeof hex !== 'string' || hex === '') return '#9a9aa4';
   const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
   if (!m) return hex;
   const n = parseInt(m[1], 16);

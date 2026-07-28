@@ -290,8 +290,24 @@ export function ConnectorLayer({
         const allowClickRemove = removable && !linkDrag;
         const mx = (p1.x + p2.x) / 2;
         const my = (p1.y + p2.y) / 2;
+        // Provisional STREAMED edge (optimistic spine, mid-extraction): pulse a
+        // wide glow underlay on the streaming cards' shimmer cadence — the
+        // line's own "working on it" cue until the write trues it up.
+        const streaming = !!(e as { streamed?: boolean }).streamed;
         return (
           <g key={`p-${i}`} style={{ animation: 'cb-edge-in 420ms ease-out' }}>
+            {streaming && (
+              <line
+                x1={p1.x}
+                y1={p1.y}
+                x2={p2.x}
+                y2={p2.y}
+                stroke="#8b5cf6"
+                strokeWidth={7}
+                strokeLinecap="round"
+                style={{ animation: 'cb-edge-shimmer 1.5s ease-in-out infinite' }}
+              />
+            )}
             {/* Dark: wide soft halo painted UNDER the core (ScenesCanvas).
                 Violet — the chronological throughline owns the violet dashed
                 look in dark mode (CAUSES is orange). */}
@@ -556,7 +572,17 @@ export function ConnectorLayer({
           }
           return { x: mx, y: my }; // everything covered — midpoint fallback
         };
-        const pred = (e.predicate ?? '').replace(/_/g, ' ').toLowerCase();
+        // Perspective label (dual-wording convention): when the tie is focused
+        // FROM an endpoint, read the fact from THAT character's side — hovering
+        // Mabel shows 'abducted by', hovering Eoji shows 'abductor of'. Same
+        // stored edge, two readings. Tie-hover / no anchor keeps the forward
+        // wording; legacy edges without an inverse always read forward.
+        const perspectiveId =
+          hoveredCardId === e.from || hoveredCardId === e.to ? hoveredCardId
+          : expandedCardId === e.from || expandedCardId === e.to ? expandedCardId
+          : null;
+        const rawPred = perspectiveId === e.to ? (e.inverse_predicate || e.predicate) : e.predicate;
+        const pred = (rawPred ?? '').replace(/_/g, ' ').toLowerCase();
         const edgeKey = `s|${e.from}|${e.to}`;
         const isHovered = !linkDrag && hoveredEdgeKey === edgeKey;
         const editable = !!onEditStructural && !linkDrag;
@@ -903,30 +929,13 @@ export function computeAutoLayout(
   const centerX = Math.round(boardWidth / 2 - EVENT_CARD_W / 2); // spine = event notecards
   const spineX = Math.max(gridLeft + (chars.length ? charGridW + LANE : 0), centerX);
 
-  // Events — spine in PRECEDES order, EXCLUDING container members. A straight
-  // single column (no zigzag stagger) so the throughline reads as one clean line.
+  // The SPINE is ONE flow in true story order: loose events AND sequence
+  // containers interleaved by PRECEDES position, top to bottom. Previously
+  // loose events stacked first and every sequence stacked below them (by
+  // created_at) — so a scene that comes late in the story could sort above an
+  // early sequence. Now a global PRECEDES order ranks every event, a container
+  // takes its EARLIEST member's rank, and the two kinds interleave by rank.
   const eventRowStride = COLLAPSED_H + ROW_GAP;
-  const spineEvents = topoSortEventsByPrecedes(
-    (byType.event ?? []).filter((e) => !memberEventIds.has(e.id)),
-    precedesEdges,
-  );
-  spineEvents.forEach((e, i) => {
-    out[e.id] = {
-      x: spineX,
-      y: CANVAS_PAD + i * eventRowStride,
-    };
-  });
-  const spineBottom = spineEvents.length > 0
-    ? CANVAS_PAD + spineEvents.length * eventRowStride + ROW_GAP
-    : CANVAS_PAD;
-
-  // Sequences — the SPINE column (the granularity-fix containers are the primary
-  // structure), in plot order (seq_order, tie-broken by created_at), stacked
-  // below the loose-event spine so they don't collide with it. A container
-  // sequence is laid out as a COMPACT BLOCK: the anchor label on top, its member
-  // scenes stacked directly below in the same column, so the rendered box wraps
-  // them tightly and never spans the board. Member-less sequences are ordinary
-  // cards.
   const LABEL_H = 24; // the container header band — keep equal to ballEffects'
                       // SEQ_HEADER_H so the first scene sits flush below the header
                       // and the box doesn't jump between collapse and expand.
@@ -935,29 +944,50 @@ export function computeAutoLayout(
   const MEMBER_GAP = 24; // gap between member scenes inside a container — compact
                          // block, but with enough air that the cards breathe.
   const MEMBER_STRIDE = COLLAPSED_H + MEMBER_GAP;
-  const seqOrdered = [...(byType.sequence ?? [])].sort((a, b) => {
-    const ca = String(a.created_at ?? ''), cb = String(b.created_at ?? '');
-    if (ca !== cb) return ca < cb ? -1 : 1;
-    return (a.seq_order ?? 0) - (b.seq_order ?? 0);
-  });
-  let seqY = spineBottom; // visible top of the next sequence element
-  for (const s of seqOrdered) {
+
+  // Global PRECEDES rank over EVERY event (members included), so a container's
+  // story position is its earliest member's rank.
+  const globalOrder = topoSortEventsByPrecedes(byType.event ?? [], precedesEdges);
+  const rankOf = new Map<string, number>();
+  globalOrder.forEach((e, i) => rankOf.set(e.id, i));
+  const BIG = Number.MAX_SAFE_INTEGER;
+
+  // Spine items: loose events + container sequences, each with a sort rank.
+  // Member-less sequences render as ordinary cards in the flow too (rank = BIG
+  // so they trail, tie-broken by created_at — they have no story position yet).
+  type SpineItem = { kind: 'event' | 'seq'; id: string; rank: number; created: string };
+  const spineItems: SpineItem[] = [];
+  for (const e of byType.event ?? []) {
+    if (memberEventIds.has(e.id)) continue;
+    spineItems.push({ kind: 'event', id: e.id, rank: rankOf.get(e.id) ?? BIG, created: String(e.created_at ?? '') });
+  }
+  const membersOrderedBySeq = new Map<string, ProjectEntity[]>();
+  for (const s of byType.sequence ?? []) {
     const memberIds = (membersBySeq.get(s.id) ?? []).filter((id) => byId.has(id));
     if (memberIds.length === 0) {
-      out[s.id] = { x: spineX, y: seqY };
-      seqY += COLLAPSED_H + ROW_GAP; // a plain card + a normal gap
+      spineItems.push({ kind: 'event', id: s.id, rank: BIG, created: String(s.created_at ?? '') });
+      continue;
+    }
+    const members = topoSortEventsByPrecedes(memberIds.map((id) => byId.get(id)!).filter(Boolean), precedesEdges);
+    membersOrderedBySeq.set(s.id, members);
+    const rank = Math.min(...members.map((m) => rankOf.get(m.id) ?? BIG));
+    spineItems.push({ kind: 'seq', id: s.id, rank, created: String(s.created_at ?? '') });
+  }
+  spineItems.sort((a, b) => (a.rank - b.rank) || (a.created < b.created ? -1 : a.created > b.created ? 1 : 0));
+
+  let seqY = CANVAS_PAD; // visible top of the next spine element
+  for (const item of spineItems) {
+    if (item.kind === 'event') {
+      out[item.id] = { x: spineX, y: seqY };
+      seqY += eventRowStride; // one card + a normal gap
       continue;
     }
     // Container: the box adds BOX_PAD above the anchor and below the last scene.
     // Push the anchor down by BOX_PAD so the BOX TOP (anchor - PAD) lands at seqY,
-    // giving the box the same ROW_GAP gap to its neighbors a normal card has
-    // (instead of the box edge eating into the gap and reading short).
+    // giving the box the same ROW_GAP gap to its neighbors a normal card has.
+    const members = membersOrderedBySeq.get(item.id) ?? [];
     const anchorY = seqY + BOX_PAD;
-    out[s.id] = { x: spineX, y: anchorY };
-    const members = topoSortEventsByPrecedes(
-      memberIds.map((id) => byId.get(id)!).filter(Boolean),
-      precedesEdges,
-    );
+    out[item.id] = { x: spineX, y: anchorY };
     members.forEach((m, i) => { out[m.id] = { x: spineX, y: anchorY + LABEL_H + i * MEMBER_STRIDE }; });
     const lastMemberBottom = anchorY + LABEL_H + (members.length - 1) * MEMBER_STRIDE + COLLAPSED_H;
     seqY = lastMemberBottom + BOX_PAD + ROW_GAP; // box bottom + a normal gap to next

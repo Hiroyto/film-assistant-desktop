@@ -3,64 +3,63 @@
  * =====================
  * Autocomplete dropdown for CHARACTER line types in the screenplay editor.
  *
- * When the user is typing on a CHARACTER line, this component:
- *   1. Collects existing character names from every page editor + the
- *      character DB roster (case-insensitively deduped)
- *   2. Filters them against what the user is typing
- *   3. Shows a dropdown with matching names
- *   4. On selection (Tab/Enter/click), inserts the name and auto-creates
- *      a DIALOGUE line below it
+ * Two modes on a character line:
+ *   name mode — typing a name filters existing character names (all pages +
+ *               DB roster, deduped, extensions stripped) and, on selection,
+ *               inserts the name and auto-creates a DIALOGUE line below.
+ *   ext mode  — typing "(" on a character line pops the FD voice-style
+ *               extensions ((CONT'D), (V.O.), (O.S.), (O.C.), ...) filtered by
+ *               what follows the "(". Selecting completes the extension and
+ *               stays on the character line (Enter then advances to dialogue).
+ *
+ * Extension stripping matters: a cue like "MARCUS (V.O.)" must contribute the
+ * name "MARCUS" only — otherwise every voiced line mints a phantom character.
  *
  * The dropdown position uses viewport-relative (fixed) coordinates so it
  * follows the cursor regardless of scroll containers.
  *
- * Suggestion sources:
- *   - getEditors():   walks every paginated page so a name typed on page 1
- *                     still autocompletes on page 4
- *   - rosterNames:    the character DB roster, so canonical characters
- *                     suggest even before they've been used in the script
- *   Both are merged and deduped by uppercase form to avoid showing the
- *   same character twice when casing differs between sources.
- *
- * Persistence: this component does NOT persist new names. The save path
- * is responsible for reconciling script characters with the DB roster.
- *
- * Keyboard shortcuts:
- *   - ArrowDown/ArrowUp: Navigate options
- *   - Tab/Enter: Select highlighted option
- *   - Escape: Dismiss dropdown
- *
- * Imported by: ScriptEditor.tsx
+ * Imported by: ScriptEditor.tsx, FullscreenScriptEditor.tsx
  */
 
 import React, { useState, useEffect, useRef } from "react";
 import { Editor } from "@tiptap/react";
 
+// FD character extensions (voice styles). Order = rough frequency.
+const CUE_EXTENSIONS: string[] = [
+  "(CONT'D)",
+  "(V.O.)",
+  "(O.S.)",
+  "(O.C.)",
+  "(PRE-LAP)",
+  "(FILTERED)",
+  "(ON PHONE)",
+  "(SUBTITLED)",
+];
+
+/** Strip a trailing "(...)" extension from a cue, leaving the bare name. */
+const stripExtension = (raw: string): string =>
+  raw.replace(/\s*\([^)]*\)\s*$/, "").trim();
+
 interface CharacterAutoFillProps {
   /** Active editor — used for selection tracking and content insertion. */
   editor: Editor | null;
-  /**
-   * Returns every mounted page editor. Used so character names from pages
-   * other than the focused one still appear as suggestions. Falls back to
-   * just `editor` when not provided (single-page mode).
-   */
+  /** Returns every mounted page editor (cross-page name suggestions). */
   getEditors?: () => Editor[];
-  /**
-   * Character names from the DB roster. Merged into suggestions so roster
-   * entries appear even before they've been typed into the script.
-   */
+  /** Character names from the DB roster. */
   rosterNames?: string[];
 }
+
+type Mode = "name" | "ext";
 
 const CharacterAutoFill = ({ editor, getEditors, rosterNames }: CharacterAutoFillProps) => {
   // ── Dropdown State ──────────────────────────────────────────
   const [showDropdown, setShowDropdown] = useState(false);
   const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0 });
   const [activeIndex, setActiveIndex] = useState(0);
+  const [mode, setMode] = useState<Mode>("name");
 
-  // ── Character Data ──────────────────────────────────────────
-  const [characterNames, setCharacterNames] = useState<string[]>([]);
-  const [filteredNames, setFilteredNames] = useState<string[]>([]);
+  // ── Options ─────────────────────────────────────────────────
+  const [filteredOptions, setFilteredOptions] = useState<string[]>([]);
   const [currentFilter, setCurrentFilter] = useState("");
 
   // ── Editor Tracking ─────────────────────────────────────────
@@ -68,59 +67,47 @@ const CharacterAutoFill = ({ editor, getEditors, rosterNames }: CharacterAutoFil
   /** Prevents re-entrant processing during selection insertion */
   const lockRef = useRef(false);
 
-  // ── Helpers ─────────────────────────────────────────────────
-
-  // Roster + getEditors held in refs so we can read the freshest values
-  // inside event handlers without re-binding TipTap listeners on every
-  // render. Updating refs is harmless; updating useEffect deps would churn.
+  // Live refs so handlers read fresh sources without re-binding listeners.
   const rosterNamesRef = useRef<string[]>(rosterNames ?? []);
   useEffect(() => {
     rosterNamesRef.current = rosterNames ?? [];
   }, [rosterNames]);
-
   const getEditorsRef = useRef<typeof getEditors>(getEditors);
   useEffect(() => {
     getEditorsRef.current = getEditors;
   }, [getEditors]);
+  // Mode read inside document-level handlers.
+  const modeRef = useRef<Mode>(mode);
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
 
   /**
-   * Collect character names from every page editor and the DB roster,
-   * deduped by uppercase form. Names are returned uppercased so the
-   * dropdown displays them in screenplay-conventional casing regardless
-   * of how the roster stored them.
+   * Collect character names from every page editor and the DB roster, deduped
+   * by uppercase form with any (extension) stripped.
    */
   const findCharacterNames = (): string[] => {
     const characters = new Set<string>();
-
     const editors = getEditorsRef.current?.() ?? (editor ? [editor] : []);
     for (const ed of editors) {
       ed.state.doc.descendants((node) => {
-        if (
-          node.type.name === "paragraph" &&
-          node.attrs.lineType === "character"
-        ) {
-          const name = node.textContent.trim();
+        if (node.type.name === "paragraph" && node.attrs.lineType === "character") {
+          const name = stripExtension(node.textContent);
           if (name) characters.add(name.toUpperCase());
         }
         return true;
       });
     }
-
     for (const r of rosterNamesRef.current) {
-      const trimmed = r?.trim();
+      const trimmed = stripExtension(r ?? "");
       if (trimmed) characters.add(trimmed.toUpperCase());
     }
-
     return Array.from(characters).sort();
   };
 
-  /**
-   * Filter character names by prefix match, excluding exact matches
-   * (no point suggesting what the user already typed in full).
-   */
+  /** Prefix filter, excluding exact matches. */
   const filterNames = (allNames: string[], filter: string): string[] => {
     if (!filter) return allNames;
-
     const lowerFilter = filter.toLowerCase();
     return allNames.filter((name) => {
       const lowerName = name.toLowerCase();
@@ -128,37 +115,41 @@ const CharacterAutoFill = ({ editor, getEditors, rosterNames }: CharacterAutoFil
     });
   };
 
+  /** Filter cue extensions by the text typed after "(" (match inner text). */
+  const filterExtensions = (filter: string): string[] => {
+    if (!filter) return CUE_EXTENSIONS;
+    const lower = filter.toLowerCase();
+    return CUE_EXTENSIONS.filter((opt) =>
+      opt.slice(1).toLowerCase().startsWith(lower)
+    );
+  };
+
   const updateDropdownPosition = () => {
     if (!editor) return;
-
     const { state } = editor.view;
     const { $from } = state.selection;
-
     try {
       const coords = editor.view.coordsAtPos($from.pos);
-      setDropdownPos({
-        top: coords.bottom + 5,
-        left: coords.left,
-      });
+      setDropdownPos({ top: coords.bottom + 5, left: coords.left });
     } catch {
+      /* coordsAtPos can throw if out of range */
     }
   };
 
-  // ── Core Logic ──────────────────────────────────────────────
+  /** Detect an unclosed "(" at the tail of the line → extension mode. */
+  const openExtension = (text: string): { open: boolean; filter: string } => {
+    const openIdx = text.lastIndexOf("(");
+    if (openIdx < 0) return { open: false, filter: "" };
+    if (text.indexOf(")", openIdx) !== -1) return { open: false, filter: "" };
+    return { open: true, filter: text.slice(openIdx + 1) };
+  };
 
-  /**
-   * Main update handler — called on every editor update and selection change.
-   *
-   * Determines whether we're on a CHARACTER line, extracts the current
-   * text as a filter, and shows/hides the dropdown accordingly.
-   */
   const processNodeState = () => {
     if (!editor || lockRef.current) return;
 
     const { state } = editor.view;
     const { selection } = state;
 
-    // Document-level selection (e.g. Cmd+A) — hide dropdown
     if (selection.empty && selection.$from.depth === 0) {
       setShowDropdown(false);
       return;
@@ -166,14 +157,11 @@ const CharacterAutoFill = ({ editor, getEditors, rosterNames }: CharacterAutoFil
 
     const { $from } = selection;
     const node = $from.parent;
-
-    // Safety: ensure valid position and parent node
     if (!node || $from.depth === 0) {
       setShowDropdown(false);
       return;
     }
 
-    // Get node position safely
     let pos: number | null = null;
     try {
       pos = $from.before();
@@ -181,32 +169,41 @@ const CharacterAutoFill = ({ editor, getEditors, rosterNames }: CharacterAutoFil
       setShowDropdown(false);
       return;
     }
+    if (pos !== currentNodePos) setCurrentNodePos(pos);
 
-    // Moved to a different node — reset tracking state
-    if (pos !== currentNodePos) {
-      setCurrentNodePos(pos);
-      setCurrentFilter("");
-      setCharacterNames(findCharacterNames());
-    }
-
-    // Not a character line — nothing to autocomplete
     if (node.attrs.lineType !== "character") {
       setShowDropdown(false);
       return;
     }
 
-    // Use current text as filter
-    const filter = node.textContent.trim();
-    if (filter === currentFilter) return;
+    const text = node.textContent;
+    const ext = openExtension(text);
+
+    if (ext.open) {
+      // Extension mode: pop the voice styles.
+      if (ext.filter === currentFilter && mode === "ext" && showDropdown) return;
+      setMode("ext");
+      setCurrentFilter(ext.filter);
+      const opts = filterExtensions(ext.filter);
+      if (opts.length > 0) {
+        setFilteredOptions(opts);
+        setActiveIndex(0);
+        setShowDropdown(true);
+        updateDropdownPosition();
+      } else {
+        setShowDropdown(false);
+      }
+      return;
+    }
+
+    // Name mode.
+    const filter = text.trim();
+    if (filter === currentFilter && mode === "name") return;
+    setMode("name");
     setCurrentFilter(filter);
-
-    // Refresh and filter names
-    const names = findCharacterNames();
-    setCharacterNames(names);
-    const filtered = filterNames(names, filter);
-
+    const filtered = filterNames(findCharacterNames(), filter);
     if (filtered.length > 0) {
-      setFilteredNames(filtered);
+      setFilteredOptions(filtered);
       setActiveIndex(0);
       setShowDropdown(true);
       updateDropdownPosition();
@@ -215,12 +212,8 @@ const CharacterAutoFill = ({ editor, getEditors, rosterNames }: CharacterAutoFil
     }
   };
 
-  // ── Effects ─────────────────────────────────────────────────
-
-  /** Subscribe to editor updates and selection changes */
   useEffect(() => {
     if (!editor) return;
-
     const updateHandler = () => {
       try {
         processNodeState();
@@ -230,109 +223,119 @@ const CharacterAutoFill = ({ editor, getEditors, rosterNames }: CharacterAutoFil
         console.log("Error in CharacterAutoFill:", error);
       }
     };
-
     editor.on("update", updateHandler);
     editor.on("selectionUpdate", updateHandler);
     processNodeState();
-
     return () => {
       editor.off("update", updateHandler);
       editor.off("selectionUpdate", updateHandler);
     };
-  }, [editor, currentNodePos, currentFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor, currentNodePos, currentFilter, mode]);
 
-  /** Keyboard navigation when dropdown is visible */
   useEffect(() => {
     if (!editor || !showDropdown) return;
-
     const handleKeyDown = (e: KeyboardEvent) => {
       switch (e.key) {
         case "ArrowDown":
           e.preventDefault();
-          setActiveIndex((prev) => (prev + 1) % filteredNames.length);
+          setActiveIndex((prev) => (prev + 1) % filteredOptions.length);
           break;
-
         case "ArrowUp":
           e.preventDefault();
-          setActiveIndex(
-            (prev) => (prev - 1 + filteredNames.length) % filteredNames.length
-          );
+          setActiveIndex((prev) => (prev - 1 + filteredOptions.length) % filteredOptions.length);
           break;
-
         case "Tab":
         case "Enter":
-          if (filteredNames.length > 0) {
+          if (filteredOptions.length > 0) {
             e.preventDefault();
-            lockRef.current = true;
-
-            try {
-              const { $from } = editor.view.state.selection;
-              if ($from.depth > 0) {
-                editor
-                  .chain()
-                  .setTextSelection({ from: $from.start(), to: $from.end() })
-                  .deleteSelection()
-                  .run();
-              }
-              handleSelect(filteredNames[activeIndex]);
-            } catch (error) {
-              console.log("Error handling selection:", error);
-            }
-
-            setTimeout(() => {
-              lockRef.current = false;
-            }, 50);
+            e.stopPropagation();
+            if (modeRef.current === "ext") selectExtension(filteredOptions[activeIndex]);
+            else selectName(filteredOptions[activeIndex]);
           }
           break;
-
         case "Escape":
           e.preventDefault();
           setShowDropdown(false);
           break;
       }
     };
-
     document.addEventListener("keydown", handleKeyDown, true);
     return () => document.removeEventListener("keydown", handleKeyDown, true);
-  }, [showDropdown, filteredNames, activeIndex, editor]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showDropdown, filteredOptions, activeIndex, editor]);
 
-  // ── Selection Handler ───────────────────────────────────────
-
-  /**
-   * Insert the selected character name and auto-create a DIALOGUE line below.
-   *
-   * Flow: clear current text → insert name → wait 10ms → insert dialogue paragraph
-   */
-  const handleSelect = (name: string) => {
+  /** Insert a character name and auto-create a DIALOGUE line below. */
+  const selectName = (name: string) => {
     if (!editor) return;
-
-    editor.chain().insertContent(name).focus().run();
-    setShowDropdown(false);
-
-    // Auto-advance to dialogue line after character name insertion
-    setTimeout(() => {
-      try {
-        const { $from } = editor.view.state.selection;
-        if ($from.depth > 0) {
-          const pos = $from.after();
-          editor
-            .chain()
-            .insertContentAt(pos, {
-              type: "paragraph",
-              attrs: { lineType: "dialogue" },
-            })
-            .focus()
-            .run();
-        }
-      } catch (error) {
-        console.log("Error creating dialogue line:", error);
+    lockRef.current = true;
+    try {
+      const { $from } = editor.view.state.selection;
+      if ($from.depth > 0) {
+        editor
+          .chain()
+          .setTextSelection({ from: $from.start(), to: $from.end() })
+          .deleteSelection()
+          .run();
       }
-    }, 10);
+      editor.chain().insertContent(name).focus().run();
+      setShowDropdown(false);
+      setTimeout(() => {
+        try {
+          const { $from: $f } = editor.view.state.selection;
+          if ($f.depth > 0) {
+            const pos = $f.after();
+            editor
+              .chain()
+              .insertContentAt(pos, { type: "paragraph", attrs: { lineType: "dialogue" } })
+              .focus()
+              .run();
+          }
+        } catch (error) {
+          console.log("Error creating dialogue line:", error);
+        }
+      }, 10);
+    } catch (error) {
+      console.log("Error in selectName:", error);
+    }
+    setTimeout(() => {
+      lockRef.current = false;
+    }, 50);
+  };
+
+  /** Complete a voice-style extension, staying on the character line. */
+  const selectExtension = (option: string) => {
+    if (!editor) return;
+    lockRef.current = true;
+    try {
+      const { $from } = editor.view.state.selection;
+      const node = $from.parent;
+      const text = node.textContent;
+      const openIdx = text.lastIndexOf("(");
+      if (openIdx >= 0) {
+        const start = $from.start() + openIdx;
+        const end = $from.start() + text.length;
+        // Ensure a single space separates the name and the extension.
+        const needsSpace = openIdx > 0 && text[openIdx - 1] !== " ";
+        editor
+          .chain()
+          .setTextSelection({ from: start, to: end })
+          .deleteSelection()
+          .insertContent((needsSpace ? " " : "") + option + " ")
+          .focus()
+          .run();
+      }
+      setShowDropdown(false);
+    } catch (error) {
+      console.log("Error in selectExtension:", error);
+    }
+    setTimeout(() => {
+      lockRef.current = false;
+    }, 50);
   };
 
   // ── Render ──────────────────────────────────────────────────
-
-  if (!showDropdown || filteredNames.length === 0) return null;
+  if (!showDropdown || filteredOptions.length === 0) return null;
 
   return (
     <div
@@ -347,54 +350,29 @@ const CharacterAutoFill = ({ editor, getEditors, rosterNames }: CharacterAutoFil
         borderRadius: "4px",
         boxShadow: "0 4px 12px rgba(0, 0, 0, 0.15)",
         minWidth: "200px",
-        maxHeight: "200px",
+        maxHeight: "220px",
         overflowY: "auto",
         fontFamily: "Courier New, monospace",
         fontSize: "12pt",
       }}
     >
-      {filteredNames.map((name, index) => (
+      {filteredOptions.map((option, index) => (
         <div
-          key={name}
+          key={option}
           className={`character-option ${index === activeIndex ? "active" : ""}`}
           style={{
             padding: "8px 12px",
             cursor: "pointer",
-            backgroundColor:
-              index === activeIndex
-                ? "rgba(255, 102, 0, 0.1)"
-                : "transparent",
+            backgroundColor: index === activeIndex ? "rgba(255, 102, 0, 0.1)" : "transparent",
             fontFamily: "Courier New, monospace",
             fontSize: "12pt",
-            borderBottom:
-              index < filteredNames.length - 1 ? "1px solid #eee" : "none",
+            borderBottom: index < filteredOptions.length - 1 ? "1px solid #eee" : "none",
             color: "#000000",
           }}
           onMouseEnter={() => setActiveIndex(index)}
-          onClick={() => {
-            if (!editor) return;
-            lockRef.current = true;
-
-            try {
-              const { $from } = editor.view.state.selection;
-              if ($from.depth > 0) {
-                editor
-                  .chain()
-                  .setTextSelection({ from: $from.start(), to: $from.end() })
-                  .deleteSelection()
-                  .run();
-              }
-              handleSelect(name);
-            } catch (error) {
-              console.log("Error in click handler:", error);
-            }
-
-            setTimeout(() => {
-              lockRef.current = false;
-            }, 50);
-          }}
+          onClick={() => (mode === "ext" ? selectExtension(option) : selectName(option))}
         >
-          {name}
+          {option}
         </div>
       ))}
     </div>

@@ -1,20 +1,66 @@
+/**
+ * SluglineAutoFill.tsx
+ * ====================
+ * Staged autocomplete for SCENE HEADING (slugline) lines.
+ *
+ * A slugline is filled in three stages, Tab/Enter advancing each:
+ *   none      → INT. / EXT. / INT./EXT. / EXT./INT.
+ *   location  → locations already used in the script (+ optional graph list),
+ *               then Tab inserts " - " and moves to time
+ *   time      → DAY / NIGHT / CONTINUOUS / MOMENTS LATER / ... (expanded)
+ *   completed → nothing
+ *
+ * Stage detection is END-ANCHORED against the text after " - " so multi-word
+ * times ("THE NEXT DAY", "MOMENTS LATER") no longer false-trip completion the
+ * way a naive `includes("DAY")` did.
+ *
+ * Imported by: ScriptEditor.tsx, FullscreenScriptEditor.tsx
+ */
+
 import React, { useState, useEffect, useRef } from "react";
 import { Editor } from "@tiptap/react";
 
 const SLUGLINE_OPTIONS: string[] = ["INT.", "EXT.", "INT./EXT.", "EXT./INT."];
+
+// Time-of-day options (expanded to industry-standard set). DAY/NIGHT first —
+// the two most common. Kept UPPERCASE; matching is case-insensitive.
 const TIME_OPTIONS: string[] = [
-  "NIGHT",
   "DAY",
+  "NIGHT",
+  "CONTINUOUS",
+  "LATER",
+  "MOMENTS LATER",
   "MORNING",
-  "THAT MOMENT",
+  "AFTERNOON",
   "EVENING",
+  "DUSK",
+  "DAWN",
+  "SUNRISE",
+  "SUNSET",
+  "MAGIC HOUR",
+  "SAME TIME",
+  "THAT MOMENT",
+  "THE NEXT DAY",
 ];
+
+// Prefixes we recognise when peeling a location out of an existing slugline,
+// longest first so "INT./EXT." wins over "INT.".
+const PREFIX_MATCHERS = ["INT./EXT.", "EXT./INT.", "INT.", "EXT.", "EST.", "I/E", "INT", "EXT"].sort(
+  (a, b) => b.length - a.length
+);
 
 type StageType = "none" | "location" | "time" | "completed";
 
-const SluglineAutoFill = ({ editor }: { editor: Editor | null }) => {
+interface SluglineAutoFillProps {
+  editor: Editor | null;
+  /** Returns every page editor so locations from any page suggest everywhere. */
+  getEditors?: () => Editor[];
+  /** Optional location names from the story graph (suggest before first use). */
+  locationNames?: string[];
+}
+
+const SluglineAutoFill = ({ editor, getEditors, locationNames }: SluglineAutoFillProps) => {
   const [showDropdown, setShowDropdown] = useState(false);
-  const [options, setOptions] = useState<string[]>(SLUGLINE_OPTIONS);
   const [filteredOptions, setFilteredOptions] = useState<string[]>(SLUGLINE_OPTIONS);
   // Use viewport-relative (fixed) coordinates so the dropdown follows the
   // cursor regardless of how many scroll containers exist above the editor.
@@ -24,63 +70,104 @@ const SluglineAutoFill = ({ editor }: { editor: Editor | null }) => {
   const [currentStage, setCurrentStage] = useState<StageType>("none");
   const lockRef = useRef(false);
   const [currentFilter, setCurrentFilter] = useState("");
-  const [showPreview, setShowPreview] = useState(false);
-  const [previewOption, setPreviewOption] = useState("");
-  const [previewPos, setPreviewPos] = useState({ top: 0, left: 0 });
-  const [isPositionSet, setIsPositionSet] = useState(false);
 
-  const analyzeNodeContent = (node: any) => {
-    if (!node) return { stage: "none" as StageType, filter: "" };
+  // Refs so event handlers read the freshest sources without re-binding.
+  const getEditorsRef = useRef<typeof getEditors>(getEditors);
+  useEffect(() => {
+    getEditorsRef.current = getEditors;
+  }, [getEditors]);
+  const locationNamesRef = useRef<string[]>(locationNames ?? []);
+  useEffect(() => {
+    locationNamesRef.current = locationNames ?? [];
+  }, [locationNames]);
 
-    const text = node.textContent || "";
-    const hasFullLocation = SLUGLINE_OPTIONS.some((opt) => text.includes(opt + " "));
-    const hasDash = text.includes(" - ");
-    const hasTime = TIME_OPTIONS.some((opt) => text.includes(opt));
-
-    if (hasTime) return { stage: "completed" as StageType, filter: "" };
-    if (hasFullLocation && hasDash) {
-      const afterDash = text.split(" - ")[1] || "";
-      return { stage: "time" as StageType, filter: afterDash.trim() };
+  /** Peel the location substring out of a slugline's text, if any. */
+  const locationFromSlug = (text: string): string | null => {
+    const up = text.toUpperCase();
+    let rest = text;
+    for (const p of PREFIX_MATCHERS) {
+      if (up.startsWith(p)) {
+        rest = text.slice(p.length);
+        break;
+      }
     }
-    if (hasFullLocation) return { stage: "location" as StageType, filter: "" };
-    return { stage: "none" as StageType, filter: text.trim() };
+    rest = rest.replace(/^[\s.\-]+/, "");
+    const loc = rest.split(" - ")[0].trim();
+    return loc || null;
+  };
+
+  /** Collect location names from every page's sluglines + the graph list. */
+  const findLocationNames = (): string[] => {
+    const locations = new Set<string>();
+    const editors = getEditorsRef.current?.() ?? (editor ? [editor] : []);
+    for (const ed of editors) {
+      ed.state.doc.descendants((node) => {
+        if (node.type.name === "paragraph" && node.attrs.lineType === "scene") {
+          const loc = locationFromSlug(node.textContent);
+          if (loc) locations.add(loc.toUpperCase());
+        }
+        return true;
+      });
+    }
+    for (const l of locationNamesRef.current) {
+      const trimmed = l?.trim();
+      if (trimmed) locations.add(trimmed.toUpperCase());
+    }
+    return Array.from(locations).sort();
+  };
+
+  const analyzeNodeContent = (node: any): { stage: StageType; filter: string } => {
+    if (!node) return { stage: "none", filter: "" };
+    const text = node.textContent || "";
+    const up = text.toUpperCase();
+
+    // Which slug prefix (if any) does the line start with?
+    const prefix = SLUGLINE_OPTIONS.find((opt) => up.startsWith(opt));
+    if (!prefix) return { stage: "none", filter: text.trim() };
+
+    const rest = text.slice(prefix.length);
+    if (rest.includes(" - ")) {
+      // TIME stage: everything after the FIRST " - " is the time filter.
+      const afterDash = rest.slice(rest.indexOf(" - ") + 3);
+      const done = TIME_OPTIONS.some(
+        (o) => o.toLowerCase() === afterDash.trim().toLowerCase()
+      );
+      return done
+        ? { stage: "completed", filter: "" }
+        : { stage: "time", filter: afterDash.replace(/^\s+/, "") };
+    }
+
+    // LOCATION stage: the text between the prefix and any " - ".
+    return { stage: "location", filter: rest.replace(/^\s+/, "") };
   };
 
   const filterOptions = (allOptions: string[], filter: string) => {
     if (!filter) return allOptions;
     const lowerFilter = filter.toLowerCase();
-    return allOptions.filter((option) => option.toLowerCase().startsWith(lowerFilter));
+    return allOptions.filter(
+      (option) =>
+        option.toLowerCase().startsWith(lowerFilter) &&
+        option.toLowerCase() !== lowerFilter
+    );
   };
 
   /**
    * updateDropdownPosition
    *
-   * Uses editor.view.coordsAtPos() which returns coordinates in the
-   * VIEWPORT coordinate space (same as getBoundingClientRect).
-   * We then render the dropdown with position:fixed at those coordinates
-   * so it always appears at the cursor regardless of scroll containers.
+   * Uses editor.view.coordsAtPos() (viewport coordinate space) and renders the
+   * dropdown position:fixed at those coordinates so it always sits at the
+   * cursor regardless of scroll containers.
    */
   const updateDropdownPosition = () => {
     if (!editor) return;
-
     const { state } = editor.view;
     const { $from } = state.selection;
-
     try {
       const coords = editor.view.coordsAtPos($from.pos);
-      // coords.bottom is the bottom of the current line in viewport px.
-      // Add a small gap (4px) so the dropdown sits just below the cursor line.
-      setDropdownPos({
-        top: coords.bottom + 4,
-        left: coords.left,
-      });
+      setDropdownPos({ top: coords.bottom + 4, left: coords.left });
     } catch {
       // coordsAtPos can throw if the position is out of range
     }
-  };
-
-  const updatePreview = () => {
-    setShowPreview(false);
   };
 
   const processNodeState = () => {
@@ -93,90 +180,145 @@ const SluglineAutoFill = ({ editor }: { editor: Editor | null }) => {
 
     if (pos !== currentNodePos) {
       setCurrentNodePos(pos);
-      const { stage, filter } = analyzeNodeContent(node);
-      setCurrentStage(stage);
-      setCurrentFilter(filter);
-      setShowPreview(false);
     }
 
     if (node.attrs.lineType !== "scene") {
       setShowDropdown(false);
-      setShowPreview(false);
       return;
     }
 
     const { stage, filter } = analyzeNodeContent(node);
-
     if (filter !== currentFilter) setCurrentFilter(filter);
-    if (stage !== currentStage) {
-      setCurrentStage(stage);
-      setShowPreview(false);
-    }
+    if (stage !== currentStage) setCurrentStage(stage);
 
     switch (stage) {
       case "none": {
         const locationFiltered = filterOptions(SLUGLINE_OPTIONS, filter);
-        if (locationFiltered.length > 0) {
-          setOptions(SLUGLINE_OPTIONS);
-          setFilteredOptions(locationFiltered);
+        // Show INT./EXT. options while nothing (or a prefix fragment) is typed.
+        const opts = filter ? locationFiltered : SLUGLINE_OPTIONS;
+        if (opts.length > 0) {
+          setFilteredOptions(opts);
           setActiveIndex(0);
           setShowDropdown(true);
           updateDropdownPosition();
         } else {
           setShowDropdown(false);
-          setShowPreview(false);
         }
         break;
       }
-      case "location":
-        setShowDropdown(false);
-        setShowPreview(false);
+
+      case "location": {
+        const locFiltered = filterOptions(findLocationNames(), filter);
+        if (locFiltered.length > 0) {
+          setFilteredOptions(locFiltered);
+          setActiveIndex(0);
+          setShowDropdown(true);
+          updateDropdownPosition();
+        } else {
+          setShowDropdown(false);
+        }
         break;
+      }
 
       case "time": {
-        const timeFiltered = filterOptions(TIME_OPTIONS, filter);
+        const timeFiltered = filter
+          ? filterOptions(TIME_OPTIONS, filter)
+          : TIME_OPTIONS;
         if (timeFiltered.length > 0) {
-          setOptions(TIME_OPTIONS);
           setFilteredOptions(timeFiltered);
           setActiveIndex(0);
           setShowDropdown(true);
           updateDropdownPosition();
         } else {
           setShowDropdown(false);
-          setShowPreview(false);
         }
         break;
       }
+
       case "completed":
         setShowDropdown(false);
-        setShowPreview(false);
         break;
     }
   };
 
   useEffect(() => {
     if (!editor) return;
-
     const updateHandler = () => {
       processNodeState();
       updateDropdownPosition();
     };
-
     editor.on("update", updateHandler);
     editor.on("selectionUpdate", updateHandler);
-
     processNodeState();
-
     return () => {
       editor.off("update", updateHandler);
       editor.off("selectionUpdate", updateHandler);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, currentNodePos, currentStage, currentFilter]);
 
-  useEffect(() => {
-    updatePreview();
-  }, [activeIndex, filteredOptions]);
+  // Replace the currently-typed filter text with a chosen option.
+  const replaceFilter = (option: string) => {
+    if (!editor) return;
+    const { state } = editor.view;
+    const { $from } = state.selection;
+    const node = $from.parent;
 
+    if (currentStage === "none" && currentFilter) {
+      const endPos = $from.pos;
+      const startPos = endPos - currentFilter.length;
+      editor.chain().setTextSelection({ from: startPos, to: endPos }).deleteSelection().run();
+    } else if (currentStage === "location" && currentFilter) {
+      const endPos = $from.pos;
+      const startPos = endPos - currentFilter.length;
+      editor.chain().setTextSelection({ from: startPos, to: endPos }).deleteSelection().run();
+    } else if (currentStage === "time" && currentFilter) {
+      const dashPos = node.textContent.indexOf(" - ") + 3;
+      const startPos = $from.start() + dashPos;
+      const endPos = startPos + currentFilter.length;
+      editor.chain().setTextSelection({ from: startPos, to: endPos }).deleteSelection().run();
+    }
+  };
+
+  // Commit an option for the current stage and advance the stage machine.
+  const commitOption = (option: string) => {
+    if (!editor) return;
+    lockRef.current = true;
+    replaceFilter(option);
+
+    if (currentStage === "none") {
+      // Insert "INT. " and move to location.
+      editor.chain().insertContent(option + " ").focus().run();
+      setShowDropdown(false);
+      setTimeout(() => {
+        setCurrentStage("location");
+        lockRef.current = false;
+      }, 50);
+    } else if (currentStage === "location") {
+      // Insert the location then " - " and move to time.
+      editor.chain().insertContent(option + " - ").focus().run();
+      setShowDropdown(false);
+      setTimeout(() => {
+        setCurrentStage("time");
+        setFilteredOptions(TIME_OPTIONS);
+        setActiveIndex(0);
+        setShowDropdown(true);
+        updateDropdownPosition();
+        lockRef.current = false;
+      }, 50);
+    } else {
+      // Time: complete the slugline.
+      editor.chain().insertContent(option + " ").focus().run();
+      setShowDropdown(false);
+      setTimeout(() => {
+        setCurrentStage("completed");
+        lockRef.current = false;
+      }, 50);
+    }
+  };
+
+  // Tab drives the stage machine even when no dropdown is showing (e.g. the
+  // location stage with a typed-in name and no suggestion → still inserts " - ").
   useEffect(() => {
     if (!editor) return;
 
@@ -186,37 +328,30 @@ const SluglineAutoFill = ({ editor }: { editor: Editor | null }) => {
       const { state } = editor.view;
       const { $from } = state.selection;
       const node = $from.parent;
-
       if (node.attrs.lineType !== "scene") return;
 
       const { stage } = analyzeNodeContent(node);
 
-      if (stage === "none" && showDropdown && filteredOptions.length > 0) {
+      // none / location / time WITH a dropdown suggestion → pick it + advance.
+      if (
+        (stage === "none" || stage === "location" || stage === "time") &&
+        showDropdown &&
+        filteredOptions.length > 0
+      ) {
         event.preventDefault();
         event.stopPropagation();
-        lockRef.current = true;
-
-        if (currentFilter) {
-          const endPos = $from.pos;
-          const startPos = endPos - currentFilter.length;
-          editor.chain().setTextSelection({ from: startPos, to: endPos }).deleteSelection().run();
-        }
-
-        handleSelect(filteredOptions[activeIndex]);
-        setTimeout(() => { setCurrentStage("location"); lockRef.current = false; }, 50);
+        commitOption(filteredOptions[activeIndex]);
         return;
       }
 
+      // location stage, no suggestion → insert " - " and go to time.
       if (stage === "location" && !showDropdown) {
         event.preventDefault();
         event.stopPropagation();
         lockRef.current = true;
-
         editor.chain().insertContent(" - ").focus().run();
-
         setTimeout(() => {
           setCurrentStage("time");
-          setOptions(TIME_OPTIONS);
           setFilteredOptions(TIME_OPTIONS);
           setActiveIndex(0);
           setShowDropdown(true);
@@ -225,29 +360,14 @@ const SluglineAutoFill = ({ editor }: { editor: Editor | null }) => {
         }, 50);
         return;
       }
-
-      if (stage === "time" && showDropdown && filteredOptions.length > 0) {
-        event.preventDefault();
-        event.stopPropagation();
-        lockRef.current = true;
-
-        if (currentFilter) {
-          const dashPos = node.textContent.indexOf(" - ") + 3;
-          const startPos = $from.start() + dashPos;
-          const endPos = startPos + currentFilter.length;
-          editor.chain().setTextSelection({ from: startPos, to: endPos }).deleteSelection().run();
-        }
-
-        handleSelect(filteredOptions[activeIndex]);
-        setTimeout(() => { setCurrentStage("completed"); lockRef.current = false; }, 50);
-        return;
-      }
     };
 
     editor.view.dom.addEventListener("keydown", handleKeyDown, true);
     return () => editor.view.dom.removeEventListener("keydown", handleKeyDown, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, showDropdown, filteredOptions, activeIndex, currentStage, currentFilter]);
 
+  // Arrow/Enter/Escape while the dropdown is open.
   useEffect(() => {
     if (!editor || !showDropdown) return;
 
@@ -264,49 +384,21 @@ const SluglineAutoFill = ({ editor }: { editor: Editor | null }) => {
         case "Enter":
           if (showDropdown && filteredOptions.length > 0) {
             e.preventDefault();
-            lockRef.current = true;
-
-            const { state } = editor.view;
-            const { $from } = state.selection;
-            const node = $from.parent;
-
-            if (currentFilter && currentStage === "none") {
-              const endPos = $from.pos;
-              const startPos = endPos - currentFilter.length;
-              editor.chain().setTextSelection({ from: startPos, to: endPos }).deleteSelection().run();
-            } else if (currentFilter && currentStage === "time") {
-              const dashPos = node.textContent.indexOf(" - ") + 3;
-              const startPos = $from.start() + dashPos;
-              const endPos = startPos + currentFilter.length;
-              editor.chain().setTextSelection({ from: startPos, to: endPos }).deleteSelection().run();
-            }
-
-            handleSelect(filteredOptions[activeIndex]);
-            setTimeout(() => {
-              const nextStage = currentStage === "none" ? "location" : "completed";
-              setCurrentStage(nextStage);
-              lockRef.current = false;
-            }, 50);
+            e.stopPropagation();
+            commitOption(filteredOptions[activeIndex]);
           }
           break;
         case "Escape":
           e.preventDefault();
           setShowDropdown(false);
-          setShowPreview(false);
           break;
       }
     };
 
     document.addEventListener("keydown", handleKeyDown, true);
     return () => document.removeEventListener("keydown", handleKeyDown, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showDropdown, filteredOptions, activeIndex, editor, currentStage, currentFilter]);
-
-  const handleSelect = (option: string) => {
-    if (!editor) return;
-    editor.chain().insertContent(option + " ").focus().run();
-    setShowDropdown(false);
-    setShowPreview(false);
-  };
 
   return (
     <>
@@ -314,8 +406,6 @@ const SluglineAutoFill = ({ editor }: { editor: Editor | null }) => {
         <div
           className="slugline-dropdown"
           style={{
-            // Fixed positioning uses viewport coordinates directly from
-            // coordsAtPos — no container offset calculation needed.
             position: "fixed",
             top: dropdownPos.top,
             left: dropdownPos.left,
@@ -325,6 +415,8 @@ const SluglineAutoFill = ({ editor }: { editor: Editor | null }) => {
             borderRadius: "4px",
             boxShadow: "0 2px 8px rgba(0, 0, 0, 0.15)",
             color: "#000000",
+            maxHeight: "220px",
+            overflowY: "auto",
           }}
         >
           {filteredOptions.map((option, index) => (
@@ -339,32 +431,7 @@ const SluglineAutoFill = ({ editor }: { editor: Editor | null }) => {
                 color: "#000000",
               }}
               onMouseEnter={() => setActiveIndex(index)}
-              onClick={() => {
-                if (!editor) return;
-                lockRef.current = true;
-
-                const { state } = editor.view;
-                const { $from } = state.selection;
-
-                if (currentFilter && currentStage === "none") {
-                  const endPos = $from.pos;
-                  const startPos = endPos - currentFilter.length;
-                  editor.chain().setTextSelection({ from: startPos, to: endPos }).deleteSelection().run();
-                } else if (currentFilter && currentStage === "time") {
-                  const node = $from.parent;
-                  const dashPos = node.textContent.indexOf(" - ") + 3;
-                  const startPos = $from.start() + dashPos;
-                  const endPos = startPos + currentFilter.length;
-                  editor.chain().setTextSelection({ from: startPos, to: endPos }).deleteSelection().run();
-                }
-
-                handleSelect(option);
-                setTimeout(() => {
-                  const nextStage = currentStage === "none" ? "location" : "completed";
-                  setCurrentStage(nextStage);
-                  lockRef.current = false;
-                }, 50);
-              }}
+              onClick={() => commitOption(option)}
             >
               {option}
             </div>

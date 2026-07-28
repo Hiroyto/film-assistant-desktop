@@ -1183,7 +1183,10 @@ export function EstablishedHereEditor({
   auth: { userId: string; token: string };
   // `willDelete`: removing this fact from this scene would delete it entirely
   // (it's established nowhere else and no character knows it).
-  facts: Array<{ id: string; summary: string; willDelete: boolean }>;
+  // `superseded`: the pages contradicted this outline claim (pages-as-gospel,
+  // §6b amended): it renders dimmed + struck and is out of every active read;
+  // editing its text is the writer's hand and restores it.
+  facts: Array<{ id: string; summary: string; willDelete: boolean; superseded?: boolean; supersededNote?: string }>;
   accent: string;
   onChanged: () => void;
 }) {
@@ -1208,8 +1211,11 @@ export function EstablishedHereEditor({
             onMouseLeave={() => setHover((h) => (h === f.id ? null : h))}
             style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}
           >
-            <span style={{ color: accent, marginTop: 1, fontSize: 12 }}>•</span>
-            <div style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ color: accent, marginTop: 1, fontSize: 12, opacity: f.superseded ? 0.35 : 1 }}>•</span>
+            <div
+              style={{ flex: 1, minWidth: 0, opacity: f.superseded ? 0.45 : 1, textDecoration: f.superseded ? 'line-through' : 'none' }}
+              title={f.superseded ? `Superseded by the pages${f.supersededNote ? `: ${f.supersededNote}` : ''}` : undefined}
+            >
               <InlineText
                 value={f.summary}
                 style={{ fontSize: 12, lineHeight: 1.4 }}

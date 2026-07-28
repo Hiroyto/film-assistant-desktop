@@ -2,14 +2,14 @@
 // Monta as telas modernizadas (sync-status-bar + modais), roteia os eventos do menu
 // nativo e inicializa a telemetria. TUDO guardado por isDesktop() → na web é no-op
 // (não afeta a SPA — Strangler Fig / AD-07).
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { isDesktop, onOsEvent } from '../../lib/ipcClient';
 import { initTelemetry } from '../../lib/telemetry';
 import { SyncStatusBar } from './sync-status-bar';
 import { UpdateAvailableModal } from './update-available';
 import { ConflictResolutionModal } from './conflict-resolution';
 import { requestSyncNow } from '../../data/desktop-lifecycle';
-import { emit as emitSyncEvent } from '../../data/sync-agent/events';
+import { emit as emitSyncEvent, on as onSyncEvent } from '../../data/sync-agent/events';
 import { recordConflictResolved } from '../../test-bridge/conflictRecorder';
 import { storyRepo } from '../../data/local-db/repositories';
 import { rowToCanonical } from '../../features/story-workspace/model/storySerialization';
@@ -50,8 +50,15 @@ function routeMenu(event: string): void {
 }
 
 export function DesktopShell(): JSX.Element | null {
+  // Último conflito emitido — permite reabrir o modal pelo botão "Resolve" da
+  // status-bar (o modal só monta na emissão do evento; sem isto o botão é inerte).
+  const lastConflict = useRef<{ entityType: string; entityId: string } | null>(null);
+
   useEffect(() => {
     if (!isDesktop()) return;
+    const offConflict = onSyncEvent('sync.conflict', ({ entityType, entityId }) => {
+      lastConflict.current = { entityType, entityId };
+    });
     // Telemetria local (sem DSN → só métricas locais; registra install via SQLite IPC).
     initTelemetry({ environment: 'development' }).catch((e) =>
       console.error('[shell] initTelemetry falhou', e),
@@ -62,6 +69,7 @@ export function DesktopShell(): JSX.Element | null {
     const offOffline = onOsEvent('offline', () => emitSyncEvent('sync.state', { state: 'offline' }));
     const offOnline = onOsEvent('online', () => emitSyncEvent('sync.state', { state: 'online' }));
     return () => {
+      offConflict();
       offMenu();
       offOffline();
       offOnline();
@@ -73,7 +81,15 @@ export function DesktopShell(): JSX.Element | null {
   return (
     <>
       <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 40 }}>
-        <SyncStatusBar onRetry={() => void requestSyncNow()} />
+        <SyncStatusBar
+          onRetry={() => void requestSyncNow()}
+          onViewConflicts={() => {
+            // Reabre o modal re-emitindo o último conflito conhecido (o modal
+            // escuta 'sync.conflict'). Sem um conflito registrado, não faz nada.
+            const c = lastConflict.current;
+            if (c) emitSyncEvent('sync.conflict', c);
+          }}
+        />
       </div>
       <UpdateAvailableModal />
       {/* 'remote' = aceitar a versão do backend (re-pull, não-destrutivo).
@@ -95,6 +111,9 @@ export function DesktopShell(): JSX.Element | null {
               await requestSyncNow(); // flush imediato do push
             }
           }
+          // Destrava a status-bar (senão o banner 'conflict' fica grudado).
+          lastConflict.current = null;
+          emitSyncEvent('sync.conflict.resolved', { entityType, entityId });
         }}
       />
     </>
