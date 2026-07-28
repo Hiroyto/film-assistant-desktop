@@ -50,6 +50,9 @@ module.exports = {
   packagerConfig: {
     name: 'Film Assistant',
     executableName: 'film-assistant',
+    // Ícone do app (embed no .exe / .app). Sem extensão: o packager anexa
+    // .ico no Windows e .icns no macOS. Gerado de src/assets/images/head-only.png.
+    icon: path.join(__dirname, 'build-resources', 'icon'),
     asar: true,
     // Empacota: shell compilado (shell/dist) + build do renderer (build/) + manifesto.
     // Ignora fontes TS, node_modules de dev, specs e o legado de referência.
@@ -86,6 +89,7 @@ module.exports = {
         name: 'film_assistant',
         authors: 'Hiroyto',
         setupExe: 'FilmAssistantSetup.exe',
+        setupIcon: path.join(__dirname, 'build-resources', 'icon.ico'),
         ...(process.env.WINDOWS_CERT_FILE
           ? {
               certificateFile: process.env.WINDOWS_CERT_FILE,
@@ -102,7 +106,7 @@ module.exports = {
     {
       // macOS .dmg — T010 do spike ficou deferido; confirmar < 200 MB na Fase 1.
       name: '@electron-forge/maker-dmg',
-      config: { format: 'ULFO' },
+      config: { format: 'ULFO', icon: path.join(__dirname, 'build-resources', 'icon.icns') },
     },
   ],
   publishers: [

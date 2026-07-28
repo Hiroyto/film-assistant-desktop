@@ -64,6 +64,12 @@ function createWindow(): void {
     minWidth: 900,
     minHeight: 600,
     backgroundColor: '#1a1a1c', // bgdark1 (tailwind.config.js)
+    // Ícone da janela/taskbar. Em dev vem de public/; empacotado, do build/
+    // (CRA copia public/icon.png -> build/icon.png). No macOS o dock usa o .icns
+    // do packagerConfig, então isto é sobretudo para Windows/Linux.
+    icon: isDev
+      ? path.join(__dirname, '..', '..', 'public', 'icon.png')
+      : path.join(__dirname, '..', '..', 'build', 'icon.png'),
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
