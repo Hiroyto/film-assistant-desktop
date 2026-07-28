@@ -57,6 +57,9 @@ export function SyncStatusBar({ onRetry, onViewConflicts }: SyncStatusBarProps):
       on('sync.state', ({ state: s }) => setState((prev) => (prev === 'conflict' && s !== 'conflict' ? prev : s))),
       on('sync.queue.depth', ({ n }) => setDepth(n)),
       on('sync.conflict', () => setState('conflict')), // prioridade máxima
+      // Destrava o banner após a resolução (senão 'conflict' fica grudado para sempre,
+      // já que o guard acima ignora qualquer sync.state enquanto em conflito).
+      on('sync.conflict.resolved', () => setState((prev) => (prev === 'conflict' ? 'online' : prev))),
     ];
     return () => offs.forEach((off) => off());
   }, []);
