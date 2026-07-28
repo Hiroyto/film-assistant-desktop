@@ -1,7 +1,7 @@
 {
   "name": "film-assistant-desktop",
   "productName": "Film Assistant",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "private": true,
   "description": "Film Assistant AI — Desktop (Windows + macOS). Shell Electron + renderer React/TipTap + camada local-first.",
   "main": "shell/dist/main.js",
