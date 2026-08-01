@@ -88,6 +88,10 @@ function createWindow(): void {
     if (process.env.ELECTRON_IS_TEST !== '1') mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
     void mainWindow.loadFile(path.join(__dirname, '..', '..', 'build', 'index.html'));
+    // Debug do build EMPACOTADO: FA_DEBUG=1 abre o DevTools (console do renderer)
+    // para ver erros que só ocorrem no app publicado, não no `desktop:start`.
+    // Temporário — remover quando o bug de sync estiver resolvido.
+    if (process.env.FA_DEBUG === '1') mainWindow.webContents.openDevTools({ mode: 'detach' });
   }
 
   mainWindow.once('ready-to-show', () => mainWindow?.show());
