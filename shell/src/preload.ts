@@ -4,7 +4,7 @@
 // IPC de dados (db.query) é adicionado na Tarefa 07.
 
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
-import { IPC, DeepLinkPayload, OsEvent, UpdatePayload, MenuEvent } from './ipc/channels';
+import { IPC, DeepLinkPayload, OsEvent, UpdatePayload, MenuEvent, FdxPayload } from './ipc/channels';
 import { IS_TEST, TEST_IPC } from './test/testState';
 
 /** Helper: inscreve em um canal e retorna unsubscribe. */
@@ -50,6 +50,15 @@ const api = {
 
   /** Relaunch para instalar o update baixado (SCR-0029). */
   installUpdate: (): Promise<void> => ipcRenderer.invoke(IPC.UPDATE_INSTALL),
+
+  // --- Protótipo coworking .fdx (SOMENTE LEITURA) ---------------------------
+  /** Abre um seletor de .fdx e começa a observá-lo. Retorna o snapshot inicial. */
+  openFdx: (): Promise<FdxPayload | null> => ipcRenderer.invoke(IPC.FDX_OPEN),
+  /** Para de observar o .fdx atual. */
+  closeFdx: (): Promise<void> => ipcRenderer.invoke(IPC.FDX_CLOSE),
+  /** Inscreve handler para mudanças do .fdx observado. Retorna unsubscribe. */
+  onFdxChanged: (handler: (payload: FdxPayload) => void): (() => void) =>
+    subscribe<FdxPayload>(IPC.FDX_CHANGED, handler),
 };
 
 contextBridge.exposeInMainWorld('electronAPI', api);

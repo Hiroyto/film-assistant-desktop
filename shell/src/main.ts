@@ -16,6 +16,7 @@ import { registerDbHandlers } from './db/dbHandlers';
 import { closeDb } from './db/database';
 import { buildAppMenu } from './menu/appMenu';
 import { registerTestBridge } from './test/testBridge';
+import { registerFdx } from './fdx/watcher';
 
 const isDev = !app.isPackaged;
 
@@ -132,6 +133,7 @@ if (!gotSingleInstanceLock) {
     createWindow();
     buildAppMenu(() => mainWindow, { isDev }); // SCR-0027 menu nativo
     registerTestBridge(() => mainWindow); // no-op fora de ELECTRON_IS_TEST=1
+    registerFdx(() => mainWindow); // protótipo coworking .fdx (só leitura)
     wireShellToRenderer();
     emitDeepLinkFromArgv(process.argv); // Windows cold-start com deep link
 

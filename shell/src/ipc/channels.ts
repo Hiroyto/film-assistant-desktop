@@ -7,13 +7,38 @@ export const IPC = {
   DB_QUERY: 'db:query', // { sql, params, mode: 'run'|'all'|'get' } -> resultado
   DB_BATCH: 'db:batch', // { ops: {sql,params}[] } em uma transação -> void
   UPDATE_INSTALL: 'shell:updateInstall', // invoke: relaunch p/ instalar update (AD-09)
+  FDX_OPEN: 'fdx:open', // invoke: dialog + inicia watch de um .fdx -> FdxPayload | null
+  FDX_CLOSE: 'fdx:close', // invoke: para o watch atual -> void
 
   // send (main -> renderer, push)
   DEEP_LINK: 'shell:deepLink', // payload: DeepLinkPayload
   OS_EVENT: 'shell:osEvent', // payload: { event: 'resumed' | 'before-quit' }
   UPDATE: 'shell:update', // payload: { type: 'available' | 'downloaded', version?: string }
   MENU: 'shell:menu', // payload: { event: string } — item do menu nativo acionado (SCR-0027)
+  FDX_CHANGED: 'fdx:changed', // payload: FdxPayload — o .fdx observado mudou no disco
 } as const;
+
+/** Uma cena extraída do .fdx (heading + corpo até a próxima cena). */
+export interface FdxScene {
+  index: number;
+  number: string; // nº da cena (SceneProperties/Paragraph Number, ou sequencial)
+  heading: string;
+  snippet: string; // primeira linha de ação/diálogo (preview do card)
+  lineCount: number; // parágrafos no corpo da cena
+}
+
+/** Snapshot parseado de um arquivo .fdx observado. */
+export interface FdxPayload {
+  path: string;
+  fileName: string;
+  ok: boolean; // parse bem-sucedido (false = mid-write / não é fdx / erro)
+  title?: string;
+  sceneCount: number;
+  paragraphCount: number;
+  scenes: FdxScene[];
+  updatedAt: string; // ISO do momento da leitura
+  error?: string;
+}
 
 /** Eventos emitidos pelos itens do menu nativo (SCR-0027). */
 export type MenuEvent =

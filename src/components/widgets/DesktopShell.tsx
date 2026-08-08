@@ -8,6 +8,7 @@ import { initTelemetry } from '../../lib/telemetry';
 import { SyncStatusBar } from './sync-status-bar';
 import { UpdateAvailableModal } from './update-available';
 import { ConflictResolutionModal } from './conflict-resolution';
+import { FdxCoworkPanel } from './FdxCoworkPanel';
 import { requestSyncNow } from '../../data/desktop-lifecycle';
 import { emit as emitSyncEvent, on as onSyncEvent } from '../../data/sync-agent/events';
 import { recordConflictResolved } from '../../test-bridge/conflictRecorder';
@@ -92,6 +93,7 @@ export function DesktopShell(): JSX.Element | null {
         />
       </div>
       <UpdateAvailableModal />
+      <FdxCoworkPanel />{/* protótipo coworking .fdx (só leitura) */}
       {/* 'remote' = aceitar a versão do backend (re-pull, não-destrutivo).
           'local' = manter a minha (re-enfileira p/ sobrescrever o backend; possível
           após o push-cutover A1). 'both' (duplicar) segue pendente — decisão de produto. */}
