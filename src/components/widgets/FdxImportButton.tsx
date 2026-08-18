@@ -46,7 +46,7 @@ export function FdxImportButton({ projectId, userId, token, onImported }: Props)
   };
 
   return (
-    <div style={{ position: 'fixed', right: 14, bottom: 44, zIndex: 130, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, fontFamily: 'ui-sans-serif, system-ui, sans-serif' }}>
+    <div style={{ position: 'fixed', right: 20, bottom: 66, zIndex: 129, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, fontFamily: 'ui-sans-serif, system-ui, sans-serif' }}>
       {summary ? (
         <div
           style={{ maxWidth: 320, background: '#1f1f22', color: 'rgba(255,255,255,0.9)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, padding: '6px 10px', fontSize: 12, boxShadow: '0 6px 18px rgba(0,0,0,0.35)' }}
