@@ -4818,7 +4818,34 @@ export default function FreeformCorkboard() {
     <ThemeCtx.Provider value={theme}>
     <Shell storyId={storyId} title={workTitle} canRename={canRename} onRename={renameStory}>
       {isDesktop() && auth && storyId ? (
-        <FdxImportButton projectId={storyId} userId={auth.userId} token={auth.token} onImported={refreshEntities} />
+        <FdxImportButton
+          projectId={storyId}
+          userId={auth.userId}
+          token={auth.token}
+          onImported={(created) => {
+            // Insert otimista: mostra os cards importados na hora (e cobre o mock,
+            // onde o refresh não devolveria os recém-criados).
+            if (created.length) {
+              setData((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      entities: [
+                        ...prev.entities.filter((e) => !created.some((c) => c.entity.id === e.id)),
+                        ...created.map((c) => c.entity),
+                      ],
+                    }
+                  : prev,
+              );
+              setPositions((p) => {
+                const np = { ...p };
+                for (const c of created) np[c.entity.id] = c.pos;
+                return np;
+              });
+            }
+            void refreshEntities();
+          }}
+        />
       ) : null}
       {/* Toolbar — one cohesive control strip: stats on the left, controls on
           the right. Manually sticky (an app-shell overflow ancestor defeats

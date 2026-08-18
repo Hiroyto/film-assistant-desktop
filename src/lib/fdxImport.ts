@@ -3,7 +3,7 @@
 // slugline, ligados por OCCURS_IN). Usa a MESMA API do corkboard (createCard),
 // que deduplica server-side por nome (409 -> { exists }). Idempotente: re-rodar
 // só cria as cenas novas. Escreve no backend da história.
-import { createCard, tagEventOccursIn } from './freeformApi';
+import { createCard, tagEventOccursIn, type ProjectEntity } from './freeformApi';
 import { fdxToEntities } from './fdxToEntities';
 import { computeAutoLayout } from '../components/Freeform/corkboard/connectors';
 
@@ -14,6 +14,12 @@ export interface FdxImportCtx {
   onProgress?: (msg: string) => void;
 }
 
+/** Card recém-criado + a posição usada — para insert otimista no board. */
+export interface FdxCreated {
+  entity: ProjectEntity;
+  pos: { x: number; y: number };
+}
+
 export interface FdxImportResult {
   eventsCreated: number;
   eventsExisting: number;
@@ -21,11 +27,13 @@ export interface FdxImportResult {
   locationsExisting: number;
   linked: number;
   errors: string[];
+  /** Entidades efetivamente criadas (para o board mostrar antes do refresh). */
+  created: FdxCreated[];
 }
 
 export async function importFdxIntoStory(payload: FdxPayload, ctx: FdxImportCtx): Promise<FdxImportResult> {
   const res: FdxImportResult = {
-    eventsCreated: 0, eventsExisting: 0, locationsCreated: 0, locationsExisting: 0, linked: 0, errors: [],
+    eventsCreated: 0, eventsExisting: 0, locationsCreated: 0, locationsExisting: 0, linked: 0, errors: [], created: [],
   };
   if (!payload.ok) {
     res.errors.push(payload.error || 'arquivo .fdx inválido');
@@ -51,13 +59,14 @@ export async function importFdxIntoStory(payload: FdxPayload, ctx: FdxImportCtx)
     const name = vm.entity.working_name || '';
     if (!name) continue;
     const intExt = vm.entity.int_ext === 'INT' ? 'INT' : vm.entity.int_ext === 'EXT' ? 'EXT' : undefined;
+    const pos = posOf(vm.entity.id, li);
     try {
       const r = await createCard(
-        { kind: 'location', projectId: ctx.projectId, userId: ctx.userId, workingName: name, intExt, position: posOf(vm.entity.id, li) },
+        { kind: 'location', projectId: ctx.projectId, userId: ctx.userId, workingName: name, intExt, position: pos },
         ctx.token,
       );
       if ('exists' in r) { res.locationsExisting++; locRealId.set(vm.entity.id, r.cardId); }
-      else { res.locationsCreated++; locRealId.set(vm.entity.id, r.entity.id); }
+      else { res.locationsCreated++; locRealId.set(vm.entity.id, r.entity.id); res.created.push({ entity: r.entity, pos }); }
     } catch (e) {
       res.errors.push(`local "${name}": ${(e as Error).message}`);
     }
@@ -72,6 +81,7 @@ export async function importFdxIntoStory(payload: FdxPayload, ctx: FdxImportCtx)
     const heading = vm.entity.working_title || '';
     if (!heading) { ei++; continue; }
     let eventRealId: string | undefined;
+    const pos = posOf(vm.entity.id, model.locations.length + ei);
     try {
       const r = await createCard(
         {
@@ -80,13 +90,13 @@ export async function importFdxIntoStory(payload: FdxPayload, ctx: FdxImportCtx)
           userId: ctx.userId,
           workingName: heading,
           description: vm.entity.summary || undefined,
-          position: posOf(vm.entity.id, model.locations.length + ei),
+          position: pos,
           precededByEventId: prevEventId,
         },
         ctx.token,
       );
       if ('exists' in r) { res.eventsExisting++; eventRealId = r.cardId; }
-      else { res.eventsCreated++; eventRealId = r.entity.id; }
+      else { res.eventsCreated++; eventRealId = r.entity.id; res.created.push({ entity: r.entity, pos }); }
     } catch (e) {
       res.errors.push(`cena "${heading}": ${(e as Error).message}`);
     }

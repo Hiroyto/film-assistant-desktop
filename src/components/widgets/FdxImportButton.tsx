@@ -10,8 +10,9 @@ interface Props {
   projectId: string;
   userId: string;
   token: string;
-  /** Chamado após o import para recarregar as entidades do board. */
-  onImported: () => void | Promise<void>;
+  /** Chamado após o import com as entidades criadas (para insert otimista) +
+   *  em seguida o board recarrega via refresh. */
+  onImported: (created: FdxImportResult['created']) => void | Promise<void>;
 }
 
 export function FdxImportButton({ projectId, userId, token, onImported }: Props): JSX.Element {
@@ -30,7 +31,7 @@ export function FdxImportButton({ projectId, userId, token, onImported }: Props)
       const r: FdxImportResult = await importFdxIntoStory(payload, {
         projectId, userId, token, onProgress: setProgress,
       });
-      await onImported();
+      await onImported(r.created);
       setSummary(
         `${r.eventsCreated} cenas novas · ${r.locationsCreated} locais` +
           (r.eventsExisting || r.locationsExisting ? ` · ${r.eventsExisting + r.locationsExisting} já existiam` : '') +
