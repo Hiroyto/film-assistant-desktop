@@ -25,6 +25,8 @@ import CascadeToast from '../../components/Freeform/CascadeToast';
 import RecentUpdatesTray from '../../components/Freeform/RecentUpdatesTray';
 import { getEntityColor, hexToRgba } from '../../components/Freeform/entityColors';
 import { PEER_BLUE } from '../../components/Freeform/tokens';
+import { FdxImportButton } from '../../components/widgets/FdxImportButton';
+import { isDesktop } from '../../lib/ipcClient';
 import { SupersessionRequiredError, acceptArcSuggestion, createArc, createArcFromEvents, createCard, createInformation, deleteArc, deleteCard, dismissArcSuggestion, enqueueCardExtraction, enqueueExtractionJob, getCardLayouts, isMockMode, listArcSuggestions, listCardQuestions, listProjectEntities, promoteStructuralToRelationship, resolveNarrativeStatusFlip, restoreArc, restoreCard, slugForCard, updateArc, updateCardDescription, updateCardName, updateCardNarrativeStatus, updateCardPosition, type ArcKind, type ArcSuggestion, type CardLayout, type EvokesTransition, type ListProjectEntitiesResponse, type NarrativeStatus, type PersistedQuestion, type ProjectEntity, type SupersessionRequiredResponse } from '../../lib/freeformApi';
 import { useCascadeEvents } from '../../lib/useCascadeEvents';
 import { countFreshDeltaEdges, loadStoredGraph, mergeGraphDelta, onGraphUpdate, saveStoredGraph, type GraphDelta } from '../../lib/localGraphStore';
@@ -4815,6 +4817,9 @@ export default function FreeformCorkboard() {
   return (
     <ThemeCtx.Provider value={theme}>
     <Shell storyId={storyId} title={workTitle} canRename={canRename} onRename={renameStory}>
+      {isDesktop() && auth && storyId ? (
+        <FdxImportButton projectId={storyId} userId={auth.userId} token={auth.token} onImported={refreshEntities} />
+      ) : null}
       {/* Toolbar — one cohesive control strip: stats on the left, controls on
           the right. Manually sticky (an app-shell overflow ancestor defeats
           position:sticky): the wrapper holds the bar's slot in flow; once it
