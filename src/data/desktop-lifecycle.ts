@@ -34,8 +34,9 @@ import type {
 import { startSyncScheduler as defaultStartScheduler } from './sync-agent/scheduler';
 import { processQueue as defaultProcessQueue } from './sync-agent/push-queue';
 import { runPull as defaultRunPull } from './sync-agent/pull-strategy';
-import { initialPullRepos as defaultRepos } from './local-db/repositories';
+import { initialPullRepos as defaultRepos, storyRepo, characterRepo } from './local-db/repositories';
 import { rearmFailed as defaultRearmFailed } from './local-db/repositories/syncQueueRepo';
+import { mapStoryToRow, normalizeCharacters } from './sync-agent/transforms';
 import type { RawStory, RawUser } from './sync-agent/transforms';
 
 // --- Injectable collaborators ------------------------------------------------
@@ -101,6 +102,17 @@ let activeSyncNow: (() => Promise<void>) | null = null;
 /** Dispara um pull+push manual no ciclo desktop ativo (no-op se não houver). */
 export async function requestSyncNow(): Promise<void> {
   await activeSyncNow?.();
+}
+
+// Resolução 'remote' de conflito (AD-02): força a versão do backend no SQLite
+// local. Singleton como o activeSyncNow, para a UI de conflito disparar sem
+// prop-drilling.
+let activeApplyRemote: ((storyId: string) => Promise<boolean>) | null = null;
+
+/** Força a versão do backend de uma story no SQLite local (aceitar 'remote' num
+ *  conflito). Retorna false se não há ciclo ativo ou a story não veio do backend. */
+export async function applyRemoteStory(storyId: string): Promise<boolean> {
+  return activeApplyRemote ? activeApplyRemote(storyId) : false;
 }
 
 // --- Backend contract (legado): tudo vem de POST /user -----------------------
@@ -213,6 +225,36 @@ export function startDesktopDataLifecycle(opts: DesktopLifecycleOptions): Deskto
   };
   activeSyncNow = syncNow;
 
+  // Aceitar 'remote' num conflito: FORÇA a story do backend no SQLite local,
+  // pulando o isPullConflict (que, no ciclo normal, só re-emitiria o conflito e
+  // daria `continue` sem aplicar). Sem isto, o mesmo conflito reaparece a cada
+  // boot mesmo "resolvido". upsertStory grava synced_at=now + version=remoto, o
+  // que zera a condição (hasLocalPendingEdit=false, remote.version==local).
+  const applyRemoteFn = async (targetStoryId: string): Promise<boolean> => {
+    try {
+      const works = await getWorksOngoing();
+      const at = new Date().toISOString();
+      for (const raw of works) {
+        let row;
+        try {
+          row = mapStoryToRow(raw, { userId, now: at });
+        } catch {
+          continue; // story malformada
+        }
+        if (row.story_id !== targetStoryId) continue;
+        await storyRepo.upsertStory(row);
+        const { rows } = normalizeCharacters(raw.characters, row.story_id, at);
+        await characterRepo.replaceCharactersForStory(row.story_id, rows);
+        return true;
+      }
+      return false;
+    } catch (e) {
+      console.error('[desktop-lifecycle] applyRemoteStory falhou', e);
+      return false;
+    }
+  };
+  activeApplyRemote = applyRemoteFn;
+
   // (1) Sessão OS-aware: configura JIT refresh no safeApiCall + flush on quit.
   const stopSession = deps.startSession({ onToken: opts.onToken, flush: flushAll });
 
@@ -245,6 +287,7 @@ export function startDesktopDataLifecycle(opts: DesktopLifecycleOptions): Deskto
     stopSession();
     stopScheduler?.();
     if (activeSyncNow === syncNow) activeSyncNow = null;
+    if (activeApplyRemote === applyRemoteFn) activeApplyRemote = null;
   };
 
   return { stop, flushAll, syncNow, ready };
