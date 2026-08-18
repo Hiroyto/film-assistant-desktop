@@ -45,6 +45,9 @@ function routeMenu(event: string): void {
     case 'updater.check':
       window.dispatchEvent(new CustomEvent('app:check-updates'));
       break;
+    case 'fdx.open':
+      window.dispatchEvent(new CustomEvent('app:open-fdx'));
+      break;
     default:
       break;
   }

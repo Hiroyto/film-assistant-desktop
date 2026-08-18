@@ -47,7 +47,8 @@ export type MenuEvent =
   | 'commands.cmdk.open'
   | 'tour.open'
   | 'help.about.open'
-  | 'updater.check';
+  | 'updater.check'
+  | 'fdx.open';
 
 export interface DeepLinkPayload {
   scheme: string;
