@@ -25,6 +25,7 @@ export interface FdxScene {
   heading: string;
   snippet: string; // primeira linha de ação/diálogo (preview do card)
   lineCount: number; // parágrafos no corpo da cena
+  characters: string[]; // personagens que falam nesta cena (cues de Character)
 }
 
 /** Snapshot parseado de um arquivo .fdx observado. */

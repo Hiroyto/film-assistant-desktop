@@ -20,6 +20,7 @@ declare global {
     heading: string;
     snippet: string;
     lineCount: number;
+    characters: string[];
   }
 
   /** Snapshot parseado de um .fdx observado (emitido pelo shell). */

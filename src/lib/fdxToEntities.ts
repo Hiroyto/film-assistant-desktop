@@ -12,6 +12,7 @@ export interface FdxCardVM {
 export interface FdxModel {
   events: FdxCardVM[];
   locations: FdxCardVM[];
+  characters: FdxCardVM[];
 }
 
 const slugify = (s: string): string =>
@@ -38,20 +39,26 @@ export function parseSlugline(heading: string): { intExt: string; location: stri
   return { intExt, location: location || rest, time };
 }
 
-/** FdxPayload -> entidades do corkboard (events + locations, com sinais). */
+/** FdxPayload -> entidades do corkboard (events + locations + characters, com
+ *  sinais). Characters vêm dos cues de Character do roteiro; INVOLVES por cena. */
 export function fdxToEntities(payload: FdxPayload): FdxModel {
   const events: FdxCardVM[] = [];
   const locMap = new Map<string, { entity: ProjectEntity; titles: string[] }>();
+  const charMap = new Map<string, { entity: ProjectEntity; appearsIn: Array<{ id: string; title: string }> }>();
 
   for (const s of payload.scenes) {
     const { intExt, location, time } = parseSlugline(s.heading);
     const eventId = `fdx-ev-${s.number}-${slugify(s.heading)}`;
     const locId = location ? `fdx-loc-${slugify(location)}` : '';
+    const chars = s.characters || [];
 
     const eventEntity: ProjectEntity = {
       id: eventId,
+      // Prefixa o nº da cena: duas cenas com o MESMO slugline (ex.: a cena volta
+      // ao mesmo lugar) são beats distintos, mas o backend deduplica createCard
+      // por nome — sem o nº elas colidiriam num único card.
       type: 'event',
-      working_title: s.heading,
+      working_title: `${s.number}. ${s.heading}`,
       summary: s.snippet || '',
       narrative_status: 'on_screen',
       sub_events: [{ slugline: s.heading, description: s.snippet || '' }],
@@ -60,7 +67,11 @@ export function fdxToEntities(payload: FdxPayload): FdxModel {
 
     events.push({
       entity: eventEntity,
-      signal: { subEventCount: 1, occursInLocNames: location ? [location] : [] },
+      signal: {
+        subEventCount: 1,
+        occursInLocNames: location ? [location] : [],
+        involvesCharNames: chars,
+      },
     });
 
     if (locId) {
@@ -78,6 +89,17 @@ export function fdxToEntities(payload: FdxPayload): FdxModel {
       }
       locMap.get(locId)!.titles.push(s.heading);
     }
+
+    for (const name of chars) {
+      const charId = `fdx-char-${slugify(name)}`;
+      if (!charMap.has(charId)) {
+        charMap.set(charId, {
+          entity: { id: charId, type: 'character', working_name: name } as ProjectEntity,
+          appearsIn: [],
+        });
+      }
+      charMap.get(charId)!.appearsIn.push({ id: eventId, title: s.heading });
+    }
   }
 
   const locations: FdxCardVM[] = [...locMap.values()].map((l) => ({
@@ -85,5 +107,10 @@ export function fdxToEntities(payload: FdxPayload): FdxModel {
     signal: { appearsInEventTitles: l.titles },
   }));
 
-  return { events, locations };
+  const characters: FdxCardVM[] = [...charMap.values()].map((c) => ({
+    entity: c.entity,
+    signal: { eventCount: c.appearsIn.length, appearsInEvents: c.appearsIn },
+  }));
+
+  return { events, locations, characters };
 }

@@ -2,12 +2,13 @@ import { fdxToEntities, parseSlugline } from './fdxToEntities';
 
 // FdxScene/FdxPayload são tipos globais (src/electron.d.ts); montamos payloads
 // mínimos aqui.
-const scene = (index: number, number: string, heading: string, snippet = ''): FdxScene => ({
+const scene = (index: number, number: string, heading: string, snippet = '', characters: string[] = []): FdxScene => ({
   index,
   number,
   heading,
   snippet,
   lineCount: snippet ? 1 : 0,
+  characters,
 });
 
 const payload = (scenes: FdxScene[]): FdxPayload => ({
@@ -57,10 +58,36 @@ describe('fdxToEntities', () => {
     ]));
     expect(m.events).toHaveLength(2);
     expect(m.events[0].entity.type).toBe('event');
-    expect(m.events[0].entity.working_title).toBe('INT. NEWSROOM - NIGHT');
+    // título prefixado com o nº da cena (nomes únicos para o dedup do backend)
+    expect(m.events[0].entity.working_title).toBe('1. INT. NEWSROOM - NIGHT');
     expect(m.events[0].entity.summary).toBe('Mara reads.');
     // occurs_in aponta para o location derivado
     expect((m.events[0].entity as any).occurs_in).toEqual([m.locations.find((l) => l.entity.working_name === 'NEWSROOM')!.entity.id]);
+  });
+
+  it('cenas com heading repetido viram eventos DISTINTOS (nº no título)', () => {
+    const m = fdxToEntities(payload([
+      scene(0, '1', 'INT. WAREHOUSE - NIGHT'),
+      scene(1, '12', 'INT. WAREHOUSE - NIGHT'),
+    ]));
+    expect(m.events).toHaveLength(2);
+    const titles = m.events.map((e) => e.entity.working_title);
+    expect(titles).toEqual(['1. INT. WAREHOUSE - NIGHT', '12. INT. WAREHOUSE - NIGHT']);
+    expect(new Set(titles).size).toBe(2); // nomes únicos -> 2 cards no backend
+    // mas o local é o MESMO (dedup)
+    expect(m.locations).toHaveLength(1);
+  });
+
+  it('extrai personagens únicos + involves por cena', () => {
+    const m = fdxToEntities(payload([
+      scene(0, '1', 'INT. A - DAY', 'x', ['RED', 'ANDY']),
+      scene(1, '2', 'EXT. B - NIGHT', 'y', ['RED']),
+    ]));
+    expect(m.characters.map((c) => c.entity.working_name).sort()).toEqual(['ANDY', 'RED']);
+    const red = m.characters.find((c) => c.entity.working_name === 'RED')!;
+    expect(red.entity.type).toBe('character');
+    expect(red.signal.eventCount).toBe(2);
+    expect(m.events[0].signal.involvesCharNames).toEqual(['RED', 'ANDY']);
   });
 
   it('deduplica locais e conta appearsIn', () => {

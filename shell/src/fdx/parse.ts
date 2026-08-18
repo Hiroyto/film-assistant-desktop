@@ -11,7 +11,11 @@ const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: '@_',
   processEntities: true,
-  trimValues: true,
+  // trimValues:false de propósito: o Final Draft grava um <Text> como VÁRIOS runs
+  // (ex.: "CAPTAIN OWENS" -> ["CAPTAIN"," OWENS"]). Com trim, o espaço da junção
+  // some e vira "CAPTAINOWENS". Sem trim, os runs preservam o espaço; o clean()
+  // abaixo colapsa/trima no fim.
+  trimValues: false,
 });
 
 function asArray<T>(v: T | T[] | undefined | null): T[] {
@@ -30,23 +34,30 @@ function textOf(node: unknown): string {
 
 const clean = (s: string): string => s.replace(/\s+/g, ' ').trim();
 
+/** Limpa um cue de personagem: "RED (V.O.)" / "D.A. (CONT'D)" -> "RED" / "D.A." */
+const cleanCharacterName = (s: string): string =>
+  clean(s).replace(/\s*\([^)]*\)\s*$/, '').trim();
+
 export interface FdxParseResult {
   title?: string;
   scenes: FdxScene[];
   paragraphCount: number;
+  /** Nomes únicos de personagens que falam no roteiro (dos cues de Character). */
+  characters: string[];
 }
 
 /** Parseia o XML de um .fdx. Lança se o XML for inválido (caller trata retry). */
 export function parseFdx(xml: string): FdxParseResult {
   const doc = parser.parse(xml) as Record<string, any>;
   const fd = doc?.FinalDraft;
-  if (!fd) return { scenes: [], paragraphCount: 0 };
+  if (!fd) return { scenes: [], paragraphCount: 0, characters: [] };
 
   // O corpo do roteiro é o 1º <Content> (a TitlePage tem o seu, à parte).
   const content = Array.isArray(fd.Content) ? fd.Content[0] : fd.Content;
   const paras = asArray<Record<string, any>>(content?.Paragraph);
 
   const scenes: FdxScene[] = [];
+  const allChars = new Set<string>();
   let cur: FdxScene | null = null;
   let body: string[] = [];
   let idx = 0;
@@ -68,11 +79,20 @@ export function parseFdx(xml: string): FdxParseResult {
         heading: text,
         snippet: '',
         lineCount: 0,
+        characters: [],
       };
       idx++;
       body = [];
-    } else if (cur && text) {
-      body.push(text);
+    } else if (cur) {
+      if (/^character$/i.test(type)) {
+        const name = cleanCharacterName(text);
+        if (name) {
+          if (!cur.characters.includes(name)) cur.characters.push(name);
+          allChars.add(name);
+        }
+      } else if (text) {
+        body.push(text);
+      }
     }
   }
   flush();
@@ -86,5 +106,5 @@ export function parseFdx(xml: string): FdxParseResult {
     if (t) title = t;
   }
 
-  return { title, scenes, paragraphCount: paras.length };
+  return { title, scenes, paragraphCount: paras.length, characters: [...allChars] };
 }

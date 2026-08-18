@@ -32,9 +32,10 @@ export function FdxImportButton({ projectId, userId, token, onImported }: Props)
         projectId, userId, token, onProgress: setProgress,
       });
       await onImported(r.created);
+      const existing = r.eventsExisting + r.locationsExisting + r.charactersExisting;
       setSummary(
-        `${r.eventsCreated} cenas novas · ${r.locationsCreated} locais` +
-          (r.eventsExisting || r.locationsExisting ? ` · ${r.eventsExisting + r.locationsExisting} já existiam` : '') +
+        `${r.eventsCreated} cenas · ${r.locationsCreated} locais · ${r.charactersCreated} personagens` +
+          (existing ? ` · ${existing} já existiam` : '') +
           (r.errors.length ? ` · ${r.errors.length} erro(s)` : ''),
       );
     } catch (e) {
