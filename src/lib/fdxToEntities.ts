@@ -47,6 +47,7 @@ export function fdxToEntities(payload: FdxPayload): FdxModel {
   const charMap = new Map<string, { entity: ProjectEntity; appearsIn: Array<{ id: string; title: string }> }>();
 
   for (const s of payload.scenes) {
+    if (!s.heading || !s.heading.trim()) continue; // pula Scene Heading vazio (não vira "N. ")
     const { intExt, location, time } = parseSlugline(s.heading);
     const eventId = `fdx-ev-${s.number}-${slugify(s.heading)}`;
     const locId = location ? `fdx-loc-${slugify(location)}` : '';
