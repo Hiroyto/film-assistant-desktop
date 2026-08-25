@@ -5,6 +5,7 @@
 import React, { useState } from 'react';
 import { openFdx } from '../../lib/fdxClient';
 import { importFdxIntoStory, FdxImportResult } from '../../lib/fdxImport';
+import { flushPushNow } from '../../data/desktop-lifecycle';
 
 interface Props {
   projectId: string;
@@ -26,8 +27,13 @@ export function FdxImportButton({ projectId, userId, token, onImported }: Props)
     const payload = await openFdx(); // seletor de arquivo + leitura inicial (main)
     if (!payload) return; // cancelado
     setBusy(true);
-    setProgress('lendo…');
     try {
+      // Garante que a história (recém-criada, local-first) já esteja registrada
+      // no /works antes de escrever no freeform — senão a ownership ainda não
+      // existe no backend e o createCard nega ("Not authorized for this story").
+      setProgress('registrando história…');
+      await flushPushNow();
+      setProgress('lendo…');
       const r: FdxImportResult = await importFdxIntoStory(payload, {
         projectId, userId, token, onProgress: setProgress,
       });

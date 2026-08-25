@@ -115,6 +115,17 @@ export async function applyRemoteStory(storyId: string): Promise<boolean> {
   return activeApplyRemote ? activeApplyRemote(storyId) : false;
 }
 
+// Flush só-push da fila (sem pull). Usado antes de escrever no backend do
+// freeform: garante que a story recém-criada já esteja registrada no /works
+// (ownership), senão o freeform nega com "Not authorized for this story".
+let activeFlush: (() => Promise<void>) | null = null;
+
+/** Drena a fila de push agora (registra mutações pendentes no backend). No-op se
+ *  não houver ciclo ativo. */
+export async function flushPushNow(): Promise<void> {
+  if (activeFlush) await activeFlush();
+}
+
 // --- Backend contract (legado): tudo vem de POST /user -----------------------
 // res.data.body = { cap, subscription, sign_up_date, works, privacy }
 // works = { [storyId]: storyData }  (mapa). userId = cognito:username.
@@ -208,6 +219,7 @@ export function startDesktopDataLifecycle(opts: DesktopLifecycleOptions): Deskto
       console.error('[desktop-lifecycle] flushAll falhou', e);
     }
   };
+  activeFlush = flushAll;
 
   // Pull + push manual (Retry sync). Re-arma primeiro as entries que desistiram
   // (o "Retry" do usuário é um pedido explícito de reprocessar tudo, inclusive
@@ -288,6 +300,7 @@ export function startDesktopDataLifecycle(opts: DesktopLifecycleOptions): Deskto
     stopScheduler?.();
     if (activeSyncNow === syncNow) activeSyncNow = null;
     if (activeApplyRemote === applyRemoteFn) activeApplyRemote = null;
+    if (activeFlush === flushAll) activeFlush = null;
   };
 
   return { stop, flushAll, syncNow, ready };
