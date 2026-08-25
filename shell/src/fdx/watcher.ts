@@ -27,6 +27,7 @@ async function readFdx(filePath: string, tries = 3): Promise<FdxPayload> {
     sceneCount: 0,
     paragraphCount: 0,
     scenes: [],
+    fullText: '',
     updatedAt: new Date().toISOString(),
   };
   for (let t = 0; t < tries; t++) {
@@ -41,7 +42,7 @@ async function readFdx(filePath: string, tries = 3): Promise<FdxPayload> {
       return { ...base, error: 'arquivo .fdx incompleto (mid-write?)' };
     }
     try {
-      const { title, scenes, paragraphCount } = parseFdx(xml);
+      const { title, scenes, paragraphCount, fullText } = parseFdx(xml);
       return {
         ...base,
         ok: true,
@@ -49,6 +50,7 @@ async function readFdx(filePath: string, tries = 3): Promise<FdxPayload> {
         scenes,
         sceneCount: scenes.length,
         paragraphCount,
+        fullText,
         updatedAt: new Date().toISOString(),
       };
     } catch (e) {

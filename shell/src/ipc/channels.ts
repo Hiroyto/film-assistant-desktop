@@ -37,6 +37,7 @@ export interface FdxPayload {
   sceneCount: number;
   paragraphCount: number;
   scenes: FdxScene[];
+  fullText: string; // roteiro reconstruído (entrada da extração por IA)
   updatedAt: string; // ISO do momento da leitura
   error?: string;
 }

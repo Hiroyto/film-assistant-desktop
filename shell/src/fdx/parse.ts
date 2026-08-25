@@ -44,13 +44,16 @@ export interface FdxParseResult {
   paragraphCount: number;
   /** Nomes únicos de personagens que falam no roteiro (dos cues de Character). */
   characters: string[];
+  /** Roteiro reconstruído como texto (slugline/ação/CUE/diálogo) — entrada da
+   *  extração por IA (runBraindumpExtraction, sourceFormat 'screenplay'). */
+  fullText: string;
 }
 
 /** Parseia o XML de um .fdx. Lança se o XML for inválido (caller trata retry). */
 export function parseFdx(xml: string): FdxParseResult {
   const doc = parser.parse(xml) as Record<string, any>;
   const fd = doc?.FinalDraft;
-  if (!fd) return { scenes: [], paragraphCount: 0, characters: [] };
+  if (!fd) return { scenes: [], paragraphCount: 0, characters: [], fullText: '' };
 
   // O corpo do roteiro é o 1º <Content> (a TitlePage tem o seu, à parte).
   const content = Array.isArray(fd.Content) ? fd.Content[0] : fd.Content;
@@ -58,6 +61,7 @@ export function parseFdx(xml: string): FdxParseResult {
 
   const scenes: FdxScene[] = [];
   const allChars = new Set<string>();
+  const ftLines: string[] = []; // roteiro reconstruído p/ a extração por IA
   let cur: FdxScene | null = null;
   let body: string[] = [];
   let idx = 0;
@@ -83,6 +87,7 @@ export function parseFdx(xml: string): FdxParseResult {
       };
       idx++;
       body = [];
+      if (text) ftLines.push('', text);
     } else if (cur) {
       if (/^character$/i.test(type)) {
         const name = cleanCharacterName(text);
@@ -90,8 +95,10 @@ export function parseFdx(xml: string): FdxParseResult {
           if (!cur.characters.includes(name)) cur.characters.push(name);
           allChars.add(name);
         }
+        if (text) ftLines.push('', text);
       } else if (text) {
         body.push(text);
+        ftLines.push(text);
       }
     }
   }
@@ -106,5 +113,5 @@ export function parseFdx(xml: string): FdxParseResult {
     if (t) title = t;
   }
 
-  return { title, scenes, paragraphCount: paras.length, characters: [...allChars] };
+  return { title, scenes, paragraphCount: paras.length, characters: [...allChars], fullText: ftLines.join('\n').trim() };
 }

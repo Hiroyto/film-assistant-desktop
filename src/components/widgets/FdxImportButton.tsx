@@ -1,22 +1,17 @@
-// FdxImportButton — ação DENTRO do corkboard de uma história: abre um .fdx e
-// importa as cenas como cards REAIS (eventos + locais), sincronizando sob demanda
-// (dedup pula o que já existe). Auto-contido: toda a UI (botão, progresso, resumo)
-// e a lógica vivem aqui, para o freeform-corkboard.tsx só montar uma linha.
+// FdxImportButton — ação DENTRO do corkboard: abre um .fdx e importa via o
+// pipeline de EXTRAÇÃO POR IA (o mesmo do drop de PDF: runBraindumpExtraction,
+// sourceFormat 'screenplay'), que gera TODOS os tipos de card (Character, Event,
+// Location, Arc, Information) + edges. Um-shot (não observa o arquivo).
 import React, { useState } from 'react';
-import { openFdx } from '../../lib/fdxClient';
-import { importFdxIntoStory, FdxImportResult } from '../../lib/fdxImport';
+import { openFdx, closeFdx } from '../../lib/fdxClient';
 import { flushPushNow } from '../../data/desktop-lifecycle';
 
 interface Props {
-  projectId: string;
-  userId: string;
-  token: string;
-  /** Chamado após o import com as entidades criadas (para insert otimista) +
-   *  em seguida o board recarrega via refresh. */
-  onImported: (created: FdxImportResult['created']) => void | Promise<void>;
+  /** Recebe o roteiro como texto e dispara a extração por IA no corkboard. */
+  onImportScreenplay: (text: string, fileName: string) => void | Promise<void>;
 }
 
-export function FdxImportButton({ projectId, userId, token, onImported }: Props): JSX.Element {
+export function FdxImportButton({ onImportScreenplay }: Props): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState('');
   const [summary, setSummary] = useState<string | null>(null);
@@ -24,26 +19,26 @@ export function FdxImportButton({ projectId, userId, token, onImported }: Props)
   const run = async (): Promise<void> => {
     if (busy) return;
     setSummary(null);
-    const payload = await openFdx(); // seletor de arquivo + leitura inicial (main)
+    const payload = await openFdx(); // seletor + leitura
     if (!payload) return; // cancelado
+    void closeFdx(); // import é um-shot: não precisamos observar o arquivo
+    if (!payload.ok) {
+      setSummary(payload.error || 'não foi possível ler o .fdx');
+      return;
+    }
+    if (payload.fullText.trim().length < 40) {
+      setSummary('roteiro muito curto ou vazio');
+      return;
+    }
     setBusy(true);
     try {
-      // Garante que a história (recém-criada, local-first) já esteja registrada
-      // no /works antes de escrever no freeform — senão a ownership ainda não
-      // existe no backend e o createCard nega ("Not authorized for this story").
+      // A extração escreve no backend do freeform → precisa da ownership; garante
+      // que a história (local-first) já esteja registrada no /works antes.
       setProgress('registrando história…');
       await flushPushNow();
-      setProgress('lendo…');
-      const r: FdxImportResult = await importFdxIntoStory(payload, {
-        projectId, userId, token, onProgress: setProgress,
-      });
-      await onImported(r.created);
-      const existing = r.eventsExisting + r.locationsExisting + r.charactersExisting;
-      setSummary(
-        `${r.eventsCreated} cenas · ${r.locationsCreated} locais · ${r.charactersCreated} personagens` +
-          (existing ? ` · ${existing} já existiam` : '') +
-          (r.errors.length ? ` · ${r.errors.length} erro(s)` : ''),
-      );
+      setProgress('enviando p/ extração…');
+      await onImportScreenplay(payload.fullText, payload.fileName);
+      setSummary('Extração iniciada — os cards vão aparecer conforme a IA lê o roteiro.');
     } catch (e) {
       setSummary(`falhou: ${(e as Error).message}`);
     } finally {
@@ -67,7 +62,7 @@ export function FdxImportButton({ projectId, userId, token, onImported }: Props)
         type="button"
         onClick={run}
         disabled={busy}
-        title="Importar cenas de um roteiro .fdx (Final Draft) como cards desta história"
+        title="Importar um roteiro .fdx (Final Draft) — extração por IA gera cards de personagem, cena, local, arco e informação"
         style={{ background: busy ? '#8a8a8a' : '#e67e22', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 14px', fontWeight: 600, cursor: busy ? 'default' : 'pointer', boxShadow: '0 6px 18px rgba(0,0,0,0.35)', fontSize: 13 }}
       >
         {busy ? `Importando ${progress}` : '⬇ Importar .fdx'}

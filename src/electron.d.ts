@@ -32,6 +32,7 @@ declare global {
     sceneCount: number;
     paragraphCount: number;
     scenes: FdxScene[];
+    fullText: string;
     updatedAt: string;
     error?: string;
   }

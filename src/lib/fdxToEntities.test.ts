@@ -18,6 +18,7 @@ const payload = (scenes: FdxScene[]): FdxPayload => ({
   sceneCount: scenes.length,
   paragraphCount: scenes.length,
   scenes,
+  fullText: '',
   updatedAt: '2026-01-01T00:00:00.000Z',
 });
 
