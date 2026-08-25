@@ -6,8 +6,8 @@ import { PEER_BLUE } from '../../../components/Freeform/tokens';
 import { type EntityType } from '../../../components/Freeform/types';
 import { type ArcKind, type NarrativeStatus, type PersistedQuestion, type ProjectEntity } from '../../../lib/freeformApi';
 import { ARC_BALL_H, ARC_BALL_W, ARC_DOT, BALL_TRANSITION_MS, CHAR_PILL_H, CHAR_PILL_W, COLLAPSED_H, COLLAPSED_W, EVENT_CARD_W, EXPANDED_W, REL_BALL_COLOR, REL_COLLAPSED_H, REL_COLLAPSED_W, type Pos } from './constants';
-import { arcKindLabel, narrativeStatusBg, narrativeStatusFg, narrativeStatusLabel, tieLabel, transitionLabel, truncate } from './labels';
-import { FloatingPeerCard, WorkingSectionsBlock } from './peer';
+import { arcKindLabel, narrativeStatusBg, narrativeStatusFg, tieLabel, transitionLabel, truncate } from './labels';
+import { FloatingPeerCard } from './peer';
 import { type CardSignal } from './signals';
 import { liftColor, useThemeMode } from './theme';
 
@@ -245,7 +245,11 @@ export function CardBox({
         minHeight: expanded ? 200 : isBall ? ballMinH : isCharPill ? CHAR_PILL_H : COLLAPSED_H,
         // Collapsed pill grows to fit its (wrapping) label and flex-centers it.
         height: expanded || isPillShape ? 'auto' : COLLAPSED_H,
-        ...(isPillShape ? { display: 'flex', alignItems: 'center', justifyContent: 'center' } : {}),
+        // Expanded: flex column so the footer can sit at the BOTTOM even when
+        // a short body leaves the minHeight unfilled (Ben 2026-08-23: the
+        // footer floated mid-card over a dead bottom band).
+        ...(isPillShape ? { display: 'flex', alignItems: 'center', justifyContent: 'center' }
+          : expanded ? { display: 'flex', flexDirection: 'column' as const } : {}),
         // Opaque fill so the thread passing behind the ball is hidden. The
         // sliding dot is a solid colored circle. Character pill: warm
         // accent-tinted node (the constellation look).
@@ -452,6 +456,7 @@ export function CardBox({
       )}
 
       {/* Footer — Ask peer + Open full sheet buttons (only when expanded) */}
+      {expanded && <div style={{ flex: 1, minHeight: 0 }} />}
       {expanded && (
         <div
           style={{
@@ -464,7 +469,11 @@ export function CardBox({
             gap: 8,
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {/* On-brand footer (Ben 2026-08-23): the sheet opener is a pill in
+                the entity's accent — same button language as Ask peer — and
+                delete is a quiet trash icon that arms red. No more underlined
+                text links. */}
             <button
               data-tour={`open-sheet-${entity.id}`}
               onMouseDown={(e) => e.stopPropagation()}
@@ -473,18 +482,24 @@ export function CardBox({
                 onOpenSheet();
               }}
               style={{
-                fontSize: 11,
-                color: dark ? '#9a9aa4' : '#666',
-                background: 'transparent',
-                border: 'none',
-                cursor: 'pointer',
-                padding: 0,
-                textDecoration: 'underline',
-                fontFamily: 'system-ui, sans-serif',
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                fontSize: 12, fontWeight: 600,
+                padding: '6px 13px', borderRadius: 999,
+                border: `1px solid ${hexToRgba(color, 0.5)}`,
+                background: `linear-gradient(135deg, ${hexToRgba(color, dark ? 0.16 : 0.12)}, ${hexToRgba(color, dark ? 0.07 : 0.05)})`,
+                color: dark ? liftColor(color, 0.3) : color,
+                cursor: 'pointer', fontFamily: 'system-ui, sans-serif',
+                transition: 'box-shadow 160ms ease-out',
               }}
-              title={`Open full ${type} sheet`}
+              onMouseEnter={(e) => { e.currentTarget.style.boxShadow = `0 0 10px ${hexToRgba(color, 0.3)}`; }}
+              onMouseLeave={(e) => { e.currentTarget.style.boxShadow = 'none'; }}
+              title={`Everything on this ${type === 'event' ? 'scene' : type}: fields, ties, questions`}
             >
-              open full sheet ↗
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
+                <path d="M7 17L17 7" />
+                <path d="M9 7h8v8" />
+              </svg>
+              Open sheet
             </button>
             <DeleteCardLink onConfirm={onDelete} entityType={type} />
           </div>
@@ -508,13 +523,15 @@ export function CardBox({
           instead of the old flat white dot. Vertically centered on the character
           pill; bottom-right corner on regular cards. Pointer events on the
           handle don't trigger card drag because the mousedown stops propagation. */}
-      {(type === 'event' || type === 'character') && onLinkHandleMouseDown && !isFocusMode && (
+      {(type === 'event' || type === 'character' || type === 'sequence') && onLinkHandleMouseDown && !isFocusMode && (
         <div
           onMouseDown={onLinkHandleMouseDown}
           onMouseEnter={() => setHandleHover(true)}
           onMouseLeave={() => setHandleHover(false)}
           title={type === 'character'
             ? 'Drag to connect: to another character (relationship), to an event (adds to cast)'
+            : type === 'sequence'
+            ? 'Drag to connect: to a scene or a sequence (it follows this sequence in the story)'
             : 'Drag to connect: to an event (PRECEDES / Alt=CAUSES), an arc (EVOKES), a character (cast), or a sequence (member)'}
           style={{
             position: 'absolute',
@@ -926,6 +943,7 @@ export function DeleteCardLink({
     onConfirm();
   };
 
+  const dark = useThemeMode() === 'dark';
   return (
     <button
       onMouseDown={(e) => e.stopPropagation()}
@@ -933,21 +951,28 @@ export function DeleteCardLink({
       title={
         armed
           ? 'Click again to delete (will land in Trash — restore anytime)'
-          : `Delete this ${entityType} (soft delete, recoverable from Trash)`
+          : `Move this ${entityType} to Trash (restore anytime)`
       }
       style={{
-        fontSize: 11,
-        color: armed ? '#c44' : '#999',
-        background: 'transparent',
-        border: 'none',
-        cursor: 'pointer',
-        padding: 0,
-        textDecoration: 'underline',
-        fontFamily: 'system-ui, sans-serif',
-        fontWeight: armed ? 600 : 400,
+        display: 'inline-flex', alignItems: 'center', gap: 5,
+        fontSize: 11.5, fontWeight: 600,
+        padding: armed ? '5px 11px' : '5px 7px', borderRadius: 999,
+        border: `1px solid ${armed ? 'rgba(239,68,68,0.55)' : 'transparent'}`,
+        background: armed ? 'rgba(239,68,68,0.1)' : 'transparent',
+        color: armed ? '#ef4444' : dark ? '#6b6b74' : '#9a9aa4',
+        cursor: 'pointer', fontFamily: 'system-ui, sans-serif',
+        transition: 'color 120ms, border-color 120ms, background 120ms',
       }}
+      onMouseEnter={(e) => { if (!armed) e.currentTarget.style.color = '#ef4444'; }}
+      onMouseLeave={(e) => { if (!armed) e.currentTarget.style.color = dark ? '#6b6b74' : '#9a9aa4'; }}
     >
-      {armed ? 'click again to delete' : 'delete'}
+      <svg width="12" height="12" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
+        <path
+          d="M5.5 1C5.22386 1 5 1.22386 5 1.5C5 1.77614 5.22386 2 5.5 2H9.5C9.77614 2 10 1.77614 10 1.5C10 1.22386 9.77614 1 9.5 1H5.5ZM3 3.5C3 3.22386 3.22386 3 3.5 3H5H10H11.5C11.7761 3 12 3.22386 12 3.5C12 3.77614 11.7761 4 11.5 4H11V12C11 12.5523 10.5523 13 10 13H5C4.44772 13 4 12.5523 4 12V4L3.5 4C3.22386 4 3 3.77614 3 3.5ZM5 4H10V12H5V4Z"
+          fill="currentColor" fillRule="evenodd" clipRule="evenodd"
+        />
+      </svg>
+      {armed ? 'sure?' : null}
     </button>
   );
 }
@@ -965,7 +990,6 @@ export function CompactBody({
   signal: CardSignal;
   accentColor: string;
 }) {
-  const dark = useThemeMode() === 'dark';
   const type = entity.type as EntityType;
   if (type === 'character') return <CharacterCompact entity={entity} signal={signal} accentColor={accentColor} />;
   // Events are title-forward notecards: SC number + big title, nothing else.
@@ -974,24 +998,11 @@ export function CompactBody({
   if (type === 'location') return <LocationCompact entity={entity} signal={signal} />;
   if (type === 'relationship') return <RelationshipCompact entity={entity} signal={signal} accentColor={accentColor} />;
   if (type === 'arc') return <ArcCompact entity={entity} signal={signal} accentColor={accentColor} />;
-  if (type === 'sequence') return <SequenceCompact entity={entity} />;
+  // Member-less sequence cards are name-only too (Ben 2026-08-23): the
+  // summary line under the title was noise on the spine; it lives on the
+  // expanded card.
+  if (type === 'sequence') return null;
   return null;
-}
-
-export function SequenceCompact({ entity }: { entity: ProjectEntity }) {
-  const dark = useThemeMode() === 'dark';
-  const body = entity.summary ?? entity.description ?? '';
-  return (
-    <div style={{ fontSize: 11, color: dark ? '#9a9aa4' : '#666', lineHeight: 1.4 }}>
-      {body ? (
-        <div style={{ overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
-          {body}
-        </div>
-      ) : (
-        <span style={{ fontStyle: 'italic', opacity: 0.7 }}>Broad movement. Ask peer to break it into scenes.</span>
-      )}
-    </div>
-  );
 }
 
 export function CharacterCompact({
@@ -1301,97 +1312,10 @@ export function ExpandedBody({
         </div>
       )}
 
-      {/* Character: Working sections — counts + "+ Add my own" + answerable
-          composers per question. Replaces the peer-panel composers (peer is
-          display-only). */}
-      {type === 'character' && (
-        <WorkingSectionsBlock
-          cardId={entity.id}
-          projectId={projectId}
-          auth={auth}
-          entity={entity}
-          questions={cardQuestions}
-          completedResponseIds={completedResponseIds}
-          onChanged={onQuestionsChanged}
-        />
-      )}
-
-      {/* Character: Knowledge arcs — technical, collapsed by default. */}
-      {type === 'character' && (signal.knowsList?.length ?? 0) > 0 && (
-        <CollapsibleSection label="Knowledge arcs" count={signal.knowsList!.length}>
-          {signal.knowsList!.map((k, i) => {
-            const verb =
-              k.state === 'doesnt_know'
-                ? "doesn't know"
-                : k.state === 'suspects'
-                ? 'suspects'
-                : k.state === 'almost_spoiled'
-                ? 'almost spoiled on'
-                : 'knows';
-            return (
-              <div key={i} style={{ fontSize: 11.5, color: dark ? '#c2c2ca' : '#444', marginBottom: 4 }}>
-                <span style={{ color: accentColor, fontWeight: 600 }}>{verb}</span>{' '}
-                {k.info_summary}
-                {k.state_qualifier && (
-                  <span style={{ color: dark ? '#82828c' : '#888' }}> ({k.state_qualifier})</span>
-                )}
-              </div>
-            );
-          })}
-        </CollapsibleSection>
-      )}
-
-      {/* Character: Appears in events — technical, collapsed by default. */}
-      {type === 'character' && (signal.appearsInEvents?.length ?? 0) > 0 && (
-        <CollapsibleSection label="Appears in" count={signal.appearsInEvents!.length}>
-          {signal.appearsInEvents!.map((e, i) => (
-            <div
-              key={e.id}
-              style={{
-                fontSize: 11.5,
-                color: dark ? '#c2c2ca' : '#444',
-                marginBottom: 4,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-              }}
-            >
-              <span style={{ color: dark ? '#6e6e78' : '#aaa', minWidth: 14 }}>{i + 1}.</span>
-              <span style={{ flex: 1 }}>{e.title}</span>
-              {e.narrative_status && (
-                <span
-                  style={{
-                    fontSize: 9,
-                    padding: '1px 5px',
-                    background: narrativeStatusBg(e.narrative_status),
-                    color: narrativeStatusFg(e.narrative_status),
-                    borderRadius: 2,
-                    textTransform: 'uppercase',
-                    letterSpacing: 0.3,
-                    fontWeight: 600,
-                  }}
-                >
-                  {narrativeStatusLabel(e.narrative_status)}
-                </span>
-              )}
-            </div>
-          ))}
-        </CollapsibleSection>
-      )}
-
-      {/* Character: structural ties */}
-      {type === 'character' && (signal.structuralPeers?.length ?? 0) > 0 && (
-        <Section label="Connected via">
-          {signal.structuralPeers!.map((peer, i) => (
-            <div key={i} style={{ fontSize: 11, color: dark ? '#9a9aa4' : '#666' }}>
-              <span style={{ fontFamily: 'monospace', color: dark ? '#82828c' : '#888' }}>
-                {signal.structuralPreds![i] ?? ''}
-              </span>{' '}
-              {peer}
-            </div>
-          ))}
-        </Section>
-      )}
+      {/* Character: DESCRIPTION + TRAITS only, the same reading-surface rule
+          the event card follows (Ben 2026-08-24). Working sections, knowledge
+          arcs, appears-in and structural ties all live on the full sheet
+          (Open Questions / Knowledge / Appears in / Relationships tiles). */}
 
       {/* Event: SUMMARY + CAST only — the expanded card is a reading surface.
           Occurs-in, throughline, sub-events, and the origin quote all live on
@@ -1442,70 +1366,9 @@ export function ExpandedBody({
       {type === 'arc' && (signal.arcInvolvesCharNames?.length ?? 0) > 0 && (
         <Section label="Involves">{signal.arcInvolvesCharNames!.join(' · ')}</Section>
       )}
-      {type === 'arc' && (signal.evokesEntries?.length ?? 0) > 0 && (
-        <Section label="Evokes">
-          {signal.evokesEntries!.map((e, i) => (
-            <div
-              key={e.event_id}
-              style={{
-                marginBottom: 6,
-                paddingLeft: 6,
-                borderLeft: `2px solid ${hexToRgba(accentColor, 0.25)}`,
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                <span style={{ color: dark ? '#6e6e78' : '#aaa', minWidth: 14, fontSize: 11 }}>{i + 1}.</span>
-                <span style={{ fontSize: 11.5, color: dark ? '#c2c2ca' : '#444', flex: 1 }}>{e.event_title}</span>
-                {e.narrative_status && (
-                  <span
-                    style={{
-                      fontSize: 9,
-                      padding: '1px 5px',
-                      background: narrativeStatusBg(e.narrative_status),
-                      color: narrativeStatusFg(e.narrative_status),
-                      borderRadius: 2,
-                      textTransform: 'uppercase',
-                      letterSpacing: 0.3,
-                      fontWeight: 600,
-                    }}
-                  >
-                    {narrativeStatusLabel(e.narrative_status)}
-                  </span>
-                )}
-                {e.transition && (
-                  <span
-                    style={{
-                      fontSize: 9,
-                      padding: '1px 5px',
-                      borderRadius: 2,
-                      background: hexToRgba(accentColor, 0.16),
-                      color: hexToRgba(accentColor, 1),
-                      textTransform: 'uppercase',
-                      letterSpacing: 0.3,
-                      fontWeight: 600,
-                    }}
-                  >
-                    {transitionLabel(e.transition)}
-                  </span>
-                )}
-              </div>
-              {e.state_at_event && (
-                <div
-                  style={{
-                    fontSize: 11,
-                    color: dark ? '#9a9aa4' : '#666',
-                    marginTop: 3,
-                    marginLeft: 20,
-                    lineHeight: 1.4,
-                  }}
-                >
-                  {e.state_at_event}
-                </div>
-              )}
-            </div>
-          ))}
-        </Section>
-      )}
+      {/* Arc: KIND + STATUS + INVOLVES only (Ben 2026-08-24) — the evoking
+          trajectory ("music sheet") is the sheet's Timeline tile, the same way
+          an event's throughline lives on its sheet. */}
 
       {/* Event: per-arc EVOKES entries from this event's perspective. Surfaces
           the state_at_event content written on each EVOKES edge so the event
@@ -1614,7 +1477,9 @@ export function ExpandedBody({
 
       {/* Origin quote: dropped from the expanded EVENT card (read it on the
           sheet); other types keep their provenance line. */}
-      {type !== 'event' && entity.evidence_quote && (
+      {/* Origin quote: the reading-surface types (event, character, arc) keep
+          their card to summary + one signal line; the quote is on the sheet. */}
+      {!['event', 'character', 'arc'].includes(type) && entity.evidence_quote && (
         <div
           style={{
             marginTop: 8,

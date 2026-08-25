@@ -27,7 +27,9 @@ import { getEntityColor, hexToRgba } from '../../components/Freeform/entityColor
 import { PEER_BLUE } from '../../components/Freeform/tokens';
 import { FdxImportButton } from '../../components/widgets/FdxImportButton';
 import { isDesktop } from '../../lib/ipcClient';
-import { SupersessionRequiredError, acceptArcSuggestion, createArc, createArcFromEvents, createCard, createInformation, deleteArc, deleteCard, dismissArcSuggestion, enqueueCardExtraction, enqueueExtractionJob, getCardLayouts, isMockMode, listArcSuggestions, listCardQuestions, listProjectEntities, promoteStructuralToRelationship, resolveNarrativeStatusFlip, restoreArc, restoreCard, slugForCard, updateArc, updateCardDescription, updateCardName, updateCardNarrativeStatus, updateCardPosition, type ArcKind, type ArcSuggestion, type CardLayout, type EvokesTransition, type ListProjectEntitiesResponse, type NarrativeStatus, type PersistedQuestion, type ProjectEntity, type SupersessionRequiredResponse } from '../../lib/freeformApi';
+import { SupersessionRequiredError, acceptArcSuggestion, answerStagedQuestion, createArc, createArcFromEvents, createCard, createInformation, createSequence, deleteArc, deleteCard, dismissArcSuggestion, enqueueCardExtraction, enqueueExtractionJob, getCardLayouts, isMockMode, listArcSuggestions, listCardQuestions, listProjectEntities, listStagedQuestions, placeStagedCard, promoteStructuralToRelationship, resolveNarrativeStatusFlip, restoreArc, restoreCard, slugForCard, tagSequenceContains, updateArc, updateCardDescription, updateCardName, updateCardNarrativeStatus, updateCardPosition, type ArcKind, type ArcSuggestion, type CardLayout, type EvokesTransition, type ListProjectEntitiesResponse, type NarrativeStatus, type PersistedQuestion, type ProjectEntity, type StagedQuestion, type SupersessionRequiredResponse } from '../../lib/freeformApi';
+import { prefetchScriptData } from '../../lib/scriptPrefetch';
+import { playPageWipe } from '../../lib/pageWipe';
 import { useCascadeEvents } from '../../lib/useCascadeEvents';
 import { countFreshDeltaEdges, loadStoredGraph, mergeGraphDelta, onGraphUpdate, saveStoredGraph, type GraphDelta } from '../../lib/localGraphStore';
 import { acquireStorySession, overlayPending, queueStructOpGlobal, type StorySessionHandle } from '../../lib/storySession';
@@ -36,9 +38,10 @@ import axios from 'axios';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { UserContext } from '../../App';
 import { CardBox, EditableDescription, EditableName } from '../../components/Freeform/corkboard/cards';
-import { ARC_THREAD_PALETTE, ConnectorLayer, buildArcThread, computeAutoLayout, computePeerPosition, topoSortEventsByPrecedes, type ThreadRect } from '../../components/Freeform/corkboard/connectors';
+import { ARC_THREAD_PALETTE, ConnectorLayer, buildArcThread, computeAutoLayout, computePeerPosition, toldOrderEvents, type ThreadRect } from '../../components/Freeform/corkboard/connectors';
 import { ARC_BALL_H, ARC_BALL_W, ARC_DOT, BALL_DISPLACE_GAP, BALL_H, BALL_ID_ARCS, BALL_ID_BACKSTORY, BALL_ID_CHARACTERS, BALL_RAIL_PAD, BALL_ROW_GAP, BALL_STACK_GAP, BALL_TRANSITION_MS, BALL_W, CANVAS_PAD, CHAR_PILL_H, CHAR_PILL_W, CLUSTER_META, CLUSTER_ORDER, COL_GAP, COLLAPSED_H, COLLAPSED_W, DRAG_THRESHOLD_PX, EXPANDED_W, PEER_CARD_W, PEER_GAP, EVENT_CARD_W, REL_COLLAPSED_H, REL_COLLAPSED_W, ROW_GAP, collapsedSizeOf, type Pos } from '../../components/Freeform/corkboard/constants';
 import { CreateArcFromEventsModal, CreateCardModal, ResetProjectButton, SupersessionModal, type CreateModalKind } from '../../components/Freeform/corkboard/modals';
+import { BoardEmptyState } from '../../components/Freeform/corkboard/emptyState';
 import { INFO_ACCENT, RightPanel, TrashOverlay } from '../../components/Freeform/corkboard/panels';
 import { FloatingPeerCard, QuestionComposer, notifyResponseExtracted, setPeerWriteActive } from '../../components/Freeform/corkboard/peer';
 import { ArcSheet, CharacterSheet, EventSheet, LocationSheet, RelationshipSheet, SequenceSheet } from '../../components/Freeform/corkboard/sheets';
@@ -47,6 +50,7 @@ import type { WinPhase } from '../../components/Freeform/corkboard/shell';
 import { computeCardSignals } from '../../components/Freeform/corkboard/signals';
 import { MoonIcon, SunIcon, THEME_STORE_KEY, ThemeCtx, type ThemeMode } from '../../components/Freeform/corkboard/theme';
 import { BallChip, BraindumpDock, ToolbarButton } from '../../components/Freeform/corkboard/toolbar';
+import { PlacementGrid, type GridPick } from '../../components/Freeform/corkboard/placementGrid';
 import WowFlow from '../../components/Freeform/corkboard/WowFlow';
 import { markWowSeen } from '../../components/Freeform/corkboard/wowShared';
 
@@ -117,6 +121,7 @@ export default function FreeformCorkboard() {
   const [auth, setAuth] = useState<{ userId: string; token: string } | null>(null);
   const [data, setData] = useState<ListProjectEntitiesResponse | null>(null);
   const [layouts, setLayouts] = useState<Record<string, CardLayout>>({});
+  useEffect(() => { layoutsRef.current = layouts; }, [layouts]);
   const [positions, setPositions] = useState<Record<string, Pos>>({});
   // In-board zoom via the CSS `zoom` property on the canvas — scales the whole
   // board (cards, connectors, containers) while normal page scroll still pans, so
@@ -164,7 +169,20 @@ export default function FreeformCorkboard() {
   // keystroke (⌘↵) from the first extraction. Runs once per mount.
   const braindumpSeededRef = useRef(false);
   useEffect(() => {
-    const seed = (routerLocation.state as { braindump?: string } | null)?.braindump;
+    // Router state is the fast path; sessionStorage is the belt for the cases
+    // that lose it (a refresh on arrival, a re-entry through the guard). The
+    // key is consumed on read so a later visit to the same story opens clean.
+    const stashKey = storyId ? `ff-braindump-seed:${storyId}` : null;
+    let stashed: string | null = null;
+    if (stashKey) {
+      try {
+        stashed = sessionStorage.getItem(stashKey);
+        if (stashed) sessionStorage.removeItem(stashKey);
+      } catch {
+        /* private mode — router state is the only path */
+      }
+    }
+    const seed = (routerLocation.state as { braindump?: string } | null)?.braindump ?? stashed;
     if (seed && !braindumpSeededRef.current) {
       braindumpSeededRef.current = true;
       setBraindumpText(seed);
@@ -237,6 +255,27 @@ export default function FreeformCorkboard() {
   // Alive-card count at submit — the meter shows THIS braindump's delta, not the
   // whole board (so an incremental dump reads "Pulled 3 cards", not "Pulled 30").
   const cardCountAtSubmitRef = useRef(0);
+  // First-dump rule (Ben 2026-08-22): when a run starts on a board with NO
+  // saved card positions to respect, the whole board is laid out in story
+  // order once the run's edges land (the windowed import's full relayout),
+  // instead of cards freezing wherever they were first seen. Captured at
+  // submit, consumed at completion.
+  const noSavedLayoutAtSubmitRef = useRef(false);
+  const relayoutFirstDumpRef = useRef(false);
+  // "Auto-managed board": no live card has a saved position, so the layout
+  // is ours to keep tidy. Structural answers (keep / convert / merge / place)
+  // re-run the full story-order layout on their refetch, instead of leaving
+  // freed or moved cards wherever they were (Ben 2026-08-22: "clunky after
+  // choosing between scene and sequence").
+  // SPINE re-stack after a structural spine edit (place / convert / wrap) on a
+  // board the writer HAS arranged: events + sequences take their story-order
+  // slots again (and persist), the cast and everything else stay put. The
+  // writer's spine arrangement yields to the story order they just declared.
+  const relayoutSpineRef = useRef(false);
+  const boardIsAutoManaged = useCallback(() =>
+    !(dataRef.current?.entities ?? []).some((e) => !e.deleted_at && e.staged !== '1' && !!layoutsRef.current[e.id]),
+  []);
+  const layoutsRef = useRef<Record<string, CardLayout>>({});
   // One-shot: after a WINDOWED import resolves, re-apply the full auto-layout to
   // ALL cards once edges land. A re-import keeps already-seen entities at their
   // old (scattered) positions, so the new sequence containers would otherwise
@@ -320,6 +359,9 @@ export default function FreeformCorkboard() {
   // heuristically when the modal opens for kind='event' (tail of the
   // longest on_screen PRECEDES chain).
   const [createPrecededBy, setCreatePrecededBy] = useState<string>('');
+  // Beats grid "+ Add a scene" on an empty sequence cell: the new scene
+  // nests inside this sequence on create (tag-sequence-contains).
+  const [createIntoSequenceId, setCreateIntoSequenceId] = useState<string | null>(null);
 
   // Trash overlay (§9). Lists soft-deleted entities; click → restoreCard.
   const [trashOpen, setTrashOpen] = useState(false);
@@ -521,6 +563,37 @@ export default function FreeformCorkboard() {
   const refreshArcSuggestionsRef = useRef(refreshArcSuggestions);
   useEffect(() => { refreshArcSuggestionsRef.current = refreshArcSuggestions; }, [refreshArcSuggestions]);
 
+  // Placement Control v1b — the staging strip's pending questions. Persisted
+  // in Dynamo server-side, so the bootstrap fetch is the reload story: a
+  // question that arrived while the tab was closed still knocks.
+  const [stagedQuestions, setStagedQuestions] = useState<StagedQuestion[]>([]);
+  useEffect(() => {
+    if (!auth || !storyId) return;
+    let cancelled = false;
+    listStagedQuestions({ projectId: storyId }, auth.token)
+      .then((res) => {
+        if (cancelled) return;
+        setStagedQuestions(res.questions ?? []);
+      })
+      .catch((err) => {
+        console.warn('[corkboard] list-staged-questions failed:', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [auth, storyId]);
+  const refreshStagedQuestions = useCallback(async () => {
+    if (!auth || !storyId) return;
+    try {
+      const res = await listStagedQuestions({ projectId: storyId }, auth.token);
+      setStagedQuestions(res.questions ?? []);
+    } catch (err) {
+      console.warn('[corkboard] refresh-staged-questions failed:', err);
+    }
+  }, [auth, storyId]);
+  const refreshStagedQuestionsRef = useRef(refreshStagedQuestions);
+  useEffect(() => { refreshStagedQuestionsRef.current = refreshStagedQuestions; }, [refreshStagedQuestions]);
+
   // -------- Auth + data load --------
 
   // Refresh just the entities (positions/layouts unaffected). Called after
@@ -692,17 +765,152 @@ export default function FreeformCorkboard() {
   // §9 soft-delete split: alive entities render on the canvas; deleted ones
   // populate the Trash overlay. data.entities is the union (project-reads
   // returns both since the FE renders both surfaces from one read).
+  // Placement Control v1b adds the third lens: staged cards (staged === '1')
+  // are material the writer hasn't accepted into the story — they live in the
+  // strip, never on the canvas, never in the trash.
   const aliveEntities = useMemo(
-    () => data?.entities.filter((e) => !e.deleted_at) ?? [],
+    () => data?.entities.filter((e) => !e.deleted_at && e.staged !== '1') ?? [],
+    [data],
+  );
+  // The same lens applied to EDGES: a held (staged) card mints with its
+  // declared edges, and the server's alive filter only drops deleted
+  // endpoints, so without this the board drew connectors to a card that
+  // isn't rendered (arrows pointing at nothing, Ben 2026-08-22). Every
+  // from/to list is restricted to rendered endpoints; lists with other key
+  // shapes (knowledge) pass through.
+  const aliveEdges = useMemo(() => {
+    if (!data?.edges) return data?.edges;
+    const ok = new Set(aliveEntities.map((e) => e.id));
+    const out: typeof data.edges = { ...data.edges };
+    for (const [k, list] of Object.entries(data.edges)) {
+      if (!Array.isArray(list)) continue;
+      (out as any)[k] = list.filter((e: any) =>
+        !(e && typeof e === 'object' && 'from' in e && 'to' in e) || (ok.has(e.from) && ok.has(e.to)),
+      );
+    }
+    return out;
+  }, [data, aliveEntities]);
+  const stagedEntities = useMemo(
+    () => data?.entities.filter((e) => !e.deleted_at && e.staged === '1') ?? [],
     [data],
   );
   const deletedEntities = useMemo(
     () =>
-      (data?.entities.filter((e) => !!e.deleted_at) ?? []).sort(
+      (data?.entities.filter((e) => !!e.deleted_at && e.staged !== '1') ?? []).sort(
         (a, b) => String(b.deleted_at).localeCompare(String(a.deleted_at)),
       ),
     [data],
   );
+  // Cards with an answer IN FLIGHT (Ben 2026-08-24). Answering optimistically
+  // drops the question row, but the answers that resolve the card server-side
+  // (convert, merge) can't clear its staged flag locally — the card is being
+  // re-minted or folded, not un-staged. That left the card staged with no
+  // pending row, so the defensive union below synthesized a phantom "Where
+  // does it go?" row for a card already on its way to the trash. Holding the
+  // id here suppresses the row until the refetch lands; a failed answer clears
+  // it again, so nothing can strand invisible.
+  const [answeringIds, setAnsweringIds] = useState<Set<string>>(new Set());
+  const markAnswering = useCallback((id: string) => {
+    setAnsweringIds((cur) => { const next = new Set(cur); next.add(id); return next; });
+  }, []);
+  const clearAnswering = useCallback((id: string) => {
+    setAnsweringIds((cur) => { if (!cur.has(id)) return cur; const next = new Set(cur); next.delete(id); return next; });
+  }, []);
+
+  // The strip's rows: pending questions joined to their staged entities (for
+  // the summary) and their targets (for the compare view). Defensive union:
+  // a staged entity with no pending row (question retired out from under it)
+  // still surfaces, with a plain Keep action, so no material can strand
+  // invisible to every lens.
+  const stagedRows = useMemo(() => {
+    const entityById = new Map((data?.entities ?? []).map((e) => [e.id, e]));
+    const titleOf = (e: ProjectEntity | undefined) =>
+      e ? String(e.working_title ?? e.working_name ?? e.id) : '';
+    const summaryOf = (e: ProjectEntity | undefined) =>
+      e ? String(e.summary ?? e.description ?? '') : '';
+    const rows = stagedQuestions
+      .filter((q) => q.status === 'pending')
+      .map((q) => {
+        const ent = entityById.get(q.cardId);
+        const target = q.target_vid ? entityById.get(q.target_vid) : undefined;
+        return {
+          cardId: q.cardId,
+          kind: q.kind,
+          questionType: q.question_type as 'merge_suggestion' | 'compare' | 'unplaced' | 'altitude',
+          title: titleOf(ent) || q.candidate_title,
+          summary: summaryOf(ent),
+          reason: q.reason,
+          createdAt: q.created_at,
+          sourceBraindumpId: q.source_braindump_id,
+          evidenceQuote: String(ent?.evidence_quote ?? ''),
+          held: ent?.staged === '1',
+          target: target
+            ? { id: target.id, title: titleOf(target), summary: summaryOf(target) }
+            : q.target_vid
+              ? { id: q.target_vid, title: q.target_title, summary: '' }
+              : null,
+        };
+      });
+    const covered = new Set(rows.map((r) => r.cardId));
+    for (const e of stagedEntities) {
+      if (covered.has(e.id) || answeringIds.has(e.id)) continue;
+      rows.push({
+        cardId: e.id,
+        kind: e.type === 'sequence' ? 'section' : 'scene',
+        questionType: 'unplaced',
+        title: titleOf(e),
+        summary: summaryOf(e),
+        reason: '',
+        createdAt: String(e.created_at ?? ''),
+        sourceBraindumpId: String(e.src_braindump ?? ''),
+        evidenceQuote: String(e.evidence_quote ?? ''),
+        held: true,
+        target: null,
+      });
+    }
+    return rows;
+  }, [data, stagedQuestions, stagedEntities, answeringIds]);
+
+  // Strip spotlight (Ben, 2026-08-17): the panel shows only what's being ADDED;
+  // the existing card is shown by being the existing card. Expanding a strip
+  // row spotlights its target on the canvas: scroll it into view, dim the rest
+  // (the peer's vignette), and dock a ghost of the incoming card beside it so
+  // Merge reads spatially as "this folds into that". Collapse lifts it.
+  const [stagedSpotlight, setStagedSpotlight] = useState<{ cardId: string; targetId: string } | null>(null);
+  // Stable identity: the panel keys effects on this, and an inline arrow would
+  // re-fire its cleanup on every corkboard render (spotlight flicker, scroll
+  // cancelled before it lands).
+  const onStagedSpotlight = useCallback((cardId: string | null, targetId: string | null) => {
+    setStagedSpotlight((cur) => {
+      if (!cardId || !targetId) return cur === null ? cur : null;
+      if (cur && cur.cardId === cardId && cur.targetId === targetId) return cur;
+      return { cardId, targetId };
+    });
+    // The wall takes the canvas; an open braindump field would hang over it.
+    if (cardId && targetId) setBraindumpOpen(false);
+  }, []);
+
+  // Placement Control v1c, the spine drop. Dragging an unplaced strip row
+  // hides the panel (still mounted: the drag source must survive to deliver
+  // dragend) and mounts the placement grid as the drop surface. The mode
+  // lives only as long as the drag; dragend always clears it.
+  const [placingStaged, setPlacingStaged] = useState<{ cardId: string; fresh?: boolean } | null>(null);
+  // New → Sequence (Ben 2026-08-22): the board morphs into the wall as a
+  // PICKER. Container-less scenes toggle into the new sequence; "create
+  // empty" is always allowed. Mounted through the same grid as placement.
+  const [wrapSeq, setWrapSeq] = useState<{ selected: Set<string>; name: string; busy: boolean } | null>(null);
+  const toggleWrapSelect = useCallback((id: string) => {
+    setWrapSeq((w) => {
+      if (!w) return w;
+      const next = new Set(w.selected);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return { ...w, selected: next };
+    });
+  }, []);
+  const placingStagedRow = placingStaged
+    ? stagedRows.find((r) => r.cardId === placingStaged.cardId) ?? null
+    : null;
+
   // Cards stream in during extraction but their edges/metadata land on the final
   // refetch — pulse the cards while that's still happening so the board reads as
   // "still wiring up" rather than finished-but-bare.
@@ -729,7 +937,7 @@ export default function FreeformCorkboard() {
   // The staged braindump meter (draggable) covers ALL braindumps; the top toast
   // is now just for peer-answer cascades still being woven in.
   const bgProcessing = pendingCascades > 0;
-  const bgProcessingLabel = 'Working your answer into the outline…';
+  const bgProcessingLabel = 'Working your answer into your beats…';
   // Keep the peer's write gate in sync: while a braindump's extraction + graph
   // write is in flight, the peer holds its slice build (asking now would read a
   // half-written graph). Cleared the moment the braindump settles.
@@ -812,6 +1020,8 @@ export default function FreeformCorkboard() {
     // PRECEDES re-stack, clear them, release the inflight gate, flip to done.
     beltStableRef.current = null;
     inflightBraindumpRef.current = null;
+    if (noSavedLayoutAtSubmitRef.current) relayoutFirstDumpRef.current = true; // first-dump rule, lost-WS path
+    noSavedLayoutAtSubmitRef.current = false;
     if (streamedIdsRef.current.size) {
       relayoutAfterStreamRef.current = [...streamedIdsRef.current];
     }
@@ -952,11 +1162,13 @@ export default function FreeformCorkboard() {
   const autoPositions = useMemo(
     () => computeAutoLayout(
       aliveEntities,
-      data?.edges?.precedes ?? [],
+      aliveEdges?.precedes ?? [],
       typeof window !== 'undefined' ? window.innerWidth : 1400,
-      data?.edges?.contains ?? [],
+      aliveEdges?.contains ?? [],
+      aliveEdges?.sequence_precedes ?? [],
+      aliveEdges?.cross_precedes ?? [],
     ),
-    [aliveEntities, data?.edges?.precedes, data?.edges?.contains],
+    [aliveEntities, aliveEdges],
   );
 
   // Story-order scene numbers ("SC 07") for the notecard-style event cards:
@@ -967,9 +1179,15 @@ export default function FreeformCorkboard() {
   // the script view's navigator, so the two surfaces always agree. A
   // backstory card falls back to its type label; its status chip says the rest.
   const sceneNoById = useMemo(() => {
-    const sorted = topoSortEventsByPrecedes(
-      aliveEntities.filter((e) => e.type === 'event' && e.narrative_status !== 'backstory'),
+    // Same told order the spine lays out (orderSpineUnits): numbering off the
+    // PRECEDES list alone disagreed with the board whenever a scene's ordering
+    // lived in cross links instead (Ben 2026-08-24).
+    const sorted = toldOrderEvents(
+      aliveEntities.filter((e) => !(e.type === 'event' && e.narrative_status === 'backstory')),
       data?.edges?.precedes ?? [],
+      data?.edges?.contains ?? [],
+      data?.edges?.sequence_precedes ?? [],
+      data?.edges?.cross_precedes ?? [],
     );
     const m = new Map<string, number>();
     sorted.forEach((e, i) => m.set(e.id, i + 1));
@@ -983,9 +1201,11 @@ export default function FreeformCorkboard() {
     if (!auth || !storyId || !data) return;
     const fresh = computeAutoLayout(
       aliveEntities,
-      data.edges?.precedes ?? [],
+      (aliveEdges ?? data.edges)?.precedes ?? [],
       typeof window !== 'undefined' ? window.innerWidth : 1400,
-      data.edges?.contains ?? [],
+      (aliveEdges ?? data.edges)?.contains ?? [],
+      (aliveEdges ?? data.edges)?.sequence_precedes ?? [],
+      (aliveEdges ?? data.edges)?.cross_precedes ?? [],
     );
     const ids = Object.keys(fresh);
     setPositions((prev) => {
@@ -1000,7 +1220,7 @@ export default function FreeformCorkboard() {
         auth.token,
       ).catch((e) => console.warn('[corkboard] arrange persist failed:', e));
     }
-  }, [auth, storyId, data, aliveEntities]);
+  }, [auth, storyId, data, aliveEntities, aliveEdges]);
 
   // Derived per-card signals (counts/labels pulled from edges). Computed once
   // per data change so cards don't each re-walk the edge list on render.
@@ -1148,7 +1368,10 @@ export default function FreeformCorkboard() {
     };
     type SeqBox = { seqId: string; name: string; collapsed: boolean; count: number; x: number; y: number; w: number; h: number; color: string };
     type Effects = {
-      overrides: Map<string, { pos: Pos }>;
+      /** `reflow`: the override is the stored position shifted by a collapse
+       *  reflow (Master). Such a card drags as a STORED card (its base moves,
+       *  the shift re-applies), not as a transient web card. */
+      overrides: Map<string, { pos: Pos; reflow?: boolean }>;
       displacements: Map<string, { dx: number; dy: number }>;
       hiddenIds: Set<string>;
       clusters: Cluster[];
@@ -1163,6 +1386,8 @@ export default function FreeformCorkboard() {
       gridSeqRegions: Array<{
         seqId: string; runKey: string; name: string; color: string; labeled: boolean;
         count: number;
+        /** A member-less sequence drawn as one dashed cell continuing the wall. */
+        empty?: boolean;
         spans: Array<{ x0: number; y0: number; x1: number; y1: number }>;
       }>;
       // Throughline GRID only — cosmetic reading-order chevrons, one centered
@@ -1397,7 +1622,7 @@ export default function FreeformCorkboard() {
         if (!hideSequences) {
           const idxOf = new Map(spine.map((id, i) => [id, i]));
           const membersBySeq = new Map<string, number[]>();
-          for (const c of data?.edges?.contains ?? []) {
+          for (const c of aliveEdges?.contains ?? []) {
             const idx = idxOf.get(c.to);
             if (idx == null) continue;
             const arr = membersBySeq.get(c.from);
@@ -1439,6 +1664,28 @@ export default function FreeformCorkboard() {
               });
             });
           }
+          // EMPTY sequences (no member scenes) still exist in the story; the
+          // wall continues with one dashed cell each after the last scene
+          // (Ben 2026-08-22), so a section the writer hasn't broken down yet
+          // is visible here and not only on the master board.
+          const emptySeqs = aliveEntities.filter(
+            (e) => e.type === 'sequence' && !membersBySeq.has(e.id),
+          );
+          emptySeqs.forEach((seqEnt, j) => {
+            const i = spine.length + j;
+            const r = Math.floor(i / cols);
+            const c = i % cols;
+            const color = (((seqEnt.color ?? '') as string).trim()) || seqColor;
+            out.gridSeqRegions.push({
+              seqId: seqEnt.id, runKey: `${seqEnt.id}:empty`,
+              name: seqEnt.working_title ?? seqEnt.working_name ?? '', color,
+              spans: [{
+                x0: cellX(c) - PAD_OUT, x1: cellX(c) + EVENT_CARD_W + PAD_OUT,
+                y0: rowTopY(r) - PAD_OUT, y1: rowTopY(r) + COLLAPSED_H + PAD_OUT,
+              }],
+              labeled: true, count: 0, empty: true,
+            });
+          });
         }
         return out;
       }
@@ -1452,9 +1699,28 @@ export default function FreeformCorkboard() {
       // fixed regardless of where the ball is moved.
       const ballPos = webDrag[BALL_ID_BACKSTORY] ?? { x: colX, y: 60 };
       const spineTop = backstory.length > 0 ? 60 + BALL_H + 56 : 80;
-      spine.forEach((id, i) => {
+      // Member-less sequences take a slot in the column too (Ben 2026-08-23:
+      // they used to keep their Master coordinates and sit over the column).
+      // Their seat comes from the auto layout's story order, which already
+      // ranks an empty sequence from its cross links / the sequence chain:
+      // each one slots before the first scene the layout puts below it.
+      const emptySeqIds = hideSequences ? [] : aliveEntities
+        .filter((e) => e.type === 'sequence' && !(aliveEdges?.contains ?? []).some((c) => c.from === e.id && entById.has(c.to)))
+        .map((e) => e.id)
+        .sort((a, b) => (autoPositions[a]?.y ?? Infinity) - (autoPositions[b]?.y ?? Infinity));
+            const column: string[] = [];
+      let si = 0;
+      for (const id of spine) {
+        const y = autoPositions[id]?.y ?? Infinity;
+        while (si < emptySeqIds.length && (autoPositions[emptySeqIds[si]]?.y ?? Infinity) < y) column.push(emptySeqIds[si++]);
+        column.push(id);
+      }
+      while (si < emptySeqIds.length) column.push(emptySeqIds[si++]);
+      const seqColX = colX + Math.max(0, (EVENT_CARD_W - COLLAPSED_W) / 2);
+      column.forEach((id, i) => {
+        const isSeq = entById.get(id)?.type === 'sequence';
         out.overrides.set(id, {
-          pos: webDrag[id] ?? { x: colX, y: spineTop + i * (COLLAPSED_H + 110) },
+          pos: webDrag[id] ?? { x: isSeq ? seqColX : colX, y: spineTop + i * (COLLAPSED_H + 110) },
         });
       });
       // Shown sequences WRAP their member scenes in a container box (like master),
@@ -1464,7 +1730,7 @@ export default function FreeformCorkboard() {
         const seqColor = getEntityColor('sequence');
         const SEQ_HEADER_H = 24, PAD = 14, SEQ_BOX_MIN_W = 300;
         const containsBySeq = new Map<string, string[]>();
-        for (const c of data?.edges?.contains ?? []) {
+        for (const c of aliveEdges?.contains ?? []) {
           const arr = containsBySeq.get(c.from);
           if (arr) arr.push(c.to);
           else containsBySeq.set(c.from, [c.to]);
@@ -1687,7 +1953,7 @@ export default function FreeformCorkboard() {
     // section below no-ops (no boxes, members not nested/hidden). The sequence
     // entities themselves are hidden via the top loop, leaving the event scenes.
     if (!hideSequences) {
-      for (const c of data?.edges?.contains ?? []) {
+      for (const c of aliveEdges?.contains ?? []) {
         const arr = containsBySeq.get(c.from);
         if (arr) arr.push(c.to);
         else containsBySeq.set(c.from, [c.to]);
@@ -1816,7 +2082,7 @@ export default function FreeformCorkboard() {
         if (!base) continue;
         const esz = collapsedSizeOf(e.type);
         const shift = upShift(base.x, esz.w, base.y);
-        if (shift > 0) out.overrides.set(e.id, { pos: { x: base.x, y: base.y - shift } });
+        if (shift > 0) out.overrides.set(e.id, { pos: { x: base.x, y: base.y - shift }, reflow: true });
       }
       // Expanded containers captured their anchor + obstacle rect from PRE-reflow
       // positions; refresh both from the reflowed base so their boxes (pass 3)
@@ -1976,7 +2242,7 @@ export default function FreeformCorkboard() {
     }
 
     return out;
-  }, [aliveEntities, positions, ballExpanded, arcThreads, viewportCanvasTop, webDrag, viewMode, throughlineLayout, viewportWH.w, zoom, eventOrder, charCentrality, data?.edges?.contains, data?.edges?.evokes, sequenceCollapsed, expandedCardId, expandedCardH, hideSequences, draggingId]);
+  }, [aliveEntities, positions, ballExpanded, arcThreads, viewportCanvasTop, webDrag, viewMode, throughlineLayout, viewportWH.w, zoom, eventOrder, charCentrality, aliveEdges, data?.edges?.evokes, sequenceCollapsed, expandedCardId, expandedCardH, hideSequences, draggingId, autoPositions]);
 
   // Prune transient web-drag positions once a card is no longer dealt out (its
   // ball re-bunched or scrolled back to free cards) — so re-expanding resets it
@@ -2267,9 +2533,11 @@ export default function FreeformCorkboard() {
     relayoutAfterStreamRef.current = null;
     const fresh = computeAutoLayout(
       aliveEntities,
-      data.edges?.precedes ?? [],
+      (aliveEdges ?? data.edges)?.precedes ?? [],
       typeof window !== 'undefined' ? window.innerWidth : 1400,
-      data.edges?.contains ?? [],
+      (aliveEdges ?? data.edges)?.contains ?? [],
+      (aliveEdges ?? data.edges)?.sequence_precedes ?? [],
+      (aliveEdges ?? data.edges)?.cross_precedes ?? [],
     );
     setPositions((prev) => {
       const next = { ...prev };
@@ -2278,25 +2546,60 @@ export default function FreeformCorkboard() {
     });
   }, [data, aliveEntities]);
 
-  // After a WINDOWED import resolves, re-apply the FULL auto-layout to every card
-  // once the structural edges have landed — so sequences stack in order and their
-  // members sit in a tight single column, regardless of any stale positions a
-  // re-import left behind. One-shot (flag set on resolve; cleared here).
+  // After a WINDOWED import resolves, OR a run that started on a board with no
+  // saved card positions (the first-dump rule), re-apply the FULL auto-layout to
+  // every card once the structural edges have landed — so sequences stack in
+  // order and their members sit in a tight single column, regardless of where
+  // streaming first showed them. One-shot (flag set on resolve; cleared here).
   useEffect(() => {
-    if (!relayoutWindowedRef.current || !data) return;
-    const ents = data.entities ?? [];
-    const hasSeqs = ents.some((e) => e.type === 'sequence');
-    const eventCount = ents.filter((e) => e.type === 'event').length;
-    // Wait for the edges the layout depends on: sequences need CONTAINS, a multi-
-    // event board needs PRECEDES. Otherwise the refetch hasn't fully landed yet.
-    if (hasSeqs && (data.edges?.contains?.length ?? 0) === 0) return;
-    if (eventCount >= 2 && (data.edges?.precedes?.length ?? 0) === 0) return;
+    if (!data || !auth || !storyId) return;
+    if (relayoutSpineRef.current && !relayoutWindowedRef.current && !relayoutFirstDumpRef.current) {
+      relayoutSpineRef.current = false;
+      const fresh = computeAutoLayout(
+        aliveEntities,
+        (aliveEdges ?? data.edges)?.precedes ?? [],
+        typeof window !== 'undefined' ? window.innerWidth : 1400,
+        (aliveEdges ?? data.edges)?.contains ?? [],
+        (aliveEdges ?? data.edges)?.sequence_precedes ?? [],
+        (aliveEdges ?? data.edges)?.cross_precedes ?? [],
+      );
+      const spineIds = aliveEntities.filter((e) => e.type === 'event' || e.type === 'sequence').map((e) => e.id).filter((id) => fresh[id]);
+      setPositions((prev) => {
+        const next = { ...prev };
+        for (const id of spineIds) next[id] = fresh[id];
+        return next;
+      });
+      setWebDrag({});
+      for (const id of spineIds) {
+        if (!layoutsRef.current[id]) continue; // never persist for a card that has no saved slot
+        updateCardPosition({ userId: auth.userId, projectId: storyId, cardId: id, x: fresh[id].x, y: fresh[id].y }, auth.token)
+          .catch((e) => console.warn('[corkboard] spine re-stack persist failed:', e));
+      }
+      return;
+    }
+    const firstDump = relayoutFirstDumpRef.current;
+    if (!relayoutWindowedRef.current && !firstDump) return;
+    if (!firstDump) {
+      // Windowed: polling can observe a half-landed graph. Wait for the edges
+      // the layout depends on: sequences need CONTAINS, a multi-event board
+      // needs PRECEDES. (The first-dump trigger fires off the complete
+      // post-run refetch, and a premise-only dump legitimately has no
+      // CONTAINS at all, so it skips these guards.)
+      const ents = data.entities ?? [];
+      const hasSeqs = ents.some((e) => e.type === 'sequence');
+      const eventCount = ents.filter((e) => e.type === 'event').length;
+      if (hasSeqs && (data.edges?.contains?.length ?? 0) === 0) return;
+      if (eventCount >= 2 && (data.edges?.precedes?.length ?? 0) === 0) return;
+    }
     relayoutWindowedRef.current = false;
+    relayoutFirstDumpRef.current = false;
     const fresh = computeAutoLayout(
       aliveEntities,
-      data.edges?.precedes ?? [],
+      (aliveEdges ?? data.edges)?.precedes ?? [],
       typeof window !== 'undefined' ? window.innerWidth : 1400,
-      data.edges?.contains ?? [],
+      (aliveEdges ?? data.edges)?.contains ?? [],
+      (aliveEdges ?? data.edges)?.sequence_precedes ?? [],
+      (aliveEdges ?? data.edges)?.cross_precedes ?? [],
     );
     setPositions((prev) => {
       const next = { ...prev };
@@ -2304,7 +2607,7 @@ export default function FreeformCorkboard() {
       return next;
     });
     setWebDrag({});
-  }, [data, aliveEntities]);
+  }, [data, aliveEntities, aliveEdges, auth, storyId]);
 
   // arcId → { ball position on the thread, color }. While scrolling, the ball
   // rides to the sample nearest the viewport center (no avoidance — it's a small
@@ -2483,11 +2786,14 @@ export default function FreeformCorkboard() {
   // Transient success toast for link actions that don't leave a connector on the
   // board (adding a character to a cast, etc.). Auto-clears.
   const [linkNotice, setLinkNotice] = useState<string | null>(null);
+  // Optional action on the toast (e.g. Undo after a Beats reorder). Cleared
+  // with the notice; a toast carrying an action lingers a little longer.
+  const [linkNoticeAction, setLinkNoticeAction] = useState<{ label: string; run: () => void } | null>(null);
   useEffect(() => {
-    if (!linkNotice) return;
-    const t = window.setTimeout(() => setLinkNotice(null), 2600);
+    if (!linkNotice) { setLinkNoticeAction(null); return; }
+    const t = window.setTimeout(() => { setLinkNotice(null); setLinkNoticeAction(null); }, linkNoticeAction ? 6000 : 2600);
     return () => window.clearTimeout(t);
-  }, [linkNotice]);
+  }, [linkNotice, linkNoticeAction]);
 
   // D'-8 — multi-select state for "create arc from events" + click-arc-to-
   // highlight-events. shift- or meta-click an Event card to add/remove
@@ -2532,10 +2838,16 @@ export default function FreeformCorkboard() {
       // from THERE, not its raw stored base — otherwise exempting it from the
       // nudge on pickup snaps it back to the overlapping drop point. Bake the
       // nudged spot into its stored position too, so it stops overlapping.
-      const disp = !override && !viewBallPos ? ballEffects.displacements.get(cardId) : undefined;
+      // A collapse-REFLOW override is not a web position: the card drags by
+      // its stored base (the reflow shift re-applies each frame, so the card
+      // tracks the mouse) and persists like any stored card. Before this,
+      // cards under a collapsed sequence "froze": the drag went to webDrag,
+      // which the Master layout never read.
+      const reflowed = !!override?.reflow && !viewBallPos;
+      const disp = (!override || reflowed) && !viewBallPos ? ballEffects.displacements.get(cardId) : undefined;
       const stored = positions[cardId];
       const dispStart = disp && stored ? { x: stored.x + disp.dx, y: stored.y + disp.dy } : stored;
-      const start = override ? override.pos : viewBallPos ?? dispStart;
+      const start = override && !reflowed ? override.pos : viewBallPos ?? dispStart;
       if (!start) return;
       if (disp && dispStart) setPositions((p) => ({ ...p, [cardId]: dispStart }));
       // Focal card in focus mode is pinned by the centering transform —
@@ -2550,11 +2862,235 @@ export default function FreeformCorkboard() {
         moved: false,
         shiftKey: e.shiftKey,
         metaKey: e.metaKey || e.ctrlKey,
-        isWeb: !!override || !!viewBallPos,
+        isWeb: (!!override && !reflowed) || !!viewBallPos,
       };
       setDraggingId(cardId);
     },
     [positions, peerForCardId, ballEffects],
+  );
+
+  // FIL-590 — drag-to-reorder in the Beats view. Cards there are laid out
+  // FROM the story order (a topo sort of PRECEDES), so a drag used to write a
+  // transient webDrag offset and nothing else: the card sat wherever it was
+  // dropped and snapped back on the next view switch. Marko read that,
+  // correctly, as broken. Now a drop re-reads the drop point against the
+  // laid-out cells, works out which slot it landed in, and rewrites the chain
+  // — so the card snaps into place and the new order persists.
+  //
+  // The insertion index is a COUNT, not a hit test: how many other beats read
+  // before the drop point (earlier row, or same row and further left). That
+  // holds for the wrapped grid and the single column alike, and it degrades
+  // sanely when a drop lands in a gap or past the end of the wall.
+  // Undo for Beats-view reorders (Ben 2026-08-22: an accidental drag re-chains
+  // the story). A precedes_move's inverse is the same op with the roles
+  // swapped, so the stack holds the inverse ready to apply: Cmd+Z, or the
+  // Undo button on the "Moved to scene N" toast.
+  // Board-wide undo stack (Ben 2026-08-23): every quick structural act a
+  // drag or orb can commit by accident (membership, precedes links, splices,
+  // Beats reorders, trash, New -> Sequence) pushes its INVERSE here. Cmd+Z in
+  // any view, or the toast's Undo, pops and runs it. Inverses are the same
+  // optimistic-apply + queued-op primitives the forward ops use, so a reload
+  // replays them in order like any other edit. 20 deep.
+  // Each entry carries its inverse (run) and, when the forward act can be
+  // replayed, the forward act itself (redo). Undo moves the entry to the redo
+  // stack; a fresh act clears redo. `historyTick` just re-renders the buttons.
+  type UndoEntry = { label: string; run: () => void; redoLabel?: string; redo?: () => void };
+  const undoRef = useRef<UndoEntry[]>([]);
+  const redoRef = useRef<UndoEntry[]>([]);
+  const [historyTick, setHistoryTick] = useState(0);
+  const pushUndo = useCallback((label: string, run: () => void, redoLabel?: string, redo?: () => void) => {
+    undoRef.current.push({ label, run, redoLabel, redo });
+    if (undoRef.current.length > 20) undoRef.current.shift();
+    redoRef.current = [];
+    setHistoryTick((t) => t + 1);
+  }, []);
+  const applyPrecedesMove = useCallback(
+    (cardId: string, oldPrev: string | null, oldNext: string | null, newPrev: string | null, newNext: string | null) => {
+      if (!storyId) return;
+      setData((prev) => {
+        if (!prev) return prev;
+        const survives = (p: { from: string; to: string }) =>
+          !(oldPrev != null && p.from === oldPrev && p.to === cardId) &&
+          !(oldNext != null && p.from === cardId && p.to === oldNext) &&
+          !(newPrev != null && newNext != null && p.from === newPrev && p.to === newNext);
+        const kept = prev.edges.precedes.filter(survives);
+        const seen = new Set(kept.map((p) => `${p.from}|${p.to}`));
+        const added: Array<{ from: string; to: string }> = [];
+        if (oldPrev && oldNext) added.push({ from: oldPrev, to: oldNext });
+        if (newPrev) added.push({ from: newPrev, to: cardId });
+        if (newNext) added.push({ from: cardId, to: newNext });
+        return {
+          ...prev,
+          edges: { ...prev.edges, precedes: [...kept, ...added.filter((a) => !seen.has(`${a.from}|${a.to}`))] },
+        };
+      });
+      queueStructOpGlobal(storyId, { kind: 'precedes_move', id: cardId, oldPrev, oldNext, newPrev, newNext });
+    },
+    [storyId],
+  );
+  const undoLast = useCallback(() => {
+    const inv = undoRef.current.pop();
+    if (!inv) return false;
+    inv.run();
+    if (inv.redo) redoRef.current.push(inv);
+    setHistoryTick((t) => t + 1);
+    setLinkNoticeAction(null);
+    setLinkNotice(inv.label);
+    return true;
+  }, []);
+  const redoLast = useCallback(() => {
+    const e = redoRef.current.pop();
+    if (!e || !e.redo) return false;
+    e.redo();
+    undoRef.current.push(e);
+    setHistoryTick((t) => t + 1);
+    setLinkNoticeAction(null);
+    setLinkNotice(e.redoLabel ?? 'Redone');
+    return true;
+  }, []);
+  // Offer Undo on the toast for the act just committed. `redo` replays it.
+  const noticeWithUndo = useCallback((msg: string, undoLabel: string, run: () => void, redo?: () => void) => {
+    pushUndo(undoLabel, run, msg, redo);
+    setLinkNotice(msg);
+    setLinkNoticeAction({ label: 'Undo', run: undoLast });
+  }, [pushUndo, undoLast]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'z') return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if (e.shiftKey ? redoLast() : undoLast()) e.preventDefault();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [undoLast, redoLast]);
+  // Delete/restore are defined further down; the undo closures reach them
+  // through refs so an entry pushed before a re-render still calls the
+  // current handler.
+  const deleteCardRef = useRef<(cardId: string) => Promise<void>>(async () => {});
+  const restoreCardRef = useRef<(cardId: string) => Promise<void>>(async () => {});
+  /** Inverse of a membership drag: back to the previous sequence, or out of
+   *  any sequence if it had none, and back to where the card sat. */
+  const undoContainsMove = useCallback((eventId: string, newSeqId: string, prevSeqId: string | null, prevPos: Pos | null) => {
+    if (!storyId) return;
+    if (prevSeqId) {
+      setData((prev) => (prev ? { ...prev, edges: { ...prev.edges, contains: [...prev.edges.contains.filter((c) => c.to !== eventId), { from: prevSeqId, to: eventId }] } } : prev));
+      queueStructOpGlobal(storyId, { kind: 'contains_move', sequenceId: prevSeqId, eventId });
+    } else {
+      setData((prev) => (prev ? { ...prev, edges: { ...prev.edges, contains: prev.edges.contains.filter((c) => !(c.from === newSeqId && c.to === eventId)) } } : prev));
+      queueStructOpGlobal(storyId, { kind: 'contains_untag', sequenceId: newSeqId, eventId });
+    }
+    if (prevPos && auth) {
+      setPositions((p) => ({ ...p, [eventId]: prevPos }));
+      updateCardPosition({ userId: auth.userId, projectId: storyId, cardId: eventId, x: prevPos.x, y: prevPos.y }, auth.token).catch(() => {});
+    }
+  }, [storyId, auth]);
+  /** Forward membership move (redo): nest the scene in `seqId`, optionally
+   *  at a position. Mirrors the drag sites' optimistic apply. */
+  const doContainsMove = useCallback((eventId: string, seqId: string, pos: Pos | null) => {
+    if (!storyId) return;
+    setData((prev) => (prev ? { ...prev, edges: { ...prev.edges, contains: [...prev.edges.contains.filter((c) => c.to !== eventId), { from: seqId, to: eventId }] } } : prev));
+    queueStructOpGlobal(storyId, { kind: 'contains_move', sequenceId: seqId, eventId });
+    if (pos && auth) {
+      setPositions((p) => ({ ...p, [eventId]: pos }));
+      updateCardPosition({ userId: auth.userId, projectId: storyId, cardId: eventId, x: pos.x, y: pos.y }, auth.token).catch(() => {});
+    }
+  }, [storyId, auth]);
+  /** Forward PRECEDES tag (redo), with the local reverse-flip mirror. */
+  const doPrecedesTag = useCallback((from: string, to: string) => {
+    if (!storyId) return;
+    setData((prev) => {
+      if (!prev) return prev;
+      const a = prev.entities.find((x) => x.id === from)?.type, b = prev.entities.find((x) => x.id === to)?.type;
+      const key = a === 'sequence' && b === 'sequence' ? 'sequence_precedes' : (a === 'sequence' || b === 'sequence') ? 'cross_precedes' : 'precedes';
+      const cur = (((prev.edges as any)[key] ?? []) as Array<{ from: string; to: string }>).filter((p) => !(p.from === to && p.to === from));
+      return { ...prev, edges: { ...prev.edges, [key]: [...cur, { from, to }] } };
+    });
+    queueStructOpGlobal(storyId, { kind: 'precedes_tag', from, to });
+  }, [storyId]);
+  /** Inverse of an orb-drawn PRECEDES: drop it, and put back the reverse
+   *  edge the server's auto-flip replaced, if there was one. */
+  const undoPrecedesTag = useCallback((from: string, to: string, hadReverse: boolean) => {
+    if (!storyId) return;
+    setData((prev) => {
+      if (!prev) return prev;
+      const next: any = { ...prev.edges };
+      for (const key of ['precedes', 'sequence_precedes', 'cross_precedes']) {
+        const cur = (next[key] ?? []) as Array<{ from: string; to: string }>;
+        next[key] = cur.filter((p) => !(p.from === from && p.to === to));
+      }
+      if (hadReverse) {
+        const a = prev.entities.find((x) => x.id === from)?.type, b = prev.entities.find((x) => x.id === to)?.type;
+        const key = a === 'sequence' && b === 'sequence' ? 'sequence_precedes' : (a === 'sequence' || b === 'sequence') ? 'cross_precedes' : 'precedes';
+        next[key] = [...(next[key] ?? []), { from: to, to: from }];
+      }
+      return { ...prev, edges: next };
+    });
+    queueStructOpGlobal(storyId, { kind: 'precedes_untag', from, to });
+    if (hadReverse) queueStructOpGlobal(storyId, { kind: 'precedes_tag', from: to, to: from });
+  }, [storyId]);
+
+  const reorderBeatOnDrop = useCallback(
+    (cardId: string, dropPos: Pos | null) => {
+      if (!storyId || !dropPos || viewMode !== 'throughline') return;
+      const entById = new Map((data?.entities ?? []).map((e) => [e.id, e]));
+      if (entById.get(cardId)?.type !== 'event') return;
+      // Same spine the layout used: backstory sits outside audience-time and
+      // isn't part of the reading order, so it never takes part in a reorder.
+      const spine = eventOrder.filter((id) => entById.get(id)?.narrative_status !== 'backstory');
+      const from = spine.indexOf(cardId);
+      if (from < 0) return;
+
+      const dropCx = dropPos.x + EVENT_CARD_W / 2;
+      const dropCy = dropPos.y + COLLAPSED_H / 2;
+      // Half a card of slack decides "same row" — wide enough that a drop
+      // nudged off the row's baseline still counts, tight enough that the row
+      // above never does.
+      const rowTol = COLLAPSED_H * 0.6;
+      const rest = spine.filter((id) => id !== cardId);
+      let to = 0;
+      for (const id of rest) {
+        const pos = ballEffects.overrides.get(id)?.pos;
+        if (!pos) continue;
+        const cx = pos.x + EVENT_CARD_W / 2;
+        const cy = pos.y + COLLAPSED_H / 2;
+        const readsBefore =
+          cy < dropCy - rowTol || (Math.abs(cy - dropCy) <= rowTol && cx < dropCx);
+        if (readsBefore) to++;
+      }
+      // Dropping a card back where it started is not an edit — clear the
+      // transient offset so it snaps home and leave the chain alone.
+      if (to === from) {
+        setWebDrag((w) => {
+          if (!(cardId in w)) return w;
+          const next = { ...w };
+          delete next[cardId];
+          return next;
+        });
+        return;
+      }
+
+      const oldPrev = spine[from - 1] ?? null;
+      const oldNext = spine[from + 1] ?? null;
+      const newPrev = rest[to - 1] ?? null;
+      const newNext = rest[to] ?? null;
+
+      // Optimistic edge surgery + the queued op (shared with undo).
+      applyPrecedesMove(cardId, oldPrev, oldNext, newPrev, newNext);
+      // Drop the transient offset in the same beat as the reorder: the card
+      // takes its position from the NEW layout, not from where the hand let go.
+      setWebDrag((w) => {
+        if (!(cardId in w)) return w;
+        const next = { ...w };
+        delete next[cardId];
+        return next;
+      });
+      // The inverse is the same move with the roles swapped.
+      noticeWithUndo(`Moved to scene ${to + 1}`, 'Move undone',
+        () => applyPrecedesMove(cardId, newPrev, newNext, oldPrev, oldNext),
+        () => applyPrecedesMove(cardId, oldPrev, oldNext, newPrev, newNext));
+    },
+    [storyId, viewMode, data, eventOrder, ballEffects, applyPrecedesMove, noticeWithUndo],
   );
 
   useEffect(() => {
@@ -2642,7 +3178,10 @@ export default function FreeformCorkboard() {
       }
       // Drag → persist final position. Dealt-out (web) drags are transient —
       // they live in webDrag and reset when the card re-bunches, so skip persist.
-      if (d.isWeb) return;
+      if (d.isWeb) {
+        reorderBeatOnDrop(d.cardId, d.lastPos ?? null);
+        return;
+      }
       if (!auth || !storyId) return;
       setPositions((p) => {
         const final = p[d.cardId];
@@ -2677,7 +3216,14 @@ export default function FreeformCorkboard() {
           // persists + pushes in the background (no revert path).
           setData((prev) => (prev ? { ...prev, edges: { ...prev.edges, contains: [...prev.edges.contains.filter((c) => c.to !== eid), { from: dropSeqId!, to: eid }] } } : prev));
           queueStructOpGlobal(storyId, { kind: 'contains_move', sequenceId: dropSeqId, eventId: eid });
-          setLinkNotice(curSeqId ? 'Scene moved to sequence' : 'Scene added to sequence');
+          const startPos = { ...d.cardStart };
+          const endPos = { ...fp };
+          noticeWithUndo(
+            curSeqId ? 'Scene moved to sequence' : 'Scene added to sequence',
+            curSeqId ? 'Scene moved back' : 'Scene taken out of sequence',
+            () => undoContainsMove(eid, dropSeqId!, curSeqId, startPos),
+            () => doContainsMove(eid, dropSeqId!, endPos),
+          );
         }
       }
     };
@@ -2687,7 +3233,7 @@ export default function FreeformCorkboard() {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-  }, [draggingId, auth, storyId]);
+  }, [draggingId, auth, storyId, reorderBeatOnDrop, noticeWithUndo, undoContainsMove, doContainsMove]);
 
   // -------- Sequence container drag (header / border → move whole shape) --------
   const onSeqContainerMouseDown = useCallback((e: React.MouseEvent, seqId: string) => {
@@ -2977,28 +3523,59 @@ export default function FreeformCorkboard() {
           return;
         }
 
-        // Event ↔ Sequence: add the event as a member scene (CONTAINS, disjoint
+        // Event → Sequence: add the event as a member scene (CONTAINS, disjoint
         // server-side — a scene is in at most one sequence). Dropping a member of
         // sequence A onto B MOVES it (drops A's membership, adds B's).
-        if ((sType === 'event' && tType === 'sequence') || (sType === 'sequence' && tType === 'event')) {
-          const sequenceId = sType === 'sequence' ? from : target;
-          const eventId = sType === 'event' ? from : target;
+        // DIRECTIONAL (mixed spine, 2026-08-22): the reverse drag, sequence →
+        // scene, is ORDER (the scene follows the sequence), handled below.
+        if (sType === 'event' && tType === 'sequence') {
+          const sequenceId = target;
+          const eventId = from;
           if ((data?.edges.contains ?? []).some((c) => c.from === sequenceId && c.to === eventId)) return;
-          const wasMember = (data?.edges.contains ?? []).some((c) => c.to === eventId);
+          const prevSeqId = (data?.edges.contains ?? []).find((c) => c.to === eventId)?.from ?? null;
+          const wasMember = prevSeqId != null;
+          const prevPos = positions[eventId] ? { ...positions[eventId] } : null;
           setData((prev) => (prev ? { ...prev, edges: { ...prev.edges, contains: [...prev.edges.contains.filter((c) => c.to !== eventId), { from: sequenceId, to: eventId }] } } : prev));
           // Reposition the event to where it was dropped (inside the new box) so it
           // nests there and leaves the old container, instead of the box stretching
           // back to the event's old spot. Only when the event was the dragged source.
-          if (canvasPos && sType === 'event') {
+          if (canvasPos) {
             const np = { x: Math.max(0, canvasPos.x - EVENT_CARD_W / 2), y: Math.max(0, canvasPos.y - COLLAPSED_H / 2) };
             setPositions((p) => ({ ...p, [eventId]: np }));
             updateCardPosition({ userId: auth.userId, projectId: storyId, cardId: eventId, x: np.x, y: np.y }, auth.token).catch(() => {});
           }
           queueStructOpGlobal(storyId, { kind: 'contains_move', sequenceId, eventId });
-          setLinkNotice(wasMember ? 'Scene moved to sequence' : 'Scene added to sequence');
+          const droppedPos = canvasPos ? { x: Math.max(0, canvasPos.x - EVENT_CARD_W / 2), y: Math.max(0, canvasPos.y - COLLAPSED_H / 2) } : null;
+          noticeWithUndo(
+            wasMember ? 'Scene moved to sequence' : 'Scene added to sequence',
+            wasMember ? 'Scene moved back' : 'Scene taken out of sequence',
+            () => undoContainsMove(eventId, sequenceId, prevSeqId, prevPos),
+            () => doContainsMove(eventId, sequenceId, droppedPos),
+          );
           return;
         }
 
+        // MIXED SPINE (2026-08-22): PRECEDES may start or end on a Sequence.
+        // Sequence→Sequence / Sequence↔Event land in their own edge lists.
+        if (sType === 'sequence' && (targetEnt.type === 'event' || targetEnt.type === 'sequence')) {
+          const listKey = targetEnt.type === 'sequence' ? 'sequence_precedes' : 'cross_precedes';
+          const exists = ((data?.edges as any)?.[listKey] ?? []).some((p: { from: string; to: string }) => p.from === from && p.to === target);
+          if (exists) return;
+          const hadReverse = ((data?.edges as any)?.[listKey] ?? []).some((p: { from: string; to: string }) => p.from === target && p.to === from);
+          setData((prev) => {
+            if (!prev) return prev;
+            const cur = ((prev.edges as any)[listKey] ?? []) as Array<{ from: string; to: string }>;
+            return { ...prev, edges: { ...prev.edges, [listKey]: [...cur.filter((p) => !(p.from === target && p.to === from)), { from, to: target }] } };
+          });
+          queueStructOpGlobal(storyId, { kind: 'precedes_tag', from, to: target });
+          noticeWithUndo(
+            `“${String(targetEnt.working_title ?? targetEnt.working_name ?? '')}” now follows the sequence`,
+            'Order link removed',
+            () => undoPrecedesTag(from, target, hadReverse),
+            () => doPrecedesTag(from, target),
+          );
+          return;
+        }
         // Only Events are valid sources for the remaining edge types (PRECEDES /
         // CAUSES / EVOKES). Anything else (e.g. character → arc) is a no-op.
         if (sType !== 'event') return;
@@ -3032,6 +3609,7 @@ export default function FreeformCorkboard() {
             (p) => p.from === from && p.to === target,
           );
           if (exists) return;
+          const hadReverseEE = (data?.edges.precedes ?? []).some((p) => p.from === target && p.to === from);
           setData((prev) =>
             prev
               ? {
@@ -3051,6 +3629,7 @@ export default function FreeformCorkboard() {
           // Local apply above mirrors the server's reverse-auto-flip; the
           // queued op's overlay transform does the same on refetches.
           queueStructOpGlobal(storyId, { kind: 'precedes_tag', from, to: target });
+          noticeWithUndo('Order set', 'Order link removed', () => undoPrecedesTag(from, target, hadReverseEE), () => doPrecedesTag(from, target));
           return;
         }
 
@@ -3118,6 +3697,21 @@ export default function FreeformCorkboard() {
         // (untag + tag + tag expand at push time), so a reload can never
         // replay half of it and a failed push retries instead of reverting.
         queueStructOpGlobal(storyId, { kind: 'precedes_splice', anchorFrom: oldFrom, anchorTo: oldTo, insertId: from });
+        noticeWithUndo('Scene spliced in', 'Splice undone', () => {
+          setData((prev) => prev ? { ...prev, edges: { ...prev.edges, precedes: [
+            ...prev.edges.precedes.filter((p) => !((p.from === oldFrom && p.to === from) || (p.from === from && p.to === oldTo))),
+            { from: oldFrom, to: oldTo },
+          ] } } : prev);
+          queueStructOpGlobal(storyId, { kind: 'precedes_untag', from: oldFrom, to: from });
+          queueStructOpGlobal(storyId, { kind: 'precedes_untag', from, to: oldTo });
+          queueStructOpGlobal(storyId, { kind: 'precedes_tag', from: oldFrom, to: oldTo });
+        }, () => {
+          setData((prev) => prev ? { ...prev, edges: { ...prev.edges, precedes: [
+            ...prev.edges.precedes.filter((p) => !(p.from === oldFrom && p.to === oldTo)),
+            { from: oldFrom, to: from }, { from, to: oldTo },
+          ] } } : prev);
+          queueStructOpGlobal(storyId, { kind: 'precedes_splice', anchorFrom: oldFrom, anchorTo: oldTo, insertId: from });
+        });
         return;
       }
     };
@@ -3201,6 +3795,32 @@ export default function FreeformCorkboard() {
   // Shared submit core: enqueue extract-braindump for a block of prose (writer
   // braindump OR parsed screenplay text) + the fallback polls. Callers validate
   // length first.
+  // Placement Control v1c — the dock intent. Compose-time declaration of
+  // where this dump's new cards go: a tapped spot on the board, the strip
+  // ('aside'), or the default (the system decides; ambiguity stages). Ref-
+  // mirrored so runBraindumpExtraction reads it without re-binding.
+  const [dockIntent, setDockIntent] = useState<
+    | { mode: 'auto' }
+    | { mode: 'aside' }
+    | { mode: 'picking' }
+    | { mode: 'spot'; targetId: string; targetTitle: string; containment?: 'none'; position?: 'before'; action?: 'merge' }
+  >({ mode: 'auto' });
+  const dockIntentRef = useRef(dockIntent);
+  useEffect(() => { dockIntentRef.current = dockIntent; }, [dockIntent]);
+  // Spot picking is the GRID placement surface (concept B, Ben 2026-08-20):
+  // an overlay morphs the scenes into a reading-order wall whose gutters are
+  // the slots. The real board and the writer's saved layout are never
+  // touched; the overlay handles its own Esc.
+  const handleDockIntent = useCallback((next: typeof dockIntent) => {
+    setDockIntent(next);
+  }, []);
+  // The wall stays MOUNTED through its exit: any close path (cancel, pick,
+  // drop, row collapse, answer) flips gridOpen false, the cells fly back to
+  // their board positions while the backdrop fades, then onExited unmounts.
+  const gridOpen = dockIntent.mode === 'picking' || placingStaged !== null || stagedSpotlight !== null || wrapSeq !== null;
+  const [gridMounted, setGridMounted] = useState(false);
+  useEffect(() => { if (gridOpen) setGridMounted(true); }, [gridOpen]);
+
   const runBraindumpExtraction = useCallback(async (prose: string, opts?: { sourceFormat?: 'screenplay'; wow?: boolean }) => {
     if (!auth || !storyId) return;
     const braindumpId = `bd_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -3214,6 +3834,10 @@ export default function FreeformCorkboard() {
     deltaEdgesRef.current = 0; // FIL-516: fresh run, the belt stands ready until a delta arrives
     beginWriteSettling(); // peer gate holds until braindump_complete (done-split)
     cardCountAtSubmitRef.current = (dataRef.current?.entities ?? []).filter((e) => !e.deleted_at).length;
+    // No saved position on any live card (empty board, or a board the writer
+    // never arranged) → full story-order layout when this run lands.
+    noSavedLayoutAtSubmitRef.current = !(dataRef.current?.entities ?? [])
+      .some((e) => !e.deleted_at && e.staged !== '1' && !!layoutsRef.current[e.id]);
     if (isWindowed) {
       windowedStartRef.current = Date.now();
       winLastAliveRef.current = cardCountAtSubmitRef.current;
@@ -3234,11 +3858,31 @@ export default function FreeformCorkboard() {
           braindumpId,
           prose,
           ...(opts?.sourceFormat ? { sourceFormat: opts.sourceFormat } : {}),
+          ...(() => {
+            if (opts?.sourceFormat) return {};
+            const it = dockIntentRef.current;
+            if (it.mode === 'aside') return { declaredPlacement: 'aside' as const };
+            if (it.mode === 'spot') {
+              return {
+                declaredPlacement: {
+                  targetId: it.targetId,
+                  ...(it.containment ? { containment: it.containment } : {}),
+                  ...(it.position ? { position: it.position } : {}),
+                  ...(it.action ? { action: it.action } : {}),
+                },
+              };
+            }
+            return {};
+          })(),
           // Dev-only: stream entities in card-by-card (REACT_APP_FREEFORM_STREAMING
           // is set in .env.development only; prod runs the batch path). The wow
           // flow (FIL-506) forces streaming regardless of env — the card-by-card
           // reveal IS the wow; the non-streaming recovery path backstops failures.
           ...(process.env.REACT_APP_FREEFORM_STREAMING === 'true' || opts?.wow ? { streaming: true } : {}),
+          // The first-run tour's sample must never raise an altitude question
+          // (the wow yield is contracted; a "scene or section?" ask mid-tour
+          // is noise). Every other prose dump gets the two-reader vote.
+          ...(opts?.wow ? { skipAltitudeVote: true } : {}),
         },
         auth.token,
       );
@@ -3378,6 +4022,7 @@ export default function FreeformCorkboard() {
     setBraindumpOpen(false);
     // During the wow, force the card-by-card streaming reveal regardless of env.
     await runBraindumpExtraction(prose, { wow: wowActive });
+    setDockIntent({ mode: 'auto' }); // the intent was for that dump only
   }, [braindumpText, runBraindumpExtraction, wowActive]);
 
   // -------- Script (PDF) drop → extraction --------
@@ -3452,7 +4097,7 @@ export default function FreeformCorkboard() {
   // events or the heuristic finds nothing reasonable.
   const computeFollowsDefault = useCallback((): string => {
     if (!data) return '';
-    const events = data.entities.filter((e) => e.type === 'event' && !e.deleted_at);
+    const events = data.entities.filter((e) => e.type === 'event' && !e.deleted_at && e.staged !== '1');
     if (events.length === 0) return '';
     const hasOutgoing = new Set<string>();
     for (const p of data.edges.precedes) hasOutgoing.add(p.from);
@@ -3484,12 +4129,30 @@ export default function FreeformCorkboard() {
     setCreateError(null);
     setCreateCollision(null);
     setCreateArcKind('audience_question'); // reset default each open
-    setCreatePrecededBy(kind === 'event' ? computeFollowsDefault() : '');
+    // No follows-default any more (Ben 2026-08-23): ordering comes from the
+    // wall placement after create, so a prefilled predecessor would silently
+    // chain the scene and skip the picker.
+    setCreatePrecededBy('');
+    setCreateIntoSequenceId(null);
     setNewMenuOpen(false);
-  }, [computeFollowsDefault]);
+  }, []);
+  // A scene born INSIDE an empty sequence (Beats grid). No "follows" default:
+  // an empty sequence has no neighbour to chain from, and the sequence's own
+  // order already places it.
+  const openCreateSceneInSequence = useCallback((seqId: string) => {
+    setCreateKind('event');
+    setCreateName('');
+    setCreateDesc('');
+    setCreateError(null);
+    setCreateCollision(null);
+    setCreatePrecededBy('');
+    setCreateIntoSequenceId(seqId);
+    setNewMenuOpen(false);
+  }, []);
 
   const closeCreateModal = useCallback(() => {
     setCreateKind(null);
+    setCreateIntoSequenceId(null);
     setCreateName('');
     setCreateDesc('');
     setCreateError(null);
@@ -3735,6 +4398,244 @@ export default function FreeformCorkboard() {
     [auth, storyId, arcSuggestions],
   );
 
+  // Placement Control v1b — the strip's two answers. Optimistic-remove-then-
+  // revert, same shape as the arc-suggestion pair above.
+  //
+  // 'merge': the staged card folds into its target server-side (edges, anchors,
+  // provenance move; its title becomes an alias; it lands in the trash with
+  // merge provenance). The refetch reconciles the board.
+  //
+  // 'keep': keep both — the card un-stages CLEAN onto the board and negative
+  // memory (not_same_as) is written on both cards so the pair never re-asks.
+  // We flip the staged flag locally so the card appears instantly, then let
+  // the refetch confirm.
+  const onAnswerStaged = useCallback(
+    async (cardId: string, answer: 'merge' | 'keep' | 'convert') => {
+      if (!auth || !storyId) return;
+      const row = stagedQuestions.find((q) => q.cardId === cardId);
+      setStagedQuestions((cur) => cur.filter((q) => q.cardId !== cardId));
+      markAnswering(cardId);
+      // Altitude rows hold the card staged like any other question: 'keep'
+      // un-stages it in place (the ordinary keep path), 'convert' re-mints it
+      // at the other altitude (new vertex, un-staged; the refetch swaps it
+      // in, the old one lands in the trash).
+      if (answer === 'keep') {
+        setData((prev) =>
+          prev
+            ? {
+                ...prev,
+                entities: prev.entities.map((e) =>
+                  e.id === cardId ? { ...e, staged: undefined } : e,
+                ),
+              }
+            : prev,
+        );
+        // Staged cards never got an auto-layout slot (autoPositions covers the
+        // canvas lens only), so the initial positions pass parked them at 0,0.
+        // Drop the kept card beside the card it was compared against — the
+        // writer's eye is already there.
+        setPositions((p) => {
+          const cur = p[cardId];
+          if (cur && (cur.x !== 0 || cur.y !== 0)) return p;
+          const anchor = row?.target_vid ? p[row.target_vid] : undefined;
+          const pos = anchor
+            ? { x: anchor.x + 340, y: anchor.y + 48 }
+            : { x: 260, y: 220 };
+          return { ...p, [cardId]: pos };
+        });
+      }
+      try {
+        const res = await answerStagedQuestion(
+          { projectId: storyId, userId: auth.userId, cardId, answer },
+          auth.token,
+        );
+        if (answer === 'convert' && res.convert) {
+          const c = res.convert;
+          const entName = (id: string) => {
+            const e = (dataRef.current?.entities ?? []).find((x) => x.id === id);
+            return e ? String(e.working_title ?? e.working_name ?? id) : id;
+          };
+          // A held card had no layout slot: give the converted card a spot so
+          // the refetch doesn't park it at 0,0 (same default as 'keep').
+          setPositions((p) => {
+            const cur = p[cardId];
+            const pos = cur && (cur.x !== 0 || cur.y !== 0) ? cur : { x: 260, y: 220 };
+            return p[c.toId] ? p : { ...p, [c.toId]: pos };
+          });
+          const r = c.retracted ?? { ordering: 0, containment: 0, involves: 0, occursIn: 0, other: 0 };
+          const dropped = r.ordering + r.containment + r.involves + r.occursIn + r.other;
+          const orphans = c.orphanedMembers?.length ?? 0;
+          setLinkNotice(
+            `“${entName(cardId)}” is now a ${c.toLabel === 'Sequence' ? 'section' : 'scene'}.`
+            + (dropped ? ` ${dropped} link${dropped === 1 ? '' : 's'} retracted.` : '')
+            + (orphans ? ` ${orphans} scene${orphans === 1 ? '' : 's'} left without a section.` : ''),
+          );
+        }
+        if (boardIsAutoManaged()) relayoutFirstDumpRef.current = true; else relayoutSpineRef.current = true;
+        refreshEntitiesRef.current().catch(() => {}).finally(() => clearAnswering(cardId));
+      } catch (err) {
+        clearAnswering(cardId);
+        // Revert: re-stage locally and re-add the question row.
+        if (answer === 'keep') {
+          setData((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  entities: prev.entities.map((e) =>
+                    e.id === cardId ? { ...e, staged: '1' } : e,
+                  ),
+                }
+              : prev,
+          );
+        }
+        if (row) {
+          setStagedQuestions((cur) =>
+            cur.some((q) => q.cardId === cardId) ? cur : [row, ...cur],
+          );
+        }
+        console.warn('[corkboard] answer-staged-question failed:', err);
+      }
+    },
+    [auth, storyId, stagedQuestions, markAnswering, clearAnswering],
+  );
+
+  // Placement Control v1c, the spine drop lands. Optimistic like the answer
+  // pair above: the question leaves the strip, a placed card joins the board
+  // beside its target (staged cards never got an auto-layout slot), a merged
+  // one stays gone until the refetch confirms the fold. The toast names the
+  // one link a between-drop replaced; displacement is always shown.
+  const onPlaceStagedDrop = useCallback(
+    async (pick: GridPick) => {
+      const cardId = placingStaged?.cardId;
+      setPlacingStaged(null);
+      if (!auth || !storyId || !cardId) return;
+      setStagedSpotlight(null);
+      const row = stagedQuestions.find((q) => q.cardId === cardId);
+      const entName = (id: string) => {
+        const e = (dataRef.current?.entities ?? []).find((x) => x.id === id);
+        return e ? String(e.working_title ?? e.working_name ?? id) : id;
+      };
+      const cardTitle = entName(cardId);
+      setStagedQuestions((cur) => cur.filter((q) => q.cardId !== cardId));
+      // Same in-flight guard as onAnswerStaged: a MERGE drop resolves the card
+      // server-side, so its staged flag can't be cleared locally and the
+      // strip's defensive union would otherwise synthesize a phantom row.
+      markAnswering(cardId);
+      if (pick.action !== 'merge') {
+        setData((prev) =>
+          prev
+            ? {
+                ...prev,
+                entities: prev.entities.map((e) =>
+                  e.id === cardId ? { ...e, staged: undefined } : e,
+                ),
+              }
+            : prev,
+        );
+        setPositions((p) => {
+          const cur = p[cardId];
+          if (cur && (cur.x !== 0 || cur.y !== 0)) return p;
+          const anchor = p[pick.targetId];
+          return { ...p, [cardId]: anchor ? { x: anchor.x + 340, y: anchor.y + 48 } : { x: 260, y: 220 } };
+        });
+      }
+      try {
+        const res = await placeStagedCard(
+          {
+            projectId: storyId, userId: auth.userId, cardId,
+            placement: {
+              targetId: pick.targetId,
+              ...(pick.position ? { position: pick.position } : {}),
+              ...(pick.containment ? { containment: pick.containment } : {}),
+              ...(pick.nextId ? { nextId: pick.nextId } : {}),
+              ...(pick.action ? { action: pick.action } : {}),
+            },
+          },
+          auth.token,
+        );
+        setLinkNotice(
+          pick.action === 'merge'
+            ? `Merged “${cardTitle}” into “${entName(pick.targetId)}”.`
+            : res.retracted
+              ? `Placed “${cardTitle}” ${pick.targetTitle}. Replaced the “${entName(res.retracted.from)}” → “${entName(res.retracted.to)}” link.`
+              : `Placed “${cardTitle}” ${pick.targetTitle}.`,
+        );
+        if (boardIsAutoManaged()) relayoutFirstDumpRef.current = true; else relayoutSpineRef.current = true;
+        refreshEntitiesRef.current().catch(() => {}).finally(() => clearAnswering(cardId));
+      } catch (err) {
+        clearAnswering(cardId);
+        // Revert: re-stage locally and re-surface the question row.
+        if (pick.action !== 'merge') {
+          setData((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  entities: prev.entities.map((e) =>
+                    e.id === cardId ? { ...e, staged: '1' } : e,
+                  ),
+                }
+              : prev,
+          );
+        }
+        if (row) {
+          setStagedQuestions((cur) =>
+            cur.some((q) => q.cardId === cardId) ? cur : [row, ...cur],
+          );
+        }
+        setLinkError('Placing the card failed. It stays in the strip.');
+        console.warn('[corkboard] place-staged-card failed:', err);
+      }
+    },
+    [auth, storyId, placingStaged, stagedQuestions, markAnswering, clearAnswering],
+  );
+
+  // New → Sequence: create (optionally with the picked scenes as members).
+  const onCreateWrapSequence = useCallback(async (withMembers: boolean) => {
+    if (!auth || !storyId || !wrapSeq) return;
+    const name = wrapSeq.name.trim();
+    if (!name) { setLinkError('Give the sequence a name first.'); return; }
+    const members = withMembers ? [...wrapSeq.selected] : [];
+    setWrapSeq((w) => (w ? { ...w, busy: true } : w));
+    try {
+      const res = await createSequence(
+        { projectId: storyId, userId: auth.userId, workingName: name, memberEventIds: members.length ? members : undefined },
+        auth.token,
+      );
+      if ('exists' in res) {
+        setLinkError(`A sequence called “${name}” already exists.`);
+        setWrapSeq((w) => (w ? { ...w, busy: false } : w));
+        return;
+      }
+      const ent = res.entity;
+      // Optimistic: the card + its CONTAINS edges on this frame.
+      setData((prev) => prev ? {
+        ...prev,
+        entities: [...prev.entities, ent],
+        edges: { ...prev.edges, contains: [...(prev.edges.contains ?? []), ...members.map((m) => ({ from: ent.id, to: m }))] },
+      } : prev);
+      setWrapSeq(null);
+      if (members.length) {
+        noticeWithUndo(
+          `Sequence “${name}” created around ${members.length} scene${members.length === 1 ? '' : 's'}.`,
+          `“${name}” removed; scenes ungrouped`,
+          () => { deleteCardRef.current(ent.id).catch(() => {}); },
+          () => { restoreCardRef.current(ent.id).catch(() => {}); },
+        );
+        if (boardIsAutoManaged()) relayoutFirstDumpRef.current = true; else relayoutSpineRef.current = true;
+        refreshEntitiesRef.current().catch(() => {});
+      } else {
+        // An EMPTY sequence has no members to place it by: ask where it goes,
+        // on the same wall, the way the braindump dock does (tap a seam).
+        setPlacingStaged({ cardId: ent.id, fresh: true });
+        setLinkNotice(`“${name}” created. Tap where it goes in the story.`);
+      }
+    } catch (err) {
+      console.warn('[corkboard] create-sequence failed:', err);
+      setLinkError('Creating the sequence failed.');
+      setWrapSeq((w) => (w ? { ...w, busy: false } : w));
+    }
+  }, [auth, storyId, wrapSeq, boardIsAutoManaged, noticeWithUndo]);
+
   // Place new card near the viewport center, expressed in canvas coords.
   // Cheap heuristic — writer can drag if it's not where they want it.
   const computeNewCardPosition = useCallback((): Pos => {
@@ -3844,6 +4745,19 @@ export default function FreeformCorkboard() {
               : prev,
           );
         }
+        // Born inside an empty sequence (Beats grid): nest it. Optimistic
+        // CONTAINS so the wall's region picks it up on this frame.
+        if (createKind === 'event' && createIntoSequenceId) {
+          const seqId = createIntoSequenceId;
+          const evtId = newEntity.id;
+          setData((prev) =>
+            prev
+              ? { ...prev, edges: { ...prev.edges, contains: [...(prev.edges.contains ?? []), { from: seqId, to: evtId }] } }
+              : prev,
+          );
+          tagSequenceContains({ projectId: storyId, sequenceId: seqId, eventId: evtId }, auth.token)
+            .catch((e) => { console.warn('[corkboard] nest-in-sequence failed:', e); refreshEntitiesRef.current(); });
+        }
         // Fire full extraction over the description: enriches the focal
         // card's fields AND creates any other entities the writer mentioned
         // (other characters, locations, edges). Backend dedups by hash so
@@ -3864,6 +4778,15 @@ export default function FreeformCorkboard() {
           updatedAt: new Date().toISOString(),
         },
       }));
+      if (createKind === 'event' && !createIntoSequenceId && !createPrecededBy) {
+        // New Scene places on the WALL, like the empty-sequence flow (Ben
+        // 2026-08-23): the board morphs into the picker and the writer taps
+        // the seam where the scene goes — no dropdown.
+        closeCreateModal();
+        setPlacingStaged({ cardId: newEntity.id, fresh: true });
+        setLinkNotice(`“${String(newEntity.working_title ?? newEntity.working_name ?? name)}” created. Tap where it goes in the story.`);
+        return;
+      }
       setExpandedCardId(newEntity.id);
       closeCreateModal();
     } catch (err: any) {
@@ -3879,6 +4802,7 @@ export default function FreeformCorkboard() {
     createName,
     createDesc,
     createPrecededBy,
+    createIntoSequenceId,
     data,
     computeNewCardPosition,
     computeNewArcPosition,
@@ -3946,6 +4870,13 @@ export default function FreeformCorkboard() {
         } else {
           await deleteCard({ cardId, projectId: storyId }, auth.token);
         }
+        const label = String(entity?.working_title ?? entity?.working_name ?? '').trim();
+        noticeWithUndo(
+          label ? `“${label.slice(0, 40)}” moved to trash` : 'Moved to trash',
+          'Restored from trash',
+          () => { restoreCardRef.current(cardId).catch(() => {}); },
+          () => { deleteCardRef.current(cardId).catch(() => {}); },
+        );
       } catch (err) {
         console.warn('[corkboard] delete failed, reverting:', err);
         setData((prev) => {
@@ -3959,8 +4890,9 @@ export default function FreeformCorkboard() {
         });
       }
     },
-    [auth, storyId, data],
+    [auth, storyId, data, noticeWithUndo],
   );
+  deleteCardRef.current = onDeleteCard;
 
   const onRenameCard = useCallback(
     async (cardId: string, newName: string) => {
@@ -4284,6 +5216,7 @@ export default function FreeformCorkboard() {
     },
     [auth, storyId, data, refreshEntities],
   );
+  restoreCardRef.current = onRestoreCard;
 
   // -------- WS subscription for braindump_complete events --------
   //
@@ -4470,18 +5403,31 @@ export default function FreeformCorkboard() {
           (counts.relationships ?? 0);
         endWriteSettling(); // the write landed — the peer may slice Neptune again
         setBraindumpPhase('done');
+        // Completion beat (Placement Control): the count of staged questions
+        // rides the payload so the moment of hottest context names the wait,
+        // without holding the write hostage.
+        const stagedN = Number(msg.staged ?? 0);
+        const stagedNote = stagedN > 0
+          ? ` ${stagedN === 1 ? '1 card is' : `${stagedN} cards are`} waiting for you in the panel.`
+          : '';
         setBraindumpMsg(
           total === 0
-            ? 'Extraction returned no new entities.'
-            : `Done. Extracted ${counts.characters ?? 0} char · ${counts.events ?? 0} event · ${counts.locations ?? 0} loc.`,
+            ? (stagedN > 0 ? `Nothing new landed on the board.${stagedNote}` : 'Extraction returned no new entities.')
+            : `Done. Extracted ${counts.characters ?? 0} char · ${counts.events ?? 0} event · ${counts.locations ?? 0} loc.${stagedNote}`,
         );
         setBraindumpText('');
         dockAutoCloseRef.current = true;
+        // Questions raised by this dump open the panel on their own (Ben
+        // 2026-08-22): the writer should not have to notice a badge.
+        if (stagedN > 0) { setRightPanelOpen(true); setPanelForceSection('staged'); }
         if (windowedRunRef.current) relayoutWindowedRef.current = true; // snap into the clean layout
+        else if (noSavedLayoutAtSubmitRef.current) relayoutFirstDumpRef.current = true; // first-dump rule
+        noSavedLayoutAtSubmitRef.current = false;
         inflightBraindumpRef.current = null;
         windowedRunRef.current = false; // windowed run resolved
         resetWinMeter();
         refreshArcSuggestionsRef.current(); // arcs were written just before this WS
+        refreshStagedQuestionsRef.current(); // strip rows persisted just before this WS
         if (windowedPollRef.current) { window.clearInterval(windowedPollRef.current); windowedPollRef.current = null; }
         // Streamed cards were positioned in ARRIVAL order (PRECEDES didn't exist
         // yet). Stash them so the effect below re-stacks them in PRECEDES (story)
@@ -4706,6 +5652,7 @@ export default function FreeformCorkboard() {
   // -------- Measure expanded card height (drives canvas height) --------
 
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
   useEffect(() => {
     if (!expandedCardId) {
       setExpandedCardH(0);
@@ -4772,6 +5719,7 @@ export default function FreeformCorkboard() {
   // Throughline grid — the wall shows ORDER only: no PRECEDES lines, no arc
   // threads (the SC numbers carry the throughline; row-wrap arrows are noise).
   const gridActive = viewMode === 'throughline' && throughlineLayout === 'grid';
+  const PAD_OUT_GRID = 8; // mirrors the layout's PAD_OUT (region padding past a cell)
 
   const typeOfCard = (cardId: string) => data.entities.find((e) => e.id === cardId)?.type;
   const heightOf = (cardId: string) =>
@@ -4816,7 +5764,14 @@ export default function FreeformCorkboard() {
 
   return (
     <ThemeCtx.Provider value={theme}>
-    <Shell storyId={storyId} title={workTitle} canRename={canRename} onRename={renameStory}>
+    <Shell
+      storyId={storyId}
+      title={workTitle}
+      canRename={canRename}
+      onRename={renameStory}
+      onOpenScript={storyId ? () => playPageWipe('right', () => routerNavigate(`/freeform/${storyId}/script`)) : undefined}
+      onPrefetchScript={storyId && auth ? () => prefetchScriptData(storyId, auth.token) : undefined}
+    >
       {isDesktop() && auth && storyId ? (
         <FdxImportButton
           onImportScreenplay={(text) => runBraindumpExtraction(text, { sourceFormat: 'screenplay' })}
@@ -4869,6 +5824,215 @@ export default function FreeformCorkboard() {
           fontFamily: 'system-ui, sans-serif',
         }}
       >
+        {/* The create group owns the LEFT edge — the two actions that put
+            something on the board (New, Braindump) read as filled buttons
+            ahead of the view switches, which only re-project what's already
+            there. Both used to sit far right, New last of all and Braindump
+            pressed against Trash, so neither got found. (FIL-587, Marko) */}
+        <div style={{ position: 'relative' }}>
+          <ToolbarButton
+            label="New"
+            icon="+"
+            tourId="toolbar-new"
+            trailing={
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block', opacity: 0.75 }}>
+                <path d="m6 9 6 6 6-6" />
+              </svg>
+            }
+            onClick={() => setNewMenuOpen((v) => !v)}
+            active={newMenuOpen}
+            accent="#475569"
+            prominent
+            title="Add a card by hand: character, scene, location, arc, or a story fact"
+          />
+          {newMenuOpen && (
+            <>
+              <div
+                onClick={() => setNewMenuOpen(false)}
+                style={{
+                  position: 'fixed',
+                  inset: 0,
+                  zIndex: 50,
+                  background: 'transparent',
+                }}
+              />
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 'calc(100% + 6px)',
+                  left: 0,
+                  zIndex: 51,
+                  minWidth: 150,
+                  background: dark ? '#1a1a1e' : '#fff',
+                  border: dark ? '1px solid #2a2a30' : '1px solid #e3e5ea',
+                  borderRadius: 8,
+                  boxShadow: '0 8px 24px rgba(15,18,30,0.12)',
+                  padding: 5,
+                  fontFamily: 'system-ui, sans-serif',
+                }}
+              >
+                {/* Writer-facing order (Ben 2026-08-23): Scene first (their
+                    word for Event), then Character, Sequence, Arc, Location.
+                    Sequence is not a modal — the WALL is the picker (wrap
+                    scenes or create empty); it renders inline mid-list. */}
+                {([
+                  { kind: 'event' as CreateModalKind, label: 'Scene' },
+                  { kind: 'character' as CreateModalKind, label: 'Character' },
+                  null, // the Sequence slot
+                  { kind: 'arc' as CreateModalKind, label: 'Arc' },
+                  { kind: 'location' as CreateModalKind, label: 'Location' },
+                ]).map((item, ii) => item === null ? (
+                  <button
+                    key="sequence"
+                    onClick={() => { setNewMenuOpen(false); setWrapSeq({ selected: new Set(), name: '', busy: false }); }}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left',
+                      background: 'transparent', border: 'none', padding: '7px 10px', fontSize: 12, fontWeight: 500,
+                      color: dark ? '#d6d6de' : '#2c3140', cursor: 'pointer', borderRadius: 6, fontFamily: 'inherit',
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = dark ? '#26262c' : '#f4f5f7')}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                  >
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: getEntityColor('sequence'), flexShrink: 0 }} />
+                    Sequence
+                  </button>
+                ) : (
+                  <button
+                    key={item.kind}
+                    onClick={() => openCreateModal(item.kind)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      width: '100%',
+                      textAlign: 'left',
+                      background: 'transparent',
+                      border: 'none',
+                      padding: '7px 10px',
+                      fontSize: 12,
+                      fontWeight: 500,
+                      color: dark ? '#d6d6de' : '#2c3140',
+                      cursor: 'pointer',
+                      borderRadius: 6,
+                      fontFamily: 'inherit',
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = dark ? '#26262c' : '#f4f5f7')}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                  >
+                    <span
+                      style={{
+                        width: 8, height: 8, borderRadius: '50%',
+                        background: getEntityColor(item.kind), flexShrink: 0,
+                      }}
+                    />
+                    {item.label}
+                  </button>
+                ))}
+                <button
+                  onClick={openCreateInfoModal}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    width: '100%',
+                    textAlign: 'left',
+                    background: 'transparent',
+                    border: 'none',
+                    padding: '7px 10px',
+                    fontSize: 12,
+                    fontWeight: 500,
+                    color: dark ? '#d6d6de' : '#2c3140',
+                    cursor: 'pointer',
+                    borderRadius: 6,
+                    fontFamily: 'inherit',
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = dark ? '#26262c' : '#f4f5f7')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                  title="A story fact — established in a scene, trackable by who knows it"
+                >
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: INFO_ACCENT, flexShrink: 0 }} />
+                  Information
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+        <ToolbarButton
+          label={
+            braindumpPhase === 'extracting' || braindumpPhase === 'submitting'
+              ? 'Braindump · running'
+              : 'Braindump'
+          }
+          icon={
+            braindumpPhase === 'extracting' || braindumpPhase === 'submitting' ? (
+              <span
+                style={{
+                  width: 7, height: 7, borderRadius: '50%', background: '#ea580c',
+                  display: 'inline-block', animation: 'cb-pulse 1.2s ease-in-out infinite',
+                }}
+              />
+            ) : (
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                xmlns="http://www.w3.org/2000/svg"
+                style={{ display: 'block' }}
+              >
+                <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" />
+                <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" />
+                <path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4" />
+                <path d="M17.599 6.5a3 3 0 0 0 .399-1.375" />
+                <path d="M6.003 5.125A3 3 0 0 0 6.401 6.5" />
+                <path d="M3.477 10.896a4 4 0 0 1 .585-.396" />
+                <path d="M19.938 10.5a4 4 0 0 1 .585.396" />
+                <path d="M6 18a4 4 0 0 1-1.967-.516" />
+                <path d="M19.967 17.484A4 4 0 0 1 18 18" />
+              </svg>
+            )
+          }
+          onClick={() => setBraindumpOpen((v) => !v)}
+          active={braindumpOpen}
+          accent="#ff6b35"
+          prominent
+          title="Dump an idea; extraction turns it into cards (⌘↵ to process)"
+        />
+        {/* Import rides with the create group: it is the third way material
+            gets ON the board (type it, dump it, or bring pages you already
+            wrote), so it belongs beside Braindump rather than off in the
+            right-hand utilities. Left outlined, not filled — three solid
+            buttons in a row and none of them reads as primary. */}
+        <ToolbarButton
+          label="Import"
+          tourId="toolbar-import"
+          large
+          icon={
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <path d="M17 8l-5-5-5 5" />
+              <path d="M12 3v12" />
+            </svg>
+          }
+          onClick={() => scriptInputRef.current?.click()}
+          title="Import a PDF screenplay; its text is extracted into cards (or drop one anywhere on the board)"
+        />
+        <input
+          ref={scriptInputRef}
+          type="file"
+          accept="application/pdf,.pdf"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) handleScriptFile(f);
+            e.currentTarget.value = '';
+          }}
+        />
+        <div style={{ width: 1, height: 20, background: dark ? '#26262b' : '#ece5d7', margin: '0 4px' }} />
         {/* Focused views — layout projections over the same graph. Master is
             the free-form board; the others are transient (nothing persists). */}
         <ToolbarButton
@@ -4888,10 +6052,13 @@ export default function FreeformCorkboard() {
           accent={viewMode === 'characters' ? '#ea580c' : undefined}
           title="Splay the characters out to read their relationships; events step aside"
         />
-        {/* "Outline" is the writer-facing name (the step outline: scenes in
-            story order); the internal viewMode key stays 'throughline'. */}
+        {/* "Beats" is the writer-facing name (the beat cards: scenes in story
+            order); the internal viewMode key stays 'throughline'. To a writer
+            "outline" means a prose summary, not a card view — calling this
+            view Outline cost every new user a translation step. "Outline" is
+            reserved for an actual nutshell summary. (FIL-587, Paul) */}
         <ToolbarButton
-          label="Outline"
+          label="Beats"
           icon={
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
               <path d="M12 3v18" />
@@ -4902,7 +6069,7 @@ export default function FreeformCorkboard() {
           onClick={() => switchView('throughline')}
           active={viewMode === 'throughline'}
           accent={viewMode === 'throughline' ? '#ea580c' : undefined}
-          title="Your step outline: scenes in story order"
+          title="Your beats: every scene as a card, in story order"
         />
         {/* Throughline sub-layout — column (spine + threads) | grid (the
             writers-room wall: reading-order notecards wrapping into rows). */}
@@ -4977,20 +6144,6 @@ export default function FreeformCorkboard() {
           />
         )}
         <ToolbarButton
-          label="Script"
-          icon={
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-              <path d="M14 2v6h6" />
-              <path d="M9 13h6" />
-              <path d="M9 17h6" />
-            </svg>
-          }
-          onClick={() => storyId && routerNavigate(`/freeform/${storyId}/script`)}
-          title="Write the screenplay: your scenes in story order, ready to draft"
-          tourId="toolbar-script"
-        />
-        <ToolbarButton
           label="Arrange"
           icon={
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
@@ -5009,8 +6162,65 @@ export default function FreeformCorkboard() {
         )}
         <div style={{ flex: 1 }} />
 
+        {/* Undo / redo (Ben 2026-08-23). Icon-only pair; the toast still
+            offers Undo for the act just committed. historyTick re-renders. */}
+        <div style={{ display: 'inline-flex', gap: 4 }} data-history-tick={historyTick}>
+          <ToolbarButton
+            label="Undo"
+            collapsed
+            icon={
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
+                <path d="M9 14 4 9l5-5" />
+                <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />
+              </svg>
+            }
+            onClick={() => { undoLast(); }}
+            disabled={undoRef.current.length === 0}
+            title={undoRef.current.length ? `Undo: ${undoRef.current[undoRef.current.length - 1].redoLabel ?? 'last change'} (⌘Z)` : 'Nothing to undo'}
+          />
+          <ToolbarButton
+            label="Redo"
+            collapsed
+            icon={
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
+                <path d="m15 14 5-5-5-5" />
+                <path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13" />
+              </svg>
+            }
+            onClick={() => { redoLast(); }}
+            disabled={redoRef.current.length === 0}
+            title={redoRef.current.length ? `Redo: ${redoRef.current[redoRef.current.length - 1].redoLabel ?? 'last undone change'} (⇧⌘Z)` : 'Nothing to redo'}
+          />
+        </div>
+
+        <ToolbarButton
+          // Questions-first (Ben 2026-08-22): while a braindump left things to
+          // confirm, the button IS the question count, in braindump orange.
+          label={(() => {
+            const q = stagedRows.length;
+            if (q > 0) return `Confirm · ${q}`;
+            const n = arcSuggestions.length;
+            return n > 0 ? `Arcs · ${n}` : 'Panel';
+          })()}
+          icon="ⓘ"
+          onClick={() => setRightPanelOpen(true)}
+          accent={
+            stagedRows.length > 0
+              ? '#ff8c42'
+              : arcSuggestions.length > 0
+                ? getEntityColor('arc')
+                : undefined
+          }
+          title={stagedRows.length > 0
+            ? 'Things to confirm from your last braindump'
+            : arcSuggestions.length > 0
+              ? 'Arc suggestions to accept or dismiss'
+              : 'Open the side panel: information, arcs, locations, braindumps'}
+        />
+
         <ToolbarButton
           label={deletedEntities.length > 0 ? `Trash · ${deletedEntities.length}` : 'Trash'}
+          collapsed
           icon={
             <svg width="14" height="14" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
               <path
@@ -5029,187 +6239,7 @@ export default function FreeformCorkboard() {
               : `${deletedEntities.length} deleted card${deletedEntities.length === 1 ? '' : 's'}, view and restore`
           }
         />
-        <ToolbarButton
-          label={
-            braindumpPhase === 'extracting' || braindumpPhase === 'submitting'
-              ? 'Braindump · running'
-              : 'Braindump'
-          }
-          icon={
-            braindumpPhase === 'extracting' || braindumpPhase === 'submitting' ? (
-              <span
-                style={{
-                  width: 7, height: 7, borderRadius: '50%', background: '#ea580c',
-                  display: 'inline-block', animation: 'cb-pulse 1.2s ease-in-out infinite',
-                }}
-              />
-            ) : (
-              <svg
-                width="15"
-                height="15"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                xmlns="http://www.w3.org/2000/svg"
-                style={{ display: 'block' }}
-              >
-                <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" />
-                <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" />
-                <path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4" />
-                <path d="M17.599 6.5a3 3 0 0 0 .399-1.375" />
-                <path d="M6.003 5.125A3 3 0 0 0 6.401 6.5" />
-                <path d="M3.477 10.896a4 4 0 0 1 .585-.396" />
-                <path d="M19.938 10.5a4 4 0 0 1 .585.396" />
-                <path d="M6 18a4 4 0 0 1-1.967-.516" />
-                <path d="M19.967 17.484A4 4 0 0 1 18 18" />
-              </svg>
-            )
-          }
-          onClick={() => setBraindumpOpen((v) => !v)}
-          active={braindumpOpen}
-          accent={
-            braindumpOpen || braindumpPhase === 'extracting' || braindumpPhase === 'submitting'
-              ? '#ea580c'
-              : undefined
-          }
-          title="Dump an idea; extraction turns it into cards (⌘↵ to process)"
-        />
-        <ToolbarButton
-          label="Import"
-          tourId="toolbar-import"
-          icon={
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <path d="M17 8l-5-5-5 5" />
-              <path d="M12 3v12" />
-            </svg>
-          }
-          onClick={() => scriptInputRef.current?.click()}
-          title="Import a PDF screenplay; its text is extracted into cards (or drop one anywhere on the board)"
-        />
-        <input
-          ref={scriptInputRef}
-          type="file"
-          accept="application/pdf,.pdf"
-          style={{ display: 'none' }}
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) handleScriptFile(f);
-            e.currentTarget.value = '';
-          }}
-        />
-        <ToolbarButton
-          label={arcSuggestions.length > 0 ? `Panel · ${arcSuggestions.length}` : 'Panel'}
-          icon="ⓘ"
-          onClick={() => setRightPanelOpen(true)}
-          accent={arcSuggestions.length > 0 ? getEntityColor('arc') : undefined}
-          title="Open the side panel: suggestions, information, arcs"
-        />
 
-        <div style={{ position: 'relative' }}>
-          <ToolbarButton
-            label="New"
-            icon="+"
-            tourId="toolbar-new"
-            trailing={
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block', opacity: 0.75 }}>
-                <path d="m6 9 6 6 6-6" />
-              </svg>
-            }
-            onClick={() => setNewMenuOpen((v) => !v)}
-            active={newMenuOpen}
-            title="Create a card manually (without braindump)"
-          />
-          {newMenuOpen && (
-            <>
-              <div
-                onClick={() => setNewMenuOpen(false)}
-                style={{
-                  position: 'fixed',
-                  inset: 0,
-                  zIndex: 50,
-                  background: 'transparent',
-                }}
-              />
-              <div
-                style={{
-                  position: 'absolute',
-                  top: 'calc(100% + 6px)',
-                  right: 0,
-                  zIndex: 51,
-                  minWidth: 150,
-                  background: dark ? '#1a1a1e' : '#fff',
-                  border: dark ? '1px solid #2a2a30' : '1px solid #e3e5ea',
-                  borderRadius: 8,
-                  boxShadow: '0 8px 24px rgba(15,18,30,0.12)',
-                  padding: 5,
-                  fontFamily: 'system-ui, sans-serif',
-                }}
-              >
-                {(['character', 'event', 'location', 'arc'] as CreateModalKind[]).map((kind) => (
-                  <button
-                    key={kind}
-                    onClick={() => openCreateModal(kind)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      width: '100%',
-                      textAlign: 'left',
-                      background: 'transparent',
-                      border: 'none',
-                      padding: '7px 10px',
-                      fontSize: 12,
-                      fontWeight: 500,
-                      color: dark ? '#d6d6de' : '#2c3140',
-                      cursor: 'pointer',
-                      borderRadius: 6,
-                      fontFamily: 'inherit',
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = '#f4f5f7')}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-                  >
-                    <span
-                      style={{
-                        width: 8, height: 8, borderRadius: '50%',
-                        background: getEntityColor(kind), flexShrink: 0,
-                      }}
-                    />
-                    {kind.charAt(0).toUpperCase() + kind.slice(1)}
-                  </button>
-                ))}
-                <button
-                  onClick={openCreateInfoModal}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    width: '100%',
-                    textAlign: 'left',
-                    background: 'transparent',
-                    border: 'none',
-                    padding: '7px 10px',
-                    fontSize: 12,
-                    fontWeight: 500,
-                    color: dark ? '#d6d6de' : '#2c3140',
-                    cursor: 'pointer',
-                    borderRadius: 6,
-                    fontFamily: 'inherit',
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = '#f4f5f7')}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-                  title="A story fact — established in a scene, trackable by who knows it"
-                >
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: INFO_ACCENT, flexShrink: 0 }} />
-                  Information
-                </button>
-              </div>
-            </>
-          )}
-        </div>
 
         {/* Demo-project reset — only on demo_ projectIds (server-side gate
             requires this prefix anyway). Two-click confirm to avoid accidents. */}
@@ -5331,6 +6361,9 @@ export default function FreeformCorkboard() {
         message={braindumpMsg}
         onSubmit={onSubmitBraindump}
         onClose={() => setBraindumpOpen(false)}
+        intent={dockIntent}
+        onIntentChange={handleDockIntent}
+        showIntent={aliveEntities.some((e) => e.type === 'event' || e.type === 'sequence')}
         onFocusChange={setBraindumpFocused}
         floating={
           toolbarStuck
@@ -5480,6 +6513,23 @@ export default function FreeformCorkboard() {
           cursor: draggingId ? 'grabbing' : 'default',
         }}
       >
+        {/* First screen on an empty board — the two ways in, in the middle of
+            the screen instead of buried in toolbar chrome. Suppressed while
+            the wow tour is driving (it has its own script), while a braindump
+            is mid-flight (cards are seconds away — offering "start here" then
+            reads as if the run failed), and while the dock is already open
+            with the writer typing into it. (FIL-587) */}
+        {aliveEntities.length === 0 &&
+          !wowActive &&
+          braindumpPhase !== 'submitting' &&
+          braindumpPhase !== 'extracting' &&
+          !braindumpOpen && (
+            <BoardEmptyState
+              onBraindump={() => setBraindumpOpen(true)}
+              onCreate={openCreateModal}
+              onImport={() => scriptInputRef.current?.click()}
+            />
+          )}
         {/* SVG overlay — PRECEDES + structural connectors. Sits behind cards
             (rendered first, lower z-index). pointer-events: none so it
             doesn't block card drags. Dimmed during focus mode. */}
@@ -5488,7 +6538,7 @@ export default function FreeformCorkboard() {
           height={canvasH}
           entities={aliveEntities}
           positions={positions}
-          edges={gridActive ? { ...data.edges, precedes: [], sequence_precedes: [] } : data.edges}
+          edges={gridActive ? { ...(aliveEdges ?? data.edges), precedes: [], sequence_precedes: [] } : (aliveEdges ?? data.edges)}
           expandedCardId={expandedCardId}
           hoveredCardId={hoveredCardId}
           forcedTie={wowTie}
@@ -5542,9 +6592,10 @@ export default function FreeformCorkboard() {
               <path
                 key={`gridseq-${g.runKey}`}
                 d={gridRegionPath(g.spans)}
-                fill={hexToRgba(g.color, 0.05)}
+                fill={hexToRgba(g.color, g.empty ? 0.03 : 0.05)}
                 stroke={hexToRgba(g.color, 0.45)}
                 strokeWidth={1.5}
+                strokeDasharray={g.empty ? '6 5' : undefined}
                 strokeLinejoin="round"
               />
             ))}
@@ -5576,6 +6627,26 @@ export default function FreeformCorkboard() {
               >
                 {g.name || 'Sequence'}
               </div>
+              {g.empty && (
+                <div style={{
+                  position: 'absolute', left: g.spans[0].x0 + PAD_OUT_GRID + 12, top: g.spans[0].y0 + PAD_OUT_GRID + 38,
+                  display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 8,
+                  fontFamily: 'system-ui, sans-serif', zIndex: 2,
+                }}>
+                  <span style={{ fontSize: 11, color: dark ? '#6e6e78' : '#aaa' }}>no scenes yet</span>
+                  <button
+                    onClick={() => openCreateSceneInSequence(g.seqId)}
+                    style={{
+                      fontSize: 11.5, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
+                      padding: '4px 10px', borderRadius: 999,
+                      border: `1px solid ${hexToRgba(g.color, 0.6)}`, color: g.color,
+                      background: dark ? '#141417' : '#fff',
+                    }}
+                  >
+                    + Add a scene
+                  </button>
+                </div>
+              )}
               {/* Hover card — same header card the master container shows,
                   dropped below the chip. */}
               <div
@@ -5855,7 +6926,7 @@ export default function FreeformCorkboard() {
                 // drag-to-connect there (write PRECEDES from column/master).
                 tourGate.active || gridActive
                   ? undefined
-                  : entity.type === 'event' || entity.type === 'character'
+                  : entity.type === 'event' || entity.type === 'character' || entity.type === 'sequence'
                   ? (e) => onLinkHandleMouseDown(e, entity.id)
                   : undefined
               }
@@ -5984,6 +7055,83 @@ export default function FreeformCorkboard() {
           );
         })}
 
+        {/* Grid placement surface (Placement Control v1c) — canvas-local so
+            the toolbar and the braindump dock stay visible and usable. Also
+            mounts mid-drag as the spine drop's surface (same seams, drops
+            instead of taps). */}
+        {gridMounted && data && (() => {
+          // Wall geometry = the VISIBLE canvas slice in canvas coords, not the
+          // canvas element: canvasW tracks content extent and can be far wider
+          // than the screen (the clipped-right-margin bug). CSS zoom scales
+          // rects, so divide back. The grid freezes these at mount.
+          const z = zoomRef.current || 1;
+          const rect = canvasRef.current?.getBoundingClientRect();
+          const winW = typeof window !== 'undefined' ? window.innerWidth : 1400;
+          const viewW = rect
+            ? Math.max(0, Math.min(rect.right, winW) - Math.max(rect.left, 0)) / z
+            : winW;
+          const viewOrigin = rect
+            ? { x: Math.max(0, -rect.left) / z, y: Math.max(0, -rect.top) / z }
+            : { x: 0, y: 0 };
+          // Compare focus (a strip row is expanded): the wall goes view-only,
+          // centered on the target. The panel drawer covers the right 420
+          // visual px, so the wall wraps in what remains. A live drag wins
+          // over focus (drag start clears the spotlight).
+          const focusInfo = !placingStaged && stagedSpotlight
+            ? {
+                id: stagedSpotlight.targetId,
+                ghostTitle: stagedRows.find((r) => r.cardId === stagedSpotlight.cardId)?.title,
+              }
+            : null;
+          const effViewW = focusInfo ? Math.max(0, viewW - 420 / z) : viewW;
+          return (
+          <PlacementGrid
+            open={gridOpen}
+            onExited={() => setGridMounted(false)}
+            select={wrapSeq ? { selectedIds: wrapSeq.selected, onToggle: toggleWrapSelect } : null}
+            dropCard={placingStaged
+              ? { title: placingStagedRow?.title ?? String((data.entities.find((e) => e.id === placingStaged.cardId) ?? {}).working_title ?? '') }
+              : null}
+            onDrop={onPlaceStagedDrop}
+            noMerge={!!placingStaged?.fresh}
+            onLeaveUnplaced={placingStaged?.fresh ? () => {
+              setPlacingStaged(null);
+              setLinkNotice('Left unplaced — connect it any time with the link orb.');
+            } : undefined}
+            viewOrigin={viewOrigin}
+            focus={focusInfo}
+            entities={placingStaged ? aliveEntities.filter((e) => e.id !== placingStaged.cardId) : aliveEntities}
+            contains={data.edges?.contains ?? []}
+            eventOrder={(() => {
+              const scenes = aliveEntities.filter((e) => e.type === 'event');
+              return scenes
+                .map((e) => e.id)
+                .sort((a, b) => (sceneNoById.get(a) ?? 1e9) - (sceneNoById.get(b) ?? 1e9) || eventOrder.indexOf(a) - eventOrder.indexOf(b));
+            })()}
+            positions={positions}
+            canvasWidth={effViewW}
+            onPick={(pick) => placingStaged ? onPlaceStagedDrop(pick) : setDockIntent({
+              mode: 'spot', targetId: pick.targetId, targetTitle: pick.targetTitle,
+              ...(pick.containment ? { containment: pick.containment } : {}),
+              ...(pick.position ? { position: pick.position } : {}),
+              ...(pick.action ? { action: pick.action } : {}),
+            })}
+            onCancel={() => {
+              setPlacingStaged(null);
+              setStagedSpotlight(null);
+              setWrapSeq(null);
+              setDockIntent((cur) => (cur.mode === 'picking' ? { mode: 'auto' } : cur));
+            }}
+            dark={dark}
+          />
+          );
+        })()}
+
+        {/* Strip spotlight: the compare view is now the WALL in focus mode
+            (mounted above with the placement grid) - the board morphs into
+            reading order, the target cell rings peer-blue, and the viewport
+            centers on it. The old on-board vignette + ghost went with it. */}
+
         {/* Focus scrim — BOARD-scoped (inside the canvas, so the toolbar and
             panels stay live). Sits above ordinary cards (z 1/20), below the
             focal+peer pair (145). A blue ambient lamp radiates from the pair
@@ -6023,6 +7171,72 @@ export default function FreeformCorkboard() {
         )}
       </div>
 
+      {/* New → Sequence form over the wall picker. */}
+      {wrapSeq && (
+        <div
+          style={{
+            position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+            zIndex: 160, display: 'flex', alignItems: 'center', gap: 10,
+            padding: '10px 14px', borderRadius: 12,
+            background: theme === 'dark' ? 'rgba(20,22,28,0.97)' : 'rgba(255,255,255,0.98)',
+            border: `1.5px solid ${getEntityColor('sequence')}`, boxShadow: '0 8px 28px rgba(0,0,0,0.3)',
+            fontFamily: 'system-ui, sans-serif', fontSize: 12.5, color: theme === 'dark' ? '#e8e8ec' : '#222',
+          }}
+        >
+          <span style={{ color: theme === 'dark' ? '#8b8b96' : '#777', whiteSpace: 'nowrap' }}>
+            {wrapSeq.busy
+              ? 'Creating…'
+              : wrapSeq.selected.size > 0
+                ? `${wrapSeq.selected.size} scene${wrapSeq.selected.size === 1 ? '' : 's'} picked`
+                : 'Tap loose scenes, or create it empty'}
+          </span>
+          <input
+            autoFocus
+            value={wrapSeq.name}
+            onChange={(e) => setWrapSeq((w) => (w ? { ...w, name: e.target.value } : w))}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !wrapSeq.busy) onCreateWrapSequence(wrapSeq.selected.size > 0); }}
+            disabled={wrapSeq.busy}
+            placeholder="Sequence name"
+            className="cb-cc-field"
+            style={{
+              width: 240, padding: '7px 10px', borderRadius: 8, fontSize: 13, fontFamily: 'inherit',
+              border: `1px solid ${hexToRgba(getEntityColor('sequence'), 0.55)}`, outline: 'none',
+              background: theme === 'dark' ? '#15161b' : '#fff', color: 'inherit',
+            }}
+          />
+          <button
+            onClick={() => onCreateWrapSequence(true)}
+            disabled={wrapSeq.busy || wrapSeq.selected.size === 0}
+            style={{
+              padding: '7px 12px', borderRadius: 8, border: 'none', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', fontFamily: 'inherit',
+              background: getEntityColor('sequence'), color: '#fff',
+              opacity: wrapSeq.selected.size === 0 ? 0.45 : wrapSeq.busy ? 0.7 : 1,
+              whiteSpace: 'nowrap', transform: wrapSeq.busy ? 'scale(0.97)' : 'none', transition: 'transform 80ms, opacity 120ms',
+            }}
+          >
+            {wrapSeq.busy && wrapSeq.selected.size > 0 ? 'Wrapping…' : wrapSeq.selected.size > 0 ? `Wrap ${wrapSeq.selected.size}` : 'Wrap'}
+          </button>
+          <button
+            onClick={() => onCreateWrapSequence(false)}
+            disabled={wrapSeq.busy}
+            style={{
+              padding: '7px 12px', borderRadius: 8, fontWeight: 600, fontSize: 12.5, cursor: 'pointer', fontFamily: 'inherit',
+              background: 'transparent', color: getEntityColor('sequence'), border: `1px solid ${getEntityColor('sequence')}`,
+              whiteSpace: 'nowrap', opacity: wrapSeq.busy ? 0.7 : 1,
+              transform: wrapSeq.busy ? 'scale(0.97)' : 'none', transition: 'transform 80ms, opacity 120ms',
+            }}
+          >
+            {wrapSeq.busy && wrapSeq.selected.size === 0 ? 'Creating…' : 'Create empty'}
+          </button>
+          <button
+            onClick={() => setWrapSeq(null)}
+            style={{ background: 'transparent', border: 'none', color: theme === 'dark' ? '#8b8b96' : '#777', cursor: 'pointer', fontSize: 12.5, fontFamily: 'inherit', whiteSpace: 'nowrap' }}
+          >
+            cancel (Esc)
+          </button>
+        </div>
+      )}
+
       {/* Link-action toast — confirms drag-to-connect actions that leave no
           connector on the board (cast adds, structural ties), and surfaces link
           errors. Bottom-center, auto-clears. */}
@@ -6040,6 +7254,18 @@ export default function FreeformCorkboard() {
           onClick={() => { setLinkNotice(null); setLinkError(null); }}
         >
           {linkError ?? linkNotice}
+          {!linkError && linkNoticeAction && (
+            <button
+              onClick={(e) => { e.stopPropagation(); linkNoticeAction.run(); }}
+              style={{
+                marginLeft: 12, background: 'transparent', border: `1px solid ${theme === 'dark' ? '#2f5e2f' : '#bbf7d0'}`,
+                color: 'inherit', borderRadius: 6, padding: '2px 9px', fontSize: 12, fontWeight: 700,
+                cursor: 'pointer', fontFamily: 'inherit',
+              }}
+            >
+              {linkNoticeAction.label}
+            </button>
+          )}
         </div>
       )}
 
@@ -6080,6 +7306,12 @@ export default function FreeformCorkboard() {
         <RightPanel
           information={data.information ?? []}
           suggestions={arcSuggestions}
+          staged={stagedRows}
+          onAnswerStaged={(cardId, answer) => { setStagedSpotlight(null); onAnswerStaged(cardId, answer); }}
+          onStagedSpotlight={onStagedSpotlight}
+          onPlaceDragStart={(cardId) => { setStagedSpotlight(null); setPlacingStaged({ cardId }); }}
+          onPlaceDragEnd={() => setPlacingStaged(null)}
+          hidden={placingStaged !== null}
           arcs={aliveEntities.filter((e) => e.type === 'arc')}
           locations={aliveEntities.filter((e) => e.type === 'location')}
           occursIn={data.edges?.occurs_in ?? []}
@@ -6091,7 +7323,7 @@ export default function FreeformCorkboard() {
           onDismissSuggestion={onDismissArcSuggestion}
           onOpenCard={(cardId) => setSheetCardId(cardId)}
           onEntitiesChanged={refreshEntities}
-          onClose={() => setRightPanelOpen(false)}
+          onClose={() => { setStagedSpotlight(null); setRightPanelOpen(false); }}
           openSection={panelForceSection}
         />
       )}
@@ -6306,8 +7538,12 @@ export default function FreeformCorkboard() {
           setDescription={setCreateDesc}
           precededBy={createPrecededBy}
           setPrecededBy={setCreatePrecededBy}
+          insideSequence={createIntoSequenceId ? (() => {
+            const sq = (data?.entities ?? []).find((e) => e.id === createIntoSequenceId);
+            return { id: createIntoSequenceId, name: String(sq?.working_title ?? sq?.working_name ?? '') };
+          })() : null}
           eventOptions={(data?.entities ?? [])
-            .filter((e) => e.type === 'event' && !e.deleted_at)
+            .filter((e) => e.type === 'event' && !e.deleted_at && e.staged !== '1')
             .map((e) => ({
               id: e.id,
               label: e.working_title ?? e.working_name ?? e.id,
@@ -6365,7 +7601,7 @@ export default function FreeformCorkboard() {
             >
               <option value="">Choose the scene where this is established…</option>
               {(data?.entities ?? [])
-                .filter((e) => e.type === 'event' && !e.deleted_at)
+                .filter((e) => e.type === 'event' && !e.deleted_at && e.staged !== '1')
                 .map((e) => ({ id: e.id, label: e.working_title ?? e.working_name ?? e.id }))
                 .sort((a, b) => a.label.localeCompare(b.label))
                 .map((o) => (

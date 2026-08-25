@@ -95,6 +95,31 @@ export function BallChip({
 // styles per house posture). `accent` tints the button (badges/active states).
 // =====================================================================
 
+/** Remap a #rrggbb channel-wise. Shared by the create-button's gradient stops
+ *  and its hover shade — kept local, the only caller is ToolbarButton. */
+function mapHex(hex: string, f: (v: number) => number): string {
+  const h = hex.replace('#', '');
+  if (h.length !== 6) return hex;
+  const ch = (i: number) => Math.max(0, Math.min(255, Math.round(f(parseInt(h.slice(i, i + 2), 16)))));
+  return `#${[ch(0), ch(2), ch(4)].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+}
+/** Toward black by pct. */
+const darken = (hex: string, pct: number) => mapHex(hex, (v) => v - (v * pct) / 100);
+/** Toward WHITE by pct — not "scale the channels up", which clamps the already-
+ *  hot channel and drags the hue (orange goes yellow). Mixing toward white keeps
+ *  the hue and just lifts the value, so one formula reads right for the warm
+ *  accent and the cool one alike. */
+const tint = (hex: string, pct: number) => mapHex(hex, (v) => v + ((255 - v) * pct) / 100);
+
+/** The create group's fill: one 135° two-stop gradient generated FROM the
+ *  accent, so New (blue) and Braindump (orange) are visibly the same kind of
+ *  button in two colors rather than two differently-styled buttons. Matches the
+ *  braindump field's own gradient and the empty state's primary CTA. */
+function createGradient(accent: string, pressed: boolean): string {
+  const base = pressed ? darken(accent, 8) : accent;
+  return `linear-gradient(135deg, ${base} 0%, ${tint(base, 16)} 100%)`;
+}
+
 export function ToolbarButton({
   label,
   icon,
@@ -105,6 +130,9 @@ export function ToolbarButton({
   active,
   title,
   tourId,
+  prominent,
+  collapsed,
+  large,
 }: {
   label: string;
   icon?: React.ReactNode;
@@ -119,12 +147,27 @@ export function ToolbarButton({
   title?: string;
   /** Anchor for the wow coachmark (FIL-506). */
   tourId?: string;
+  /** FIL-587 — the two CREATE actions (New, Braindump) read as filled,
+   *  solid-colored buttons instead of the outlined default, so the eye lands
+   *  on them first. Every other control keeps the quiet outlined posture;
+   *  prominence only works if almost nothing else claims it. Requires accent. */
+  prominent?: boolean;
+  /** Icon-only at rest; the label slides out on hover (Ben 2026-08-23, for
+   *  the quiet right-cluster controls: undo/redo, trash). Requires icon. */
+  collapsed?: boolean;
+  /** Prominent SIZING without the fill (Ben 2026-08-23): Import rides the
+   *  create group at New/Braindump's height but keeps the quiet outline. */
+  large?: boolean;
 }) {
   const [hover, setHover] = useState(false);
+  const folded = !!collapsed && !!icon && !hover;
   const dark = useThemeMode() === 'dark';
-  const tinted = !!accent;
+  const solid = !!prominent && !!accent && !disabled;
+  const tinted = !!accent && !solid;
   const bg = disabled
     ? 'transparent'
+    : solid
+    ? createGradient(accent!, active || hover)
     : tinted
     ? hexToRgba(accent!, active || hover ? (dark ? 0.22 : 0.16) : dark ? 0.14 : 0.1)
     : active
@@ -134,6 +177,8 @@ export function ToolbarButton({
     : dark ? '#1a1a1e' : '#fff';
   const border = disabled
     ? dark ? '#26262a' : '#ececec'
+    : solid
+    ? accent!
     : tinted
     ? hexToRgba(accent!, 0.55)
     : active || hover
@@ -141,6 +186,8 @@ export function ToolbarButton({
     : dark ? '#2a2a30' : '#e3e5ea';
   const color = disabled
     ? dark ? '#55555c' : '#c0c0c0'
+    : solid
+    ? '#fff'
     : tinted
     ? accent!
     : dark ? '#c8c8d0' : '#3d4250';
@@ -155,23 +202,36 @@ export function ToolbarButton({
         display: 'inline-flex',
         alignItems: 'center',
         gap: 6,
-        height: 30,
-        padding: '0 12px',
-        fontSize: 12,
-        fontWeight: 600,
+        height: solid || large ? 34 : 30,
+        padding: solid || large ? '0 16px' : folded ? '0 8px' : '0 12px',
+        fontSize: solid || large ? 12.5 : 12,
+        fontWeight: solid || large ? 700 : 600,
         letterSpacing: 0.1,
         border: `1px solid ${border}`,
         borderRadius: 7,
         background: bg,
         color,
+        boxShadow: solid ? `0 1px 8px ${hexToRgba(accent!, 0.38)}` : 'none',
         cursor: disabled ? 'not-allowed' : 'pointer',
         fontFamily: 'system-ui, sans-serif',
-        transition: 'background 120ms ease-out, border-color 120ms ease-out',
+        transition: 'background 120ms ease-out, border-color 120ms ease-out, padding 160ms ease-out',
         whiteSpace: 'nowrap',
       }}
     >
       {icon && <span style={{ fontSize: 13, lineHeight: 1 }}>{icon}</span>}
-      {label}
+      {collapsed && icon ? (
+        <span
+          aria-label={label}
+          style={{
+            display: 'inline-block', overflow: 'hidden', verticalAlign: 'middle',
+            maxWidth: folded ? 0 : 160, opacity: folded ? 0 : 1,
+            marginLeft: folded ? -6 : 0,
+            transition: 'max-width 160ms ease-out, opacity 120ms ease-out, margin-left 160ms ease-out',
+          }}
+        >
+          {label}
+        </span>
+      ) : label}
       {trailing && <span style={{ display: 'inline-flex', lineHeight: 1, marginLeft: 1 }}>{trailing}</span>}
     </button>
   );
@@ -193,6 +253,12 @@ export function ToolbarButton({
 // entities land on the canvas when the braindump_complete WS event arrives.
 // =====================================================================
 
+export type DockIntentValue =
+  | { mode: 'auto' }
+  | { mode: 'aside' }
+  | { mode: 'picking' }
+  | { mode: 'spot'; targetId: string; targetTitle: string; containment?: 'none'; position?: 'before'; action?: 'merge' };
+
 export function BraindumpDock({
   open,
   text,
@@ -201,6 +267,9 @@ export function BraindumpDock({
   message,
   onSubmit,
   onClose,
+  intent,
+  onIntentChange,
+  showIntent,
   floating,
   onFocusChange,
 }: {
@@ -211,6 +280,11 @@ export function BraindumpDock({
   message: string | null;
   onSubmit: () => void;
   onClose: () => void;
+  /** Placement Control v1c — the dock intent ("this goes…"). */
+  intent?: DockIntentValue;
+  onIntentChange?: (i: DockIntentValue) => void;
+  /** Only append dumps get the row (a first dump has nowhere to point). */
+  showIntent?: boolean;
   /** When the toolbar is riding the viewport (stuck), the dock pops out fixed
    *  right below it instead of opening back at the top of the page. */
   floating?: { top: number; left: number; width: number } | null;
@@ -219,8 +293,25 @@ export function BraindumpDock({
   onFocusChange?: (focused: boolean) => void;
 }) {
   const busy = phase === 'submitting' || phase === 'extracting';
-  const tooShort = text.trim().length > 0 && text.trim().length < 20;
-  const canSubmit = !busy && !tooShort && text.trim().length > 0;
+  // Scroll-jump fix: when the dock switches to floating (position: fixed), it
+  // leaves the flow and the board lurches up by the dock's height. Keep a
+  // same-height spacer in the flow while floating so scrolling is continuous.
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [flowH, setFlowH] = useState(0);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      if (!floating) setFlowH(el.offsetHeight);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [floating]);
+  // No minimum length. The 20-char floor was a leftover from the generative
+  // side's brainstorm gate; on the corkboard a two-word dump ("Frank betrays
+  // Roy") is a legitimate card and the writer shouldn't be argued with about
+  // it. Any non-empty text extracts. (FIL-590)
+  const canSubmit = !busy && text.trim().length > 0;
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const dark = useThemeMode() === 'dark';
   const [focused, setFocused] = useState(false);
@@ -247,7 +338,10 @@ export function BraindumpDock({
   };
 
   return (
+    <>
+    {floating && open && <div style={{ height: flowH, marginBottom: 12 }} aria-hidden />}
     <div
+      ref={rootRef}
       data-tour="braindump-dock"
       style={{
         ...(floating
@@ -324,17 +418,65 @@ export function BraindumpDock({
             </span>
           )}
           <span style={{ fontSize: 11, color: phase === 'error' ? '#ef4444' : dark ? '#7a7a84' : '#9a9aa4', lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {message ?? (tooShort ? 'Keep going — at least 20 characters.' : '')}
+            {message ?? ''}
           </span>
         </div>
-        {/* Floating action inside the field, like the Home panel. */}
+        {/* Floating controls inside the field, bottom-right: the dock intent
+            chips (Placement Control v1c) + the action button. */}
+        <div style={{ position: 'absolute', bottom: 16, right: 16, zIndex: 2, display: 'flex', alignItems: 'center', gap: 10 }}>
+        {showIntent && intent && onIntentChange && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: dark ? '#8a8a94' : '#9a9aa4', fontFamily: 'system-ui, sans-serif' }}>
+            <IntentChoice
+              label="auto"
+              tip="The system places this dump's new cards where they fit. Anything it can't place with confidence waits for you in the panel."
+              active={intent.mode === 'auto'}
+              dark={dark}
+              onClick={() => onIntentChange({ mode: 'auto' })}
+            />
+            {intent.mode === 'spot' ? (
+              <span
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                  padding: '2px 8px', borderRadius: 999,
+                  border: '1px solid #ff8c42', color: '#ff8c42', fontWeight: 600,
+                  maxWidth: 240,
+                }}
+              >
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {intent.targetTitle}
+                </span>
+                <button
+                  onClick={() => onIntentChange({ mode: 'auto' })}
+                  title="Clear the spot"
+                  style={{ background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer', padding: 0, fontSize: 12, lineHeight: 1 }}
+                >
+                  ×
+                </button>
+              </span>
+            ) : (
+              <IntentChoice
+                label={intent.mode === 'picking' ? 'tap a spot on the board…' : 'somewhere specific'}
+                tip="Point at the story first: the board morphs into reading order and you tap a gap, a card to merge into, or a sequence. This dump's new cards land there."
+                active={intent.mode === 'picking'}
+                dark={dark}
+                onClick={() => onIntentChange(intent.mode === 'picking' ? { mode: 'auto' } : { mode: 'picking' })}
+              />
+            )}
+            <IntentChoice
+              label="keep aside"
+              tip="Nothing touches the board: everything from this dump waits in the panel until you place it yourself. There's no deadline."
+              active={intent.mode === 'aside'}
+              dark={dark}
+              onClick={() => onIntentChange(intent.mode === 'aside' ? { mode: 'auto' } : { mode: 'aside' })}
+            />
+          </div>
+        )}
         {text.trim().length > 0 && (
           <button
             onClick={onSubmit}
             disabled={!canSubmit}
-            title={tooShort ? 'Need at least 20 characters' : '⌘+Enter'}
+            title="⌘+Enter"
             style={{
-              position: 'absolute', bottom: 16, right: 16, zIndex: 2,
               height: 34, padding: '0 18px', fontSize: 12.5, fontWeight: 600,
               border: 'none', borderRadius: 12,
               background: canSubmit
@@ -356,7 +498,32 @@ export function BraindumpDock({
             {phase === 'submitting' ? 'Queueing…' : phase === 'extracting' ? 'Extracting…' : 'Process into Cards'}
           </button>
         )}
+        </div>
       </div>
     </div>
+    </>
   );
+}
+
+function IntentChoice({ label, tip, active, dark, onClick }: {
+  label: string; tip?: string; active: boolean; dark: boolean; onClick: () => void;
+}) {
+  const btn = (
+    <button
+      onClick={onClick}
+      style={{
+        padding: '2px 8px', borderRadius: 999, fontSize: 11.5, fontFamily: 'inherit',
+        border: `1px solid ${active ? '#ff8c42' : dark ? '#33333a' : '#ddd'}`,
+        background: active ? 'rgba(255,140,66,0.12)' : 'transparent',
+        color: active ? '#ff8c42' : dark ? '#8a8a94' : '#9a9aa4',
+        fontWeight: active ? 600 : 400, cursor: 'pointer',
+        transition: 'color 120ms, border-color 120ms, background 120ms',
+      }}
+    >
+      {label}
+    </button>
+  );
+  // Tooltip above the chip (the chips sit at the field's bottom edge, so a
+  // below-tooltip would collide with the Process button / page chrome).
+  return tip ? <HoverTip text={tip} placement="top" accent="#ff8c42" width={240}>{btn}</HoverTip> : btn;
 }

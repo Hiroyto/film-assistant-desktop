@@ -379,7 +379,7 @@ export default function WowFlow({
           'It grouped your plot into sequences.',
           <>
             A sequence is a section of your plot: a run of scenes with its own
-            arc, the chapters of your outline. The engine grouped the broad
+            arc, the chapters of your beats. The engine grouped the broad
             strokes you wrote into these movements.
           </>,
         ),
@@ -592,7 +592,7 @@ export default function WowFlow({
       ...bento(
         id,
         'A living link to your work.',
-        'The peer keeps its open questions here. Every answer you give updates this card and ripples through your outline, a living link to your development, not a static form. It grows as you do.',
+        'The peer keeps its open questions here. Every answer you give updates this card and ripples through your beats, a living link to your development, not a static form. It grows as you do.',
       ),
       nextLabel: 'Now try the peer →',
       onExit: () => { onOpenSheet(null); setPhase('guide-ask'); },
@@ -636,17 +636,17 @@ export default function WowFlow({
         {
           id: 'wow-tb-new',
           selector: '[data-tour="toolbar-new"]',
-          content: stepBody('Build by hand, too.', 'Add a scene, character, or arc yourself anytime. The engine wires each new card into your outline.'),
+          content: stepBody('Build by hand, too.', 'Add a scene, character, or arc yourself anytime. The engine wires each new card into your beats.'),
         },
         {
           id: 'wow-tb-views',
           selector: '[data-tour="toolbar-views"]',
-          content: stepBody('See it your way.', 'Switch views: the free-form board, the character web, or your outline in story order.'),
+          content: stepBody('See it your way.', 'Switch views: the free-form board, the character web, or your beats in story order.'),
         },
         {
           id: 'wow-tb-script',
           selector: '[data-tour="toolbar-script"]',
-          content: stepBody('Then draft the pages.', 'Script turns this outline into real screenplay pages. Your scenes wait there as slots, and a peer reads what you write. Your first visit walks you through it.'),
+          content: stepBody('Then draft the pages.', 'Script turns these beats into real screenplay pages. Your scenes wait there as slots, and a peer reads what you write. Your first visit walks you through it.'),
         },
         {
           id: 'wow-tb-import',
@@ -731,7 +731,7 @@ export default function WowFlow({
         {phase === 'answer' && (
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 12 }} style={bannerBottom(ORANGE)}>
             <div style={{ fontSize: 14, lineHeight: 1.55, color: '#ff8c42' }}>
-              This is the peer. It read your card and everything around it, then pushed back with the sharpest questions in your story. Answer one whenever you like and your outline grows from your take.
+              This is the peer. It read your card and everything around it, then pushed back with the sharpest questions in your story. Answer one whenever you like and your beats grow from your take.
             </div>
             <button
               onClick={() => { wowEvent('peer_seen'); setPhase('toolbar-tour'); }}

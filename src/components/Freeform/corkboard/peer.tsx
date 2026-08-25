@@ -215,7 +215,7 @@ export function usePeerSession({
           const verdict = await checkSceneStaleness({ projectId, eventId: cardId }, token);
           if (!aliveRef.current) return;
           if (verdict.stale) {
-            setStatusLine('Catching your outline up to your pages…');
+            setStatusLine('Catching your beats up to your pages…');
             await enqueueSceneExtraction(
               { projectId, eventId: cardId, userId, fromStorage: true },
               token,

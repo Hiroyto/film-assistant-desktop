@@ -586,6 +586,7 @@ export function CreateCardModal({
   precededBy,
   setPrecededBy,
   eventOptions,
+  insideSequence,
   submitting,
   error,
   collision,
@@ -605,6 +606,9 @@ export function CreateCardModal({
   setPrecededBy: (id: string) => void;
   /** All alive events in the project, ordered for display in the Follows select. */
   eventOptions: Array<{ id: string; label: string; narrativeStatus?: string }>;
+  /** Event only — when set, the new scene nests inside this sequence (the
+   *  Beats grid's "+ Add a scene" on an empty sequence cell). */
+  insideSequence?: { id: string; name: string } | null;
   submitting: boolean;
   error: string | null;
   collision: { cardId: string; name: string; deleted: boolean } | null;
@@ -628,7 +632,7 @@ export function CreateCardModal({
     }
   };
 
-  const label = kind.charAt(0).toUpperCase() + kind.slice(1);
+  const label = kind === 'event' ? 'Scene' : kind.charAt(0).toUpperCase() + kind.slice(1);
   const accent = getEntityColor(kind);
 
   const labelStyle: React.CSSProperties = {
@@ -795,31 +799,19 @@ export function CreateCardModal({
               style={fieldStyle}
             />
 
-            {kind === 'event' && eventOptions.length > 0 && (
-              <>
-                <label style={labelStyle}>
-                  Follows <span style={{ color: dark ? '#63636d' : '#bbb', fontWeight: 400 }}>(optional)</span>
-                </label>
-                <SearchSelect
-                  value={precededBy}
-                  onChange={setPrecededBy}
-                  disabled={submitting}
-                  accent={accent}
-                  placeholder="(unconnected, no predecessor)"
-                  searchPlaceholder="Search events…"
-                  options={[
-                    { id: '', label: '(unconnected, no predecessor)' },
-                    ...eventOptions.map((o) => ({
-                      id: o.id,
-                      label: o.label,
-                      sublabel:
-                        o.narrativeStatus && o.narrativeStatus !== 'on_screen'
-                          ? o.narrativeStatus
-                          : undefined,
-                    })),
-                  ]}
-                />
-              </>
+            {kind === 'event' && insideSequence && (
+              <div style={{ fontSize: 11.5, color: dark ? '#a9a9b3' : '#666', margin: '2px 0 10px', lineHeight: 1.5 }}>
+                Inside the sequence <b style={{ color: dark ? '#7fdca6' : '#2f8f5a' }}>{insideSequence.name || 'Sequence'}</b>
+              </div>
+            )}
+            {/* The "Follows" dropdown is RETIRED (Ben 2026-08-23): placement
+                happens on the wall after create — the board morphs into the
+                picker and the writer taps the seam (same flow as an empty
+                sequence). Born-in-sequence creates still nest directly. */}
+            {kind === 'event' && !insideSequence && (
+              <div style={{ fontSize: 11.5, color: dark ? '#8a8a93' : '#8a8578', margin: '2px 0 10px', lineHeight: 1.5 }}>
+                After creating, you'll tap where it goes in the story.
+              </div>
             )}
 
             <label style={labelStyle}>

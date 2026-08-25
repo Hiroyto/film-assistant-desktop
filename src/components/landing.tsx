@@ -6,6 +6,7 @@ import './landing-v2.css';
 import GlowHeadLogo from '../assets/images/glow-head.png';
 import FilmGrainVideo from '../assets/videos/login/35mm_G3_DIRTY_2s.mp4';
 import DesktopDownloadButtons from './DesktopDownloadButtons';
+import InternIcon from './Freeform/InternIcon';
 
 // Section dot colors, top to bottom, matching the connecting-line gradient
 const SECTION_DOTS = {
@@ -146,8 +147,12 @@ const PP_CHIP3_AT = PP_CHIP2_AT + 15;
 const PP_LOOP_TICKS = PP_CHIP3_AT + 130;
 
 // Join the Beta button with the film-grain overlay and the blue slide-over hover
-const BetaButton: React.FC<{ onClick: () => void; disabled?: boolean }> = ({ onClick, disabled }) => (
-  <div className="btn-overlay-container ld-cta-inline">
+// `variant` swaps the container-scoping class so the same button (orange base +
+// film-grain overlay + blue slide-over on hover) can render inline in the hero/
+// pricing (ld-cta-inline) or as the compact pill in the floating header
+// (ld-nav-cta).
+const BetaButton: React.FC<{ onClick: () => void; disabled?: boolean; variant?: string }> = ({ onClick, disabled, variant = 'ld-cta-inline' }) => (
+  <div className={`btn-overlay-container ${variant}`}>
     <button onClick={onClick} className="btn btn-primary" disabled={disabled}>
       <span className="btn-text">Join the Beta</span>
     </button>
@@ -364,7 +369,7 @@ const Landing: React.FC = () => {
               <button onClick={() => scrollTo(peerSectionRef)}>The Peer</button>
               <button onClick={() => scrollTo(pricingSectionRef)}>Pricing</button>
             </div>
-            <button className="ld-nav-cta" onClick={handleJoinBeta} disabled={isTransitioning}>Join the Beta</button>
+            <BetaButton onClick={handleJoinBeta} disabled={isTransitioning} variant="ld-nav-cta" />
           </div>
         </nav>
 
@@ -584,11 +589,11 @@ const Landing: React.FC = () => {
                       </div>
                     </div>
                     <svg className="ld-arcs ld-stream" style={{ animationDelay: '2.05s' }} viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-                      <path d="M 58,14 C 92,26 94,62 62,84" fill="none" stroke="#a78bfa" strokeWidth="1.6" opacity="0.85" vectorEffect="non-scaling-stroke" />
-                      <path d="M 58,52 C 84,60 86,84 60,94" fill="none" stroke="#d4a03d" strokeWidth="1.6" opacity="0.85" vectorEffect="non-scaling-stroke" />
+                      <path d="M 50,28.9 C 88,34 82,86 50,87.4" fill="none" stroke="#a78bfa" strokeWidth="1.6" opacity="0.85" vectorEffect="non-scaling-stroke" />
+                      <path d="M 50,58.1 C 80,64 84,86 50,87.4" fill="none" stroke="#d4a03d" strokeWidth="1.6" opacity="0.85" vectorEffect="non-scaling-stroke" />
                     </svg>
-                    <div className="ld-arc-label purple ld-stream" style={{ right: '3%', top: '34%', animationDelay: '2.35s' }}>the missing singer</div>
-                    <div className="ld-arc-label gold ld-stream" style={{ right: '6%', top: '72%', animationDelay: '2.55s' }}>the ledger thread</div>
+                    <div className="ld-arc-label purple ld-stream-c" style={{ left: '71.7%', top: '41.7%', animationDelay: '2.35s' }}>the missing singer</div>
+                    <div className="ld-arc-label gold ld-stream-c" style={{ left: '73.7%', top: '77%', animationDelay: '2.55s' }}>the ledger thread</div>
                   </div>
                 </div>
 
@@ -712,7 +717,7 @@ const Landing: React.FC = () => {
                             <div className="ld-xcard-cast">Marcus · the night attendant</div>
                             <div className="ld-xcard-foot">
                               <div className="ld-xcard-links"><span>open full sheet ↗</span><span>delete</span></div>
-                              <div className="ld-askpeer"><span className="ld-peer-glasses"></span>Ask peer</div>
+                              <div className="ld-askpeer"><InternIcon size={15} />Ask peer</div>
                             </div>
                           </div>
                         </div>
@@ -775,12 +780,6 @@ const Landing: React.FC = () => {
                 sequences, cast, and story facts. A full board from 120 pages in minutes.
               </p>
             </div>
-            <div className="ld-phases">
-              <span className="ld-phase done">READING</span>
-              <span className="ld-phase done">STRUCTURING</span>
-              <span className="ld-phase now">PROCESSING 4/5</span>
-              <span className="ld-phase">WIRING</span>
-            </div>
           </div>
         </section>
 
@@ -809,7 +808,7 @@ const Landing: React.FC = () => {
             <div>
               <div className={`ld-pp ${peerTick >= PP_PANEL_AT ? 'in' : ''}`}>
                 <div className="ld-heropeer-head">
-                  <span className="ld-peer-glasses"></span>
+                  <InternIcon size={15} />
                   <span>PEER · SCENE</span>
                   <span className="ld-heropeer-x">×</span>
                 </div>

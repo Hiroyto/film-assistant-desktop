@@ -417,6 +417,20 @@ export function HomePage(props: HomePageProps) {
       const seed = pendingBrainstormRef.current.trim();
       pendingBrainstormRef.current = '';
 
+      // Belt as well as braces (FIL-585): router state is the fast path, but
+      // it dies on a refresh and on any redirect that lands on the corkboard a
+      // second time — and the spark is the writer's FIRST sentence about their
+      // story. Park it under the story's own key too; the corkboard clears the
+      // key once it consumes it.
+      const parkSeed = (id: string) => {
+        if (!seed) return;
+        try {
+          sessionStorage.setItem(`ff-braindump-seed:${id}`, seed);
+        } catch {
+          /* private mode / quota — router state still carries it */
+        }
+      };
+
       // The corkboard owns its own state (freeform backend, keyed by storyId),
       // but the WORK RECORD (title + workflow tag) must land in the same store
       // the grid reads, so a corkboard story shows up beside outline stories and
@@ -437,6 +451,7 @@ export function HomePage(props: HomePageProps) {
         } catch (e) {
           console.error('freeform local save failed', e);
         }
+        parkSeed(newStoryId);
         navigate(`/freeform/${newStoryId}`, {
           state: { justCreated: true, ...(seed ? { braindump: seed } : null) },
         });
@@ -452,6 +467,7 @@ export function HomePage(props: HomePageProps) {
           if (result?.data?.statusCode !== 200) return; // limit error already surfaced
           const corkboardId = await resolveCreatedStoryId(newData.title, prevWorkKeys, newStoryId);
           markStoryWorkflow(corkboardId, 'freeform');
+          parkSeed(corkboardId);
           navigate(`/freeform/${corkboardId}`, {
             state: { justCreated: true, ...(seed ? { braindump: seed } : null) },
           });

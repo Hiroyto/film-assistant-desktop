@@ -1,6 +1,7 @@
 // components/Freeform/corkboard/panels.tsx — split out of freeform-corkboard.tsx (FIL-496).
 import React, { useState, useEffect } from 'react';
 import { getEntityColor, hexToRgba } from '../../../components/Freeform/entityColors';
+import { NOTE_FONT_SERIF } from '../../../components/Freeform/tokens';
 import { type EntityType } from '../../../components/Freeform/types';
 import { deleteInformation, listBraindumps, updateInformation, type ArcKind, type ArcSuggestion, type BraindumpLogEntry, type ProjectEntity, type ProjectInformation } from '../../../lib/freeformApi';
 import { InlineText } from './editors';
@@ -26,6 +27,455 @@ import { BallChip } from './toolbar';
 // =====================================================================
 
 export const INFO_ACCENT = '#0891b2'; // cyan — the Information layer's accent
+// The braindump's orange (dock chips, placement glow): the strip is the tail
+// end of a braindump, so its section header + added-material marks carry it.
+const BD_ORANGE = '#ff8c42';
+
+// =====================================================================
+// The staging strip (Placement Control v1b) — cards whose relationship to
+// the board is a question, not a write. A staged card IS its question; the
+// row grammar is the script docket's (one-line rows, tier tick, serif gist,
+// one row expanded at a time, single imperative primary action). Resting
+// unanswered is the DEFAULT state, not a failure — "keep it on the side for
+// now" is the absence of a click.
+// =====================================================================
+
+/** One strip row, joined FE-side: question + staged entity + target entity. */
+export interface StagedStripRow {
+  cardId: string;
+  kind: 'scene' | 'section';
+  questionType: 'merge_suggestion' | 'compare' | 'unplaced' | 'altitude';
+  title: string;
+  summary: string;
+  reason: string;
+  createdAt: string;
+  sourceBraindumpId: string;
+  /** The dump sentence(s) that minted this card (extraction's evidence_quote):
+   *  the writer's OWN words, the strip's orientation pin. */
+  evidenceQuote: string;
+  /** Whether the card is HELD off the board (staged). Altitude questions on a
+   *  sequence that has member scenes stay live on the board. */
+  held: boolean;
+  target: { id: string; title: string; summary: string } | null;
+}
+
+// The pin to the braindump itself: locate this card's material inside the
+// dump's prose and cut a window around it, so the writer re-reads their own
+// words before agreeing or disagreeing with the model's claim.
+//
+// The MODEL CLAIMS, the TEXT ILLUSTRATES (Ben: a change can be too subtle for
+// strict citation - a reframe, an implication - so the text is never the
+// authority on WHAT changed). The window is FOUND via the stamped
+// evidence_quote (often absent: empty-string props are dropped at write
+// time), else the dump sentence best token-matching `anchorText`. The
+// HIGHLIGHT then marks the sentences that express the model's claimed change
+// (`changeText`); when the change has no textual anchor, nothing hits and
+// the caller falls back to the model's own wording of it.
+function braindumpExcerpt(
+  prose: string | undefined,
+  quote: string | undefined,
+  anchorText: string | undefined,
+  changeText: string | undefined,
+): Array<{ text: string; hit: boolean }> | null {
+  const p = String(prose ?? '');
+  const q = (quote ?? '').trim();
+  const tok = (s: string) =>
+    s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((t) => t.length > 3);
+
+  const sents: Array<{ start: number; end: number; text: string }> = [];
+  const re = /[^.!?]+[.!?]?/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(p)) !== null) {
+    const lead = m[0].length - m[0].trimStart().length;
+    const text = m[0].trim();
+    if (text) sents.push({ start: m.index + lead, end: m.index + lead + text.length, text });
+  }
+
+  // 1. Anchor: quote span when it is stamped AND findable, else the sentence
+  //    best matching anchorText.
+  let anchor: { start: number; end: number } | null = null;
+  if (q) {
+    const i = p.toLowerCase().indexOf(q.toLowerCase());
+    if (i >= 0) anchor = { start: i, end: i + q.length };
+  }
+  if (!anchor) {
+    const want = new Set(tok(String(anchorText ?? '')));
+    if (want.size > 0) {
+      let bestScore = 0;
+      for (const s of sents) {
+        const t = tok(s.text);
+        if (t.length === 0) continue;
+        const hits = t.filter((w) => want.has(w)).length;
+        const score = hits / t.length;
+        if (hits >= 2 && score >= 0.25 && score > bestScore) {
+          bestScore = score;
+          anchor = { start: s.start, end: s.end };
+        }
+      }
+    }
+  }
+  if (!anchor) {
+    // Quote stamped but re-worded out of the prose: show it bare rather than
+    // guess (it is still near-verbatim writer material).
+    return q ? [{ text: q, hit: true }] : null;
+  }
+
+  // 2. Window + per-sentence highlight: a sentence hits when it expresses
+  //    the model's claimed change (token match against changeText). Subtle
+  //    changes match nothing, and that is correct - the caller shows the
+  //    model's wording instead of a false citation.
+  const wStart = Math.max(0, anchor.start - 130);
+  const wEnd = Math.min(p.length, anchor.end + 130);
+  const cTokens = new Set(tok(String(changeText ?? '')));
+  const expressesChange = (text: string) => {
+    if (cTokens.size === 0) return false;
+    const t = tok(text);
+    if (t.length === 0) return false;
+    const hits = t.filter((w) => cTokens.has(w)).length;
+    return hits >= 2 && hits / t.length >= 0.3;
+  };
+  // Whole sentences only: a window edge never cuts a sentence mid-word.
+  const out: Array<{ text: string; hit: boolean }> = [];
+  const inWindow = sents.filter((s) => !(s.end <= wStart || s.start >= wEnd));
+  inWindow.forEach((s, i) => {
+    let text = s.text;
+    if (i === 0 && sents.indexOf(s) > 0) text = `… ${text}`;
+    if (i === inWindow.length - 1 && sents.indexOf(s) < sents.length - 1) text = `${text} …`;
+    out.push({ text, hit: expressesChange(s.text) });
+  });
+  return out.length ? out : null;
+}
+
+// Sentence-level delta for the compare view: which parts of the new telling
+// the existing card does NOT already cover. Cheap token-coverage test, no
+// model call — the point is to make the question answerable in seconds, not
+// to be a diff engine.
+function deltaSentences(candidate: string, existing: string): Array<{ text: string; novel: boolean }> {
+  const sentences = String(candidate ?? '')
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const existingTokens = new Set(
+    String(existing ?? '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((t) => t.length > 3),
+  );
+  return sentences.map((text) => {
+    const tokens = text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((t) => t.length > 3);
+    if (tokens.length === 0) return { text, novel: false };
+    const hit = tokens.filter((t) => existingTokens.has(t)).length;
+    return { text, novel: hit / tokens.length < 0.55 };
+  });
+}
+
+function StagedRow({
+  row,
+  expanded,
+  onToggle,
+  onAnswer,
+  onOpenCard,
+  onPlaceDragStart,
+  onPlaceDragEnd,
+  sourceProse,
+  dark,
+}: {
+  row: StagedStripRow;
+  expanded: boolean;
+  onToggle: () => void;
+  onAnswer: (answer: 'merge' | 'keep' | 'convert') => void;
+  onOpenCard: (cardId: string) => void;
+  /** Spine drop: dragging an unplaced row opens the placement grid; its
+   *  gutters are the drop slots. Fired deferred (see handler). */
+  onPlaceDragStart?: () => void;
+  onPlaceDragEnd?: () => void;
+  /** The source braindump's full prose, for the "In your words" pin. */
+  sourceProse?: string;
+  dark: boolean;
+}) {
+  const tick = getEntityColor(row.kind === 'section' ? 'sequence' : 'event');
+  const quiet = dark ? '#82828c' : '#999';
+  const ink = dark ? '#dcdce2' : '#2a2a30';
+  const hair = dark ? '#2a2a30' : '#ececf0';
+
+  // The model's stated reason, collapsed behind a "Why" toggle (the peer
+  // card's rationale grammar). Re-collapses when the row closes.
+  const [showWhy, setShowWhy] = useState(false);
+  useEffect(() => { if (!expanded) setShowWhy(false); }, [expanded]);
+
+  // v1 scope: scenes drag onto the grid; a sequence's seams are different
+  // furniture (chips/boundaries only), so section rows keep the button path.
+  const canDragPlace = row.questionType === 'unplaced' && row.kind === 'scene' && !!onPlaceDragStart;
+  const dragHandlers = canDragPlace
+    ? {
+        draggable: true,
+        onDragStart: (e: React.DragEvent) => {
+          e.dataTransfer.setData('text/plain', row.cardId);
+          e.dataTransfer.effectAllowed = 'move';
+          // Deferred: hiding the panel synchronously inside dragstart makes
+          // Chrome cancel the drag (source element vanished).
+          window.setTimeout(() => onPlaceDragStart!(), 0);
+        },
+        onDragEnd: () => onPlaceDragEnd?.(),
+      }
+    : {};
+
+  // The header NAMES THE DECISION (Ben 2026-08-22): a short fixed label the
+  // writer recognizes at a glance, open or closed. The card title is the
+  // subheader; the other card involved is named inside the body.
+  const ask = row.questionType === 'altitude'
+    ? 'Scene or sequence?'
+    : row.questionType === 'merge_suggestion' || row.questionType === 'compare'
+      ? 'Merge or keep both?'
+      : 'Where does it go?';
+
+  if (!expanded) {
+    return (
+      <button
+        onClick={onToggle}
+        {...dragHandlers}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 9, width: '100%',
+          padding: '8px 2px', background: 'transparent', border: 'none',
+          borderBottom: `1px solid ${hair}`, cursor: 'pointer', textAlign: 'left',
+          fontFamily: 'inherit',
+        }}
+      >
+        <span style={{ width: 3, alignSelf: 'stretch', minHeight: 30, background: tick, borderRadius: 1, flexShrink: 0 }} />
+        <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <span style={{
+            fontSize: 12.5, fontWeight: 600, color: ink, lineHeight: 1.3,
+            display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+          }}>
+            {ask}
+          </span>
+          <span style={{ fontFamily: NOTE_FONT_SERIF, fontSize: 12, color: quiet, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            <span style={{ fontFamily: 'inherit', fontSize: 9, letterSpacing: 0.5, textTransform: 'uppercase', marginRight: 6 }}>{row.kind === 'section' ? 'SEQ' : 'SC'}</span>
+            {row.title}
+          </span>
+        </span>
+        <span style={{ fontSize: 11, color: quiet, flexShrink: 0 }}>›</span>
+      </button>
+    );
+  }
+
+  const delta = row.target ? deltaSentences(row.summary, row.target.summary) : null;
+  const novel = delta ? delta.filter((s) => s.novel).map((s) => s.text) : [];
+  // Anchor on the changed material when there is any (that's what the writer
+  // judges); fall back to the summary to find the card's neighborhood. Only
+  // an excerpt that actually illustrates the model's claimed change replaces
+  // the paraphrase (compare rows only; unplaced rows show their summary).
+  const isAltitude = row.questionType === 'altitude';
+  const excerpt = isAltitude
+    ? null // the altitude row shows the summary, not a prose pin
+    : row.target
+      ? braindumpExcerpt(
+          sourceProse,
+          row.evidenceQuote,
+          novel.length ? novel.join(' ') : row.summary,
+          novel.join(' '),
+        )
+      : null;
+  const excerptHasHit = !!excerpt?.some((s) => s.hit);
+  const btnBase: React.CSSProperties = {
+    fontSize: 11.5, fontWeight: 600, borderRadius: 6, padding: '6px 12px',
+    cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
+  };
+
+  return (
+    <article
+      {...dragHandlers}
+      style={{
+        border: `1px solid ${hexToRgba(BD_ORANGE, dark ? 0.45 : 0.35)}`, borderRadius: 8, margin: '6px 0 10px',
+        // Light mode: cream, the board's own paper, not UI grey.
+        background: dark ? '#202024' : '#fdfaf3', overflow: 'hidden',
+      }}
+    >
+      <button
+        onClick={onToggle}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 9, width: '100%',
+          padding: '9px 12px', background: dark ? '#26262b' : '#f6efe1',
+          border: 'none', borderBottom: `1px solid ${hair}`, cursor: 'pointer',
+          textAlign: 'left', fontFamily: 'inherit',
+        }}
+      >
+        <span style={{ width: 3, height: 34, background: tick, borderRadius: 1, flexShrink: 0 }} />
+        <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
+          {/* Same shape open or closed: the QUESTION is the header, the card
+              is the subheader (Ben 2026-08-22). */}
+          <span style={{ fontSize: 13, fontWeight: 700, color: BD_ORANGE, lineHeight: 1.3 }}>
+            {ask}
+          </span>
+          <span style={{ fontFamily: NOTE_FONT_SERIF, fontSize: 12.5, color: ink, lineHeight: 1.35 }}>
+            <span style={{ fontFamily: 'system-ui, sans-serif', fontSize: 9, letterSpacing: 0.5, textTransform: 'uppercase', color: quiet, marginRight: 6 }}>{row.kind === 'section' ? 'SEQ' : 'SC'}</span>
+            {row.title}
+          </span>
+        </span>
+        <span style={{ fontSize: 11, color: quiet, transform: 'rotate(90deg)', flexShrink: 0 }}>›</span>
+      </button>
+
+      <div style={{ padding: '10px 12px 12px' }}>
+        {isAltitude ? (
+          <>
+            {/* The altitude question: the card is HELD here (staged) at the
+                altitude it was read at. Nothing is on the board until the
+                writer answers. The summary is the material; no prose pin
+                here (Ben: the quote is noise for this question). */}
+            <div style={{ fontSize: 12, color: dark ? '#c9c9d2' : '#444', lineHeight: 1.55 }}>
+              Is this meant to be a <b style={{ color: ink }}>single scene</b>, one dramatized moment the audience watches play out, or a <b style={{ color: ink }}>sequence</b>, a section of the story that covers several scenes?
+              {row.held
+                ? <> It is held here as a <b style={{ color: ink }}>{row.kind === 'section' ? 'sequence' : 'scene'}</b> until you decide; either answer puts it on the board.</>
+                : <> It is on the board as a <b style={{ color: ink }}>{row.kind === 'section' ? 'sequence' : 'scene'}</b> (its scenes are already in it); keep it, or convert it.</>}
+            </div>
+            <div style={{ fontFamily: NOTE_FONT_SERIF, fontSize: 12.5, lineHeight: 1.55, color: ink, marginTop: 10 }}>
+              {row.summary || <span style={{ color: quiet }}>No summary.</span>}
+            </div>
+          </>
+        ) : row.target ? (
+          <>
+            {/* The question, in one line, pointing at the board. */}
+            <div style={{ fontSize: 12, color: dark ? '#c9c9d2' : '#444', lineHeight: 1.55 }}>
+              {row.questionType === 'merge_suggestion' ? 'Looks like the same beat as ' : 'May be a re-telling of '}
+              {/* A span, not a button: it has to wrap like running text so the
+                  sentence stays one sentence. */}
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={() => onOpenCard(row.target!.id)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onOpenCard(row.target!.id); }}
+                style={{
+                  cursor: 'pointer', fontWeight: 600, color: ink,
+                  textDecoration: 'underline', textDecorationColor: hexToRgba(BD_ORANGE, 0.5), textUnderlineOffset: 2,
+                }}
+              >{row.target.title}</span>.
+            </div>
+
+            {/* What this telling CHANGES ("changes", not "adds": a re-telling
+                can also negate or remove). ONE section, in the writer's OWN
+                words: the dump excerpt with the changed sentences highlighted
+                and the overlapping wording as quiet context. The model's
+                paraphrase renders only when there is no prose to quote. */}
+            <div style={{ fontSize: 9.5, letterSpacing: 0.5, textTransform: 'uppercase', color: dark ? '#d6d6dc' : '#3a3a42', fontWeight: 700, margin: '14px 0 5px' }}>
+              {excerptHasHit || novel.length ? 'What your braindump changes' : 'Nothing new in the wording'}
+            </div>
+            {excerptHasHit ? (
+              <div style={{ fontFamily: NOTE_FONT_SERIF, fontSize: 12.5, lineHeight: 1.6, color: quiet, borderLeft: `2px solid ${BD_ORANGE}`, paddingLeft: 10 }}>
+                {excerpt!.map((seg, i) => (
+                  <React.Fragment key={i}>
+                    {i > 0 ? ' ' : ''}
+                    {seg.hit ? (
+                      <span style={{
+                        color: ink,
+                        background: hexToRgba(BD_ORANGE, dark ? 0.18 : 0.15),
+                        borderRadius: 3, padding: '0 2px',
+                      }}>
+                        {seg.text}
+                      </span>
+                    ) : (
+                      seg.text
+                    )}
+                  </React.Fragment>
+                ))}
+              </div>
+            ) : novel.length > 0 ? (
+              <div style={{ fontFamily: NOTE_FONT_SERIF, fontStyle: 'italic', fontSize: 12.5, lineHeight: 1.55, color: ink, borderLeft: `2px solid ${BD_ORANGE}`, paddingLeft: 10 }}>
+                “{novel.join(' ')}”
+              </div>
+            ) : (
+              <div style={{ fontSize: 11.5, color: quiet, lineHeight: 1.5 }}>
+                The summary re-covers what the existing card already says.
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <div style={{ fontSize: 9.5, letterSpacing: 0.5, textTransform: 'uppercase', color: quiet, marginBottom: 4 }}>
+              New card, unplaced
+            </div>
+            <div style={{ fontFamily: NOTE_FONT_SERIF, fontSize: 12.5, lineHeight: 1.55, color: ink }}>
+              {row.summary || <span style={{ color: quiet }}>No summary.</span>}
+            </div>
+          </>
+        )}
+
+        {row.reason && (
+          <>
+            {/* Pill + chevron so it reads as a CONTROL, not another subheading. */}
+            <button
+              onClick={() => setShowWhy((s) => !s)}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 10,
+                background: 'transparent',
+                border: `1px solid ${dark ? '#3a3a42' : '#ddd'}`,
+                borderRadius: 999, padding: '2.5px 10px',
+                color: quiet, fontSize: 10.5, fontWeight: 600, cursor: 'pointer',
+                fontFamily: 'inherit',
+              }}
+            >
+              <span style={{ fontSize: 8, transform: showWhy ? 'rotate(90deg)' : 'none', transition: 'transform 120ms', display: 'inline-block' }}>▸</span>
+              {showWhy ? 'Hide why' : 'Why'}
+            </button>
+            {showWhy && (
+              <div style={{ fontSize: 11, fontStyle: 'italic', color: quiet, lineHeight: 1.5, marginTop: 4 }}>
+                {row.reason}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Action rail: one imperative primary; collapsing the row IS "keep
+            it aside", so no third button. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, flexWrap: 'wrap', rowGap: 6 }}>
+          {isAltitude ? (
+            <>
+              <button
+                onClick={() => onAnswer('keep')}
+                style={{ ...btnBase, background: BD_ORANGE, color: '#fff', border: 'none' }}
+              >
+                {row.kind === 'section' ? 'Keep as sequence' : 'Keep as scene'}
+              </button>
+              <button
+                onClick={() => onAnswer('convert')}
+                style={{
+                  ...btnBase, background: 'transparent', color: BD_ORANGE,
+                  border: `1px solid ${hexToRgba(BD_ORANGE, 0.6)}`, fontWeight: 600,
+                }}
+              >
+                {row.kind === 'section' ? 'Make it a scene' : 'Make it a sequence'}
+              </button>
+            </>
+          ) : row.target ? (
+            <>
+              <button
+                onClick={() => onAnswer('merge')}
+                style={{ ...btnBase, background: BD_ORANGE, color: '#fff', border: 'none' }}
+              >
+                Merge into existing
+              </button>
+              <button
+                onClick={() => onAnswer('keep')}
+                style={{
+                  ...btnBase, background: 'transparent', color: quiet,
+                  border: `1px solid ${dark ? '#3a3a42' : '#ddd'}`, fontWeight: 500,
+                }}
+              >
+                Keep both
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => onAnswer('keep')}
+              style={{ ...btnBase, background: BD_ORANGE, color: '#fff', border: 'none' }}
+            >
+              Add to board
+            </button>
+          )}
+          <span style={{ fontSize: 10.5, color: quiet, marginLeft: 'auto', whiteSpace: 'nowrap' }}>
+            {canDragPlace ? 'drag it into the story, or leave it here' : 'or leave it for later'}
+          </span>
+        </div>
+      </div>
+    </article>
+  );
+}
 
 // InfoHint: a small "i" affordance on a panel-section header that reveals an
 // explanatory tooltip on hover. Tooltip styling is lifted from the canvas
@@ -77,6 +527,7 @@ function InfoHint({ text, dark, accent }: { text: string; dark: boolean; accent:
 export function RightPanel({
   information,
   suggestions,
+  staged,
   arcs,
   locations,
   occursIn,
@@ -86,6 +537,11 @@ export function RightPanel({
   projectId,
   onAcceptSuggestion,
   onDismissSuggestion,
+  onAnswerStaged,
+  onStagedSpotlight,
+  onPlaceDragStart,
+  onPlaceDragEnd,
+  hidden,
   onOpenCard,
   onEntitiesChanged,
   onClose,
@@ -93,6 +549,19 @@ export function RightPanel({
 }: {
   information: ProjectInformation[];
   suggestions: ArcSuggestion[];
+  /** The staging strip's rows (Placement Control v1b). */
+  staged: StagedStripRow[];
+  onAnswerStaged: (cardId: string, answer: 'merge' | 'keep' | 'convert') => void;
+  /** Expanding a strip row spotlights its target on the canvas; (null, null)
+   *  lifts it. The existing card is shown by being the existing card. */
+  onStagedSpotlight: (cardId: string | null, targetId: string | null) => void;
+  /** Spine drop: an unplaced row's drag began/ended. The corkboard hides this
+   *  panel and mounts the placement grid as the drop surface. */
+  onPlaceDragStart?: (cardId: string) => void;
+  onPlaceDragEnd?: () => void;
+  /** Kept MOUNTED but invisible while the drag is live: unmounting the drag
+   *  source mid-drag swallows dragend in Chrome. */
+  hidden?: boolean;
   arcs: ProjectEntity[];
   locations: ProjectEntity[];
   /** Event → Location edges, for per-location scene counts. */
@@ -112,14 +581,49 @@ export function RightPanel({
 }) {
   const dark = useThemeMode() === 'dark';
   useEffect(() => {
+    // While hidden (a spine drop is mid-drag) Esc belongs to the drag/grid.
+    if (hidden) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, hidden]);
 
-  // Per-section collapse state — Arc suggestions open by default, the rest
-  // collapsed (showing just their count summary).
-  const [open, setOpen] = useState<Record<string, boolean>>({ suggestions: true });
+  // Per-section collapse state. QUESTIONS FIRST (Ben 2026-08-22): while the
+  // strip has rows it is open with the first question already expanded and
+  // Arc suggestions stay collapsed; with nothing to confirm, suggestions open.
+  const [open, setOpen] = useState<Record<string, boolean>>({ suggestions: staged.length === 0, staged: true });
+  // One strip row expanded at a time (docket grammar).
+  const [expandedStagedId, setExpandedStagedId] = useState<string | null>(staged[0]?.cardId ?? null);
+  // Rows arriving after mount (bootstrap, or a dump completing while the
+  // panel is open): open the strip on them and expand the first.
+  const hadRowsRef = React.useRef(staged.length > 0);
+  useEffect(() => {
+    const has = staged.length > 0;
+    if (has && !hadRowsRef.current) {
+      setOpen((o) => ({ ...o, staged: true, suggestions: false }));
+      setExpandedStagedId((cur) => cur ?? staged[0].cardId);
+    }
+    hadRowsRef.current = has;
+  }, [staged]);
+  // Docket flow: answering a row advances to the next pending one.
+  const answerAndAdvance = (cardId: string, answer: 'merge' | 'keep' | 'convert') => {
+    const i = staged.findIndex((r) => r.cardId === cardId);
+    const next = staged.find((r, j) => j > i && r.cardId !== cardId) ?? staged.find((r) => r.cardId !== cardId) ?? null;
+    setExpandedStagedId(next ? next.cardId : null);
+    onAnswerStaged(cardId, answer);
+  };
+  const expandedTargetId = expandedStagedId
+    ? (staged.find((r) => r.cardId === expandedStagedId)?.target?.id ?? null)
+    : null;
+  useEffect(() => {
+    onStagedSpotlight(expandedStagedId && expandedTargetId ? expandedStagedId : null, expandedTargetId);
+  }, [expandedStagedId, expandedTargetId, onStagedSpotlight]);
+  // Lift the spotlight when the panel unmounts (closes). Ref-held so the
+  // cleanup runs once on unmount, not on every callback identity change.
+  const spotlightRef = React.useRef(onStagedSpotlight);
+  useEffect(() => { spotlightRef.current = onStagedSpotlight; }, [onStagedSpotlight]);
+  useEffect(() => () => spotlightRef.current(null, null), []);
+  const spotlightLive = !!(expandedStagedId && staged.find((r) => r.cardId === expandedStagedId)?.target);
   const toggle = (id: string) => setOpen((o) => ({ ...o, [id]: !o[id] }));
   // Force-expand a section on request (the wow tour expands Information as it
   // walks to it). One-shot per value change; the writer can collapse it after.
@@ -183,9 +687,15 @@ export function RightPanel({
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
       style={{
         position: 'fixed', inset: 0, zIndex: 180,
-        background: 'rgba(20,20,20,0.28)',
+        // While a strip row is spotlighting its target, the board IS the
+        // compare view: drop the drawer scrim so the ring + ghost read clearly.
+        background: spotlightLive ? 'transparent' : 'rgba(20,20,20,0.28)',
+        transition: 'background 200ms ease-out',
         display: 'flex', alignItems: 'flex-start', justifyContent: 'flex-end',
         fontFamily: 'system-ui, sans-serif',
+        // Spine drop mid-drag: invisible and untouchable, but still mounted
+        // (the drag source must survive to deliver dragend).
+        ...(hidden ? { visibility: 'hidden' as const, pointerEvents: 'none' as const } : {}),
       }}
     >
       <div style={{ width: 420, height: '100vh', background: dark ? '#1a1a1e' : '#fff', boxShadow: '-8px 0 28px rgba(0,0,0,0.14)', display: 'flex', flexDirection: 'column' }}>
@@ -195,6 +705,32 @@ export function RightPanel({
         </div>
 
         <div className="cb-scroll" style={{ flex: 1, overflowY: 'auto' }}>
+          {section('staged', 'Things to confirm from your last braindump', staged.length, BD_ORANGE,
+            staged.length === 0
+              ? empty('Nothing to confirm. When a braindump leaves something only you can settle (a possible re-telling, a scene that might be a sequence, a card with no obvious place), it lands here. There is no deadline.')
+              : staged.map((row) => (
+                  <StagedRow
+                    key={row.cardId}
+                    row={row}
+                    expanded={expandedStagedId === row.cardId}
+                    onToggle={() => setExpandedStagedId((cur) => (cur === row.cardId ? null : row.cardId))}
+                    onAnswer={(answer) => answerAndAdvance(row.cardId, answer)}
+                    onOpenCard={onOpenCard}
+                    onPlaceDragStart={onPlaceDragStart ? () => onPlaceDragStart(row.cardId) : undefined}
+                    onPlaceDragEnd={onPlaceDragEnd}
+                    sourceProse={(
+                      // Provenance chain: the row's own dump id, else the
+                      // manual-creation provenance entry, whose id embeds the
+                      // card's vid (seeded/manual cards point nowhere real).
+                      braindumps?.find((b) => b.braindumpId === row.sourceBraindumpId)
+                        ?? braindumps?.find((b) => b.braindumpId.includes(row.cardId))
+                    )?.prose}
+                    dark={dark}
+                  />
+                )),
+            'Cards from your braindumps whose place in the story is a genuine question. They sit safely here — not on the board, not in the peer’s head — until you answer. There’s no deadline.',
+          )}
+
           {section('suggestions', 'Arc suggestions', suggestions.length, arcColor,
             suggestions.length === 0
               ? empty('None right now. When a thematic thread recurs across braindumps it lands here — accept it as an Arc or dismiss.')
@@ -209,6 +745,10 @@ export function RightPanel({
             'Recurring thematic threads the system spots across your braindumps. Accept one to turn it into an Arc card, or dismiss it so it won’t resurface.',
           )}
 
+          {/* Everything below is REFERENCE (lookup), not things to act on. */}
+          <div style={{ padding: '14px 18px 4px', fontSize: 9.5, letterSpacing: 0.8, textTransform: 'uppercase', color: dark ? '#55555e' : '#b5b5bd', fontWeight: 700 }}>
+            Reference
+          </div>
           {section('information', 'Information', information.length, INFO_ACCENT,
             information.length === 0
               ? empty("No facts yet. Information is extracted from braindumps + scenes — what's established and who knows it.")

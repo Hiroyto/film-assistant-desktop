@@ -12,6 +12,7 @@ import { User } from '../../models/user'
 import { useAuthenticator } from '@aws-amplify/ui-react';
 import { useNavigate } from 'react-router-dom';
 import { resolveStoryWorkflow } from '../../lib/storyWorkflows';
+import { clearStoredGraph } from '../../lib/localGraphStore';
 import { Settings, CreditCard } from "lucide-react";
 import Footer from "../../components/footer";
 import { isDesktop, openExternal } from "../../lib/ipcClient";
@@ -91,7 +92,7 @@ export default function Profile(props: any) {
             const storyIdsArray = storyIds instanceof Set ? Array.from(storyIds) : [storyIds];
             const isDeletingCurrentWork = storyIdsArray.includes(data.storyId);
             const res = await handleDeletion(storyIds)
-            return { res, isDeletingCurrentWork };
+            return { res, isDeletingCurrentWork, storyIdsArray };
         },
         onMutate: (storyIds: Set<string> | string) => {
             if (storyIds instanceof Set) {
@@ -101,11 +102,16 @@ export default function Profile(props: any) {
             }
         },
 
-        onSuccess: async (result: { res: any; isDeletingCurrentWork: boolean }) => {
-            const { res, isDeletingCurrentWork } = result;
+        onSuccess: async (result: { res: any; isDeletingCurrentWork: boolean; storyIdsArray: string[] }) => {
+            const { res, isDeletingCurrentWork, storyIdsArray } = result;
 
             if (res.data.statusCode === 200) {
                 toast.success("Work deleted!");
+
+                // Drop the deleted stories' local graph shelves so they don't
+                // linger in IndexedDB forever (the shelf never self-prunes on
+                // delete).
+                for (const sid of storyIdsArray) void clearStoredGraph(sid);
 
                 // Atualiza dados mais recentes do usuário
                 await handleDynamoUser();
