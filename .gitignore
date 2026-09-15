@@ -85,3 +85,6 @@ RELEASE.md
 
 # Backend Lambda — código de servidor não pertence ao repo público do cliente.
 index.mjs
+
+# Worker do pdf.js copiado de node_modules pelo craco.config.js (derivado, não versionar).
+/public/pdf.worker.min.mjs

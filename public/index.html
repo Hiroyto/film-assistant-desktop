@@ -66,29 +66,15 @@
       Learn how to configure a non-root public URL by running `npm run build`.
     -->
     <title>filmassistant.io | Screenwriting with a Living Outline</title>
-     <!-- Google tag (gtag.js) -->
-     <script async src="https://www.googletagmanager.com/gtag/js?id=G-5Q1VS7MNJ9"></script>
-     <script>
-       window.dataLayer = window.dataLayer || [];
-       function gtag(){dataLayer.push(arguments);}
-       gtag('js', new Date());
- 
-       gtag('config', 'G-5Q1VS7MNJ9');
-     </script>
+    <!-- Third-party embeds (Google Analytics, GetTerms) live in web-analytics.js:
+         it is a same-origin script (allowed by the desktop CSP) and it skips
+         itself inside the Electron shell, where remote scripts would share the
+         renderer with window.electronAPI. -->
+    <script src="%PUBLIC_URL%/web-analytics.js"></script>
   </head>
   <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>
     <div id="root"></div>
-    <script type="text/javascript">
-      (function(d, s, id) {
-        var js, ref = d.getElementsByTagName(s)[0];
-        if (d.getElementById(id)) return;
-        js = d.createElement(s);
-        js.id = id;
-        js.src = "https://app.getterms.io/dist/js/embed.js";
-        ref.parentNode.insertBefore(js, ref);
-      })(document, "script", "getterms-embed-js");
-    </script>
     <!--
       This HTML file is a template.
       If you open it directly in the browser, you will see an empty page.
