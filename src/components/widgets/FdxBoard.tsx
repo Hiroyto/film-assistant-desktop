@@ -37,7 +37,7 @@ export function FdxBoard({ payload, onClose }: { payload: FdxPayload; onClose: (
           <div>
             <div style={{ fontWeight: 700 }}>{payload.title || payload.fileName}</div>
             <div style={{ fontSize: 12, opacity: 0.55 }}>
-              {counts.events} cenas · {counts.locations} locais · arraste os cards · atualizado {new Date(payload.updatedAt).toLocaleTimeString()}
+              {counts.events} scenes · {counts.locations} locations · drag the cards · updated {new Date(payload.updatedAt).toLocaleTimeString()}
             </div>
           </div>
           <button
@@ -45,14 +45,14 @@ export function FdxBoard({ payload, onClose }: { payload: FdxPayload; onClose: (
             onClick={onClose}
             style={{ background: 'transparent', color: 'rgba(255,255,255,0.6)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}
           >
-            fechar
+            close
           </button>
         </div>
 
         {payload.ok ? (
           <FdxCanvas payload={payload} />
         ) : (
-          <div style={{ padding: 24, opacity: 0.6 }}>{payload.error || 'nenhuma cena encontrada'}</div>
+          <div style={{ padding: 24, opacity: 0.6 }}>{payload.error || 'no scenes found'}</div>
         )}
       </div>
     </div>

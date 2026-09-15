@@ -6,6 +6,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { isDesktop } from '../../lib/ipcClient';
 import { openFdx, closeFdx, onFdxChanged } from '../../lib/fdxClient';
+import { getFdxSyncSnapshot, openFdxSync } from '../../lib/fdxSync';
+import { useFdxSync } from './useFdxSync';
 import { FdxBoard } from './FdxBoard';
 
 function hhmmss(iso: string): string {
@@ -18,6 +20,7 @@ function hhmmss(iso: string): string {
 
 export function FdxCoworkPanel(): JSX.Element | null {
   const [payload, setPayload] = useState<FdxPayload | null>(null);
+  const sync = useFdxSync(); // motor headless (cowork sincronizado a um corkboard)
   const [pulse, setPulse] = useState(false);
   const [boardOpen, setBoardOpen] = useState(false);
   const busyRef = useRef(false);
@@ -45,8 +48,13 @@ export function FdxCoworkPanel(): JSX.Element | null {
       if (pulseTimer.current) clearTimeout(pulseTimer.current);
       pulseTimer.current = setTimeout(() => setPulse(false), 600);
     });
-    // Acionado pelo menu nativo (File → Open Screenplay).
-    const onMenuOpen = (): void => void open();
+    // Acionado pelo menu nativo (File → Open Screenplay). Com um corkboard
+    // vinculado, o menu abre o cowork SINCRONIZADO (lib/fdxSync) — o board
+    // read-only fica só para quando nenhuma story está aberta.
+    const onMenuOpen = (): void => {
+      if (getFdxSyncSnapshot().bound) { void openFdxSync(); return; }
+      void open();
+    };
     window.addEventListener('app:open-fdx', onMenuOpen);
     return () => {
       off();
@@ -54,8 +62,9 @@ export function FdxCoworkPanel(): JSX.Element | null {
     };
   }, [open]);
 
-  // Opt-in: nada na tela até um .fdx ser aberto pelo menu.
-  if (!isDesktop() || !payload) return null;
+  // Opt-in: nada na tela até um .fdx ser aberto pelo menu. Com o motor de
+  // sync ativo, o controle vive dentro do corkboard — este painel se cala.
+  if (!isDesktop() || !payload || sync.active) return null;
 
   const stop = async (): Promise<void> => {
     await closeFdx();
@@ -64,7 +73,7 @@ export function FdxCoworkPanel(): JSX.Element | null {
   };
 
   const box: React.CSSProperties = {
-    position: 'fixed', right: 12, bottom: 40, zIndex: 45, width: 300,
+    position: 'fixed', left: 12, bottom: 40, zIndex: 45, width: 300, // esquerda: não disputa com os botões de import
     background: '#1f1f22', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10,
     padding: 12, color: 'rgba(255,255,255,0.9)', fontSize: 12,
     boxShadow: '0 8px 24px rgba(0,0,0,0.4)', fontFamily: 'ui-sans-serif, system-ui, sans-serif',
@@ -88,10 +97,10 @@ export function FdxCoworkPanel(): JSX.Element | null {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
           <strong style={{ fontSize: 12 }}>
             <span style={dot} />
-            .fdx cowork (leitura)
+            .fdx cowork (read-only)
           </strong>
           <button type="button" onClick={stop} style={{ ...btn, background: 'transparent', color: 'rgba(255,255,255,0.6)', padding: 2 }}>
-            parar
+            stop
           </button>
         </div>
 
@@ -99,17 +108,17 @@ export function FdxCoworkPanel(): JSX.Element | null {
         {payload.ok ? (
           <>
             <div style={{ marginBottom: 8 }}>
-              <strong>{payload.sceneCount}</strong> cenas · {payload.paragraphCount} parágrafos
+              <strong>{payload.sceneCount}</strong> scenes · {payload.paragraphCount} paragraphs
               {payload.title ? <> · “{payload.title}”</> : null}
             </div>
             <button type="button" onClick={() => setBoardOpen(true)} style={btn}>
-              Ver board ↗
+              View board ↗
             </button>
           </>
         ) : (
-          <div style={{ color: '#e88' }}>{payload.error || 'não foi possível ler'}</div>
+          <div style={{ color: '#e88' }}>{payload.error || 'could not read the file'}</div>
         )}
-        <div style={{ marginTop: 8, opacity: 0.5 }}>atualizado {hhmmss(payload.updatedAt)}</div>
+        <div style={{ marginTop: 8, opacity: 0.5 }}>updated {hhmmss(payload.updatedAt)}</div>
       </div>
     </>
   );

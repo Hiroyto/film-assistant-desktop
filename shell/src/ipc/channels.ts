@@ -18,6 +18,14 @@ export const IPC = {
   FDX_CHANGED: 'fdx:changed', // payload: FdxPayload — o .fdx observado mudou no disco
 } as const;
 
+/** Tipo de linha de um parágrafo do roteiro — os MESMOS valores do editor de
+ *  roteiro (data-line-type), para o cowork salvar texto tipado sem re-adivinhar. */
+export type FdxParaType = 'scene' | 'description' | 'character' | 'parenthetical' | 'dialogue' | 'transition';
+export interface FdxParagraph {
+  type: FdxParaType;
+  text: string;
+}
+
 /** Uma cena extraída do .fdx (heading + corpo até a próxima cena). */
 export interface FdxScene {
   index: number;
@@ -26,6 +34,8 @@ export interface FdxScene {
   snippet: string; // primeira linha de ação/diálogo (preview do card)
   lineCount: number; // parágrafos no corpo da cena
   characters: string[]; // personagens que falam nesta cena (cues de Character)
+  /** Parágrafos tipados do corpo (sem o heading), em ordem. Ausente em payloads antigos. */
+  paragraphs?: FdxParagraph[];
 }
 
 /** Snapshot parseado de um arquivo .fdx observado. */

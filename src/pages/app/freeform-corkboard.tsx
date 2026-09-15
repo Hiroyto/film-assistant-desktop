@@ -25,7 +25,7 @@ import CascadeToast from '../../components/Freeform/CascadeToast';
 import RecentUpdatesTray from '../../components/Freeform/RecentUpdatesTray';
 import { getEntityColor, hexToRgba } from '../../components/Freeform/entityColors';
 import { PEER_BLUE } from '../../components/Freeform/tokens';
-import { FdxImportButton } from '../../components/widgets/FdxImportButton';
+import { FdxCoworkControl } from '../../components/widgets/FdxCoworkControl';
 import { isDesktop } from '../../lib/ipcClient';
 import { flushPushNow } from '../../data/desktop-lifecycle';
 import { SupersessionRequiredError, acceptArcSuggestion, answerStagedQuestion, createArc, createArcFromEvents, createCard, createInformation, createSequence, deleteArc, deleteCard, dismissArcSuggestion, enqueueCardExtraction, enqueueExtractionJob, getCardLayouts, isMockMode, listArcSuggestions, listCardQuestions, listProjectEntities, listStagedQuestions, placeStagedCard, promoteStructuralToRelationship, resolveNarrativeStatusFlip, restoreArc, restoreCard, slugForCard, tagSequenceContains, updateArc, updateCardDescription, updateCardName, updateCardNarrativeStatus, updateCardPosition, type ArcKind, type ArcSuggestion, type CardLayout, type EvokesTransition, type ListProjectEntitiesResponse, type NarrativeStatus, type PersistedQuestion, type ProjectEntity, type StagedQuestion, type SupersessionRequiredResponse } from '../../lib/freeformApi';
@@ -3832,14 +3832,18 @@ export default function FreeformCorkboard() {
   const [gridMounted, setGridMounted] = useState(false);
   useEffect(() => { if (gridOpen) setGridMounted(true); }, [gridOpen]);
 
-  const runBraindumpExtraction = useCallback(async (prose: string, opts?: { sourceFormat?: 'screenplay'; wow?: boolean }) => {
-    if (!auth || !storyId) return;
-    const braindumpId = `bd_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  // Braindump run tracking, split in two so a job enqueued ELSEWHERE (the .fdx
+  // cowork engine, lib/fdxSync) rides the SAME loading UI as a board-initiated
+  // dump: inflight ref, meter, phase messages, refetch polls, windowed backstops
+  // and the braindump_complete resolve. begin = before the enqueue (or right
+  // after, for external jobs); track = after the enqueue succeeded.
+  const beginBraindumpRun = useCallback((braindumpId: string, proseLength: number, windowed: boolean) => {
+    void proseLength; // reserved: the meter may scale its copy by size later
     inflightBraindumpRef.current = braindumpId;
     // Large screenplay imports (> ~25pp) run the windowed backend path — multi-
     // minute, window-by-window. Mark it so the fast give-up timers + edge belt
     // don't resolve it early; it resolves on braindump_complete (or a long backstop).
-    const isWindowed = opts?.sourceFormat === 'screenplay' && prose.length > 40000;
+    const isWindowed = windowed;
     windowedRunRef.current = isWindowed;
     edgeCountAtSubmitRef.current = edgeCountOf(dataRef.current); // baseline for the lost-WS belt
     deltaEdgesRef.current = 0; // FIL-516: fresh run, the belt stands ready until a delta arrives
@@ -3860,6 +3864,144 @@ export default function FreeformCorkboard() {
     }
     setBraindumpPhase('submitting');
     setBraindumpMsg('Queueing extraction…');
+  }, []); // refs + setters only
+
+  const trackBraindumpRun = useCallback((braindumpId: string, proseLength: number) => {
+    const isWindowed = windowedRunRef.current;
+    setBraindumpPhase('extracting');
+    const idAtSubmit = braindumpId;
+    if (isWindowed) {
+      // Windowed import: minutes long, and the WS socket does not survive it —
+      // so POLL. Refetch every 15s so the board builds window-by-window
+      // regardless of WS. The interval self-terminates when the run resolves
+      // (inflight cleared by braindump_complete or the backstop). WS
+      // progress/complete, when they do arrive, are a fast path on top.
+      setBraindumpMsg('Reading the script. This can take a few minutes; cards appear as each part is processed.');
+      if (windowedPollRef.current) window.clearInterval(windowedPollRef.current);
+      const STABLE_MS = 45000; // graph unchanged this long ⇒ the run is done
+      let lastSig = '';
+      let stableSince = Date.now();
+      const resolveWindowed = () => {
+        inflightBraindumpRef.current = null;
+        windowedRunRef.current = false;
+        if (windowedPollRef.current) { window.clearInterval(windowedPollRef.current); windowedPollRef.current = null; }
+        endWriteSettling();
+        streamedEdgesRef.current = [];
+        setWeaving(null);
+        setBraindumpPhase('done'); // stops the shimmer + tracker + meter
+        setBraindumpMsg('Done reading the script.');
+        setBraindumpText('');
+        dockAutoCloseRef.current = true;
+        resetWinMeter();
+        relayoutWindowedRef.current = true; // snap the board into the clean layout
+        refreshEntitiesRef.current();
+        refreshArcSuggestionsRef.current();
+      };
+      windowedPollRef.current = window.setInterval(() => {
+        if (inflightBraindumpRef.current !== idAtSubmit) {
+          if (windowedPollRef.current) { window.clearInterval(windowedPollRef.current); windowedPollRef.current = null; }
+          return;
+        }
+        refreshEntitiesRef.current();
+        // Also re-pull arc suggestions — the worker writes them (+ CAUSES/EVOKES
+        // edges) AFTER the graph lands, so this is the only way the Panel fills
+        // and the only way the completion check can see them still arriving.
+        refreshArcSuggestionsRef.current();
+        // Completion by STABILITY, over the WHOLE result — entities AND edges AND
+        // arc suggestions. Watching entity count alone resolved the moment the
+        // last window's cards landed, dropping the tracker while the PRECEDES
+        // spine, CAUSES edges, and arc suggestions were still being written (the
+        // "didn't wait for arcs / out a sequence" drop). Two guards before we
+        // call it done: the graph must be non-empty AND the PRECEDES spine must
+        // have landed (edges grew past submit), so we never resolve during the
+        // pre-spine fill lull.
+        const n = (dataRef.current?.entities ?? []).length;
+        const e = edgeCountOf(dataRef.current);
+        const s = arcSuggestionCountRef.current;
+        const sig = `${n}:${e}:${s}`;
+        const spineLanded = e > edgeCountAtSubmitRef.current;
+        if (sig !== lastSig) { lastSig = sig; stableSince = Date.now(); }
+        // Resolve on stability ONLY as a lost-WS BACKSTOP: if the socket is
+        // still alive (braindump_progress phase pings, import_pages, cards
+        // all bump wsActivityRef), braindump_complete is coming and is the
+        // authoritative resolve — don't drop the meter during the lull
+        // between window writes and the global spine + arcs tail (the "meter
+        // went away before the edges completed" bug). Quiet socket for
+        // STABLE_MS + a stable graph = the WS truly died; then we resolve.
+        else if (
+          n > 0 && spineLanded &&
+          Date.now() - stableSince > STABLE_MS &&
+          Date.now() - wsActivityRef.current > STABLE_MS
+        ) { resolveWindowed(); }
+      }, 15000);
+      // Hard backstop past the Lambda ceiling, in case the graph never stabilizes.
+      window.setTimeout(() => {
+        if (inflightBraindumpRef.current === idAtSubmit) resolveWindowed();
+      }, 960000);
+    } else {
+      setBraindumpMsg('Extracting, usually 15-30s. New cards will appear when ready.');
+      // LIVENESS deadline, not a fixed clock (the 20pp-import lesson: a
+      // legitimate single-call extraction streams for 2-3 minutes, and the
+      // old fixed 100s stop dropped the meter mid-run and left an edgeless
+      // board). Base ceiling scales with input size; any WS sign of life
+      // (streamed cards, extraction_progress ticks) extends 60s past itself.
+      const startAt = Date.now();
+      wsActivityRef.current = startAt;
+      const HARD_MS = Math.max(100000, Math.min(330000, proseLength * 8));
+      // Steady fallback poll while inflight (every 8s): keeps the board filling
+      // even when the braindump_complete WS is lost, gives the stability
+      // belt the consecutive reads it needs to judge "settled" instead of
+      // resolving on the first partial mid-write read, and checks the
+      // liveness deadline. Self-terminates when the run resolves.
+      const pollIv = window.setInterval(() => {
+        if (inflightBraindumpRef.current !== idAtSubmit) {
+          window.clearInterval(pollIv);
+          return;
+        }
+        refreshEntitiesRef.current();
+        const deadline = Math.max(startAt + HARD_MS, wsActivityRef.current + 60000);
+        if (Date.now() > deadline) {
+          // Truly dead run (no WS activity for 60s past the scaled ceiling):
+          // resolve authoritatively instead of hanging forever.
+          inflightBraindumpRef.current = null;
+          endWriteSettling();
+          setBraindumpPhase('done');
+          setBraindumpMsg('Extraction took longer than expected. Check for new cards.');
+          setBraindumpText('');
+          dockAutoCloseRef.current = true;
+          streamedEdgesRef.current = [];
+          setWeaving(null);
+          refreshEntitiesRef.current();
+        }
+      }, 8000);
+      // At 45s, keep the writer informed — but DON'T flip to done, and don't
+      // clobber a live "weaving" tick (recent WS activity means the meter
+      // already carries better information than this generic line).
+      window.setTimeout(() => {
+        if (inflightBraindumpRef.current === idAtSubmit && Date.now() - wsActivityRef.current > 20000) {
+          setBraindumpMsg('Still working. A big idea can take a minute…');
+        }
+      }, 45000);
+    }
+  }, []); // refs + setters only
+
+  // Cowork .fdx: the engine enqueued a screenplay braindump on its own — show it
+  // exactly like a board-initiated dump (idempotent per braindumpId, so a
+  // remount mid-run re-attaches the meter instead of restarting it).
+  const trackExternalBraindump = useCallback((braindumpId: string, proseLength: number) => {
+    if (inflightBraindumpRef.current === braindumpId) return;
+    beginBraindumpRun(braindumpId, proseLength, proseLength > 40000);
+    trackBraindumpRun(braindumpId, proseLength);
+  }, [beginBraindumpRun, trackBraindumpRun]);
+
+  const runBraindumpExtraction = useCallback(async (prose: string, opts?: { sourceFormat?: 'screenplay'; wow?: boolean }) => {
+    if (!auth || !storyId) return;
+    const braindumpId = `bd_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    // Large screenplay imports (> ~25pp) run the windowed backend path — multi-
+    // minute, window-by-window. beginBraindumpRun marks it so the fast give-up
+    // timers + edge belt don't resolve it early.
+    const isWindowed = opts?.sourceFormat === 'screenplay' && prose.length > 40000;
+    beginBraindumpRun(braindumpId, prose.length, isWindowed);
     try {
       await enqueueExtractionJob(
         {
@@ -3897,127 +4039,13 @@ export default function FreeformCorkboard() {
         },
         auth.token,
       );
-      setBraindumpPhase('extracting');
-      const idAtSubmit = braindumpId;
-      if (isWindowed) {
-        // Windowed import: minutes long, and the WS socket does not survive it —
-        // so POLL. Refetch every 15s so the board builds window-by-window
-        // regardless of WS. The interval self-terminates when the run resolves
-        // (inflight cleared by braindump_complete or the backstop). WS
-        // progress/complete, when they do arrive, are a fast path on top.
-        setBraindumpMsg('Reading the script. This can take a few minutes; cards appear as each part is processed.');
-        if (windowedPollRef.current) window.clearInterval(windowedPollRef.current);
-        const STABLE_MS = 45000; // graph unchanged this long ⇒ the run is done
-        let lastSig = '';
-        let stableSince = Date.now();
-        const resolveWindowed = () => {
-          inflightBraindumpRef.current = null;
-          windowedRunRef.current = false;
-          if (windowedPollRef.current) { window.clearInterval(windowedPollRef.current); windowedPollRef.current = null; }
-          endWriteSettling();
-          streamedEdgesRef.current = [];
-          setWeaving(null);
-          setBraindumpPhase('done'); // stops the shimmer + tracker + meter
-          setBraindumpMsg('Done reading the script.');
-          setBraindumpText('');
-          dockAutoCloseRef.current = true;
-          resetWinMeter();
-          relayoutWindowedRef.current = true; // snap the board into the clean layout
-          refreshEntitiesRef.current();
-          refreshArcSuggestionsRef.current();
-        };
-        windowedPollRef.current = window.setInterval(() => {
-          if (inflightBraindumpRef.current !== idAtSubmit) {
-            if (windowedPollRef.current) { window.clearInterval(windowedPollRef.current); windowedPollRef.current = null; }
-            return;
-          }
-          refreshEntitiesRef.current();
-          // Also re-pull arc suggestions — the worker writes them (+ CAUSES/EVOKES
-          // edges) AFTER the graph lands, so this is the only way the Panel fills
-          // and the only way the completion check can see them still arriving.
-          refreshArcSuggestionsRef.current();
-          // Completion by STABILITY, over the WHOLE result — entities AND edges AND
-          // arc suggestions. Watching entity count alone resolved the moment the
-          // last window's cards landed, dropping the tracker while the PRECEDES
-          // spine, CAUSES edges, and arc suggestions were still being written (the
-          // "didn't wait for arcs / out a sequence" drop). Two guards before we
-          // call it done: the graph must be non-empty AND the PRECEDES spine must
-          // have landed (edges grew past submit), so we never resolve during the
-          // pre-spine fill lull.
-          const n = (dataRef.current?.entities ?? []).length;
-          const e = edgeCountOf(dataRef.current);
-          const s = arcSuggestionCountRef.current;
-          const sig = `${n}:${e}:${s}`;
-          const spineLanded = e > edgeCountAtSubmitRef.current;
-          if (sig !== lastSig) { lastSig = sig; stableSince = Date.now(); }
-          // Resolve on stability ONLY as a lost-WS BACKSTOP: if the socket is
-          // still alive (braindump_progress phase pings, import_pages, cards
-          // all bump wsActivityRef), braindump_complete is coming and is the
-          // authoritative resolve — don't drop the meter during the lull
-          // between window writes and the global spine + arcs tail (the "meter
-          // went away before the edges completed" bug). Quiet socket for
-          // STABLE_MS + a stable graph = the WS truly died; then we resolve.
-          else if (
-            n > 0 && spineLanded &&
-            Date.now() - stableSince > STABLE_MS &&
-            Date.now() - wsActivityRef.current > STABLE_MS
-          ) { resolveWindowed(); }
-        }, 15000);
-        // Hard backstop past the Lambda ceiling, in case the graph never stabilizes.
-        window.setTimeout(() => {
-          if (inflightBraindumpRef.current === idAtSubmit) resolveWindowed();
-        }, 960000);
-      } else {
-        setBraindumpMsg('Extracting, usually 15-30s. New cards will appear when ready.');
-        // LIVENESS deadline, not a fixed clock (the 20pp-import lesson: a
-        // legitimate single-call extraction streams for 2-3 minutes, and the
-        // old fixed 100s stop dropped the meter mid-run and left an edgeless
-        // board). Base ceiling scales with input size; any WS sign of life
-        // (streamed cards, extraction_progress ticks) extends 60s past itself.
-        const startAt = Date.now();
-        wsActivityRef.current = startAt;
-        const HARD_MS = Math.max(100000, Math.min(330000, prose.length * 8));
-        // Steady fallback poll while inflight (every 8s): keeps the board filling
-        // even when the braindump_complete WS is lost, gives the stability
-        // belt the consecutive reads it needs to judge "settled" instead of
-        // resolving on the first partial mid-write read, and checks the
-        // liveness deadline. Self-terminates when the run resolves.
-        const pollIv = window.setInterval(() => {
-          if (inflightBraindumpRef.current !== idAtSubmit) {
-            window.clearInterval(pollIv);
-            return;
-          }
-          refreshEntitiesRef.current();
-          const deadline = Math.max(startAt + HARD_MS, wsActivityRef.current + 60000);
-          if (Date.now() > deadline) {
-            // Truly dead run (no WS activity for 60s past the scaled ceiling):
-            // resolve authoritatively instead of hanging forever.
-            inflightBraindumpRef.current = null;
-            endWriteSettling();
-            setBraindumpPhase('done');
-            setBraindumpMsg('Extraction took longer than expected. Check for new cards.');
-            setBraindumpText('');
-            dockAutoCloseRef.current = true;
-            streamedEdgesRef.current = [];
-            setWeaving(null);
-            refreshEntitiesRef.current();
-          }
-        }, 8000);
-        // At 45s, keep the writer informed — but DON'T flip to done, and don't
-        // clobber a live "weaving" tick (recent WS activity means the meter
-        // already carries better information than this generic line).
-        window.setTimeout(() => {
-          if (inflightBraindumpRef.current === idAtSubmit && Date.now() - wsActivityRef.current > 20000) {
-            setBraindumpMsg('Still working. A big idea can take a minute…');
-          }
-        }, 45000);
-      }
+      trackBraindumpRun(braindumpId, prose.length);
     } catch (err: any) {
       setBraindumpPhase('error');
       setBraindumpMsg(err.message ?? String(err));
       inflightBraindumpRef.current = null;
     }
-  }, [auth, storyId]);
+  }, [auth, storyId, beginBraindumpRun, trackBraindumpRun]);
 
   const onSubmitBraindump = useCallback(async () => {
     const prose = braindumpText.trim();
@@ -5784,7 +5812,11 @@ export default function FreeformCorkboard() {
       onPrefetchScript={storyId && auth ? () => prefetchScriptData(storyId, auth.token) : undefined}
     >
       {isDesktop() && auth && storyId ? (
-        <FdxImportButton
+        <FdxCoworkControl
+          storyId={storyId}
+          auth={auth}
+          onSynced={() => void refreshEntities()}
+          onAiJob={trackExternalBraindump}
           onImportScreenplay={(text) => runBraindumpExtraction(text, { sourceFormat: 'screenplay' })}
         />
       ) : null}

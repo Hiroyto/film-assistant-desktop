@@ -1,11 +1,14 @@
 // parse.ts — parser PURO de .fdx (Final Draft XML) -> cenas. Sem dependências de
 // electron/fs (só fast-xml-parser), para ser testável e reusável. Agrupa cada
-// cena (Scene Heading + parágrafos do corpo até a próxima cena).
+// cena (Scene Heading + parágrafos do corpo até a próxima cena) e PRESERVA o
+// tipo de cada parágrafo (ação/personagem/diálogo/…): é o que permite ao cowork
+// salvar o texto da cena no formato tipado do editor de roteiro (data-line-type)
+// em vez de re-adivinhar a formatação de um texto achatado.
 //
 // XXE: fast-xml-parser NÃO processa DTD/entidades externas — só as 5 entidades
 // XML padrão. Não há superfície de XXE aqui.
 import { XMLParser } from 'fast-xml-parser';
-import type { FdxScene } from '../ipc/channels';
+import type { FdxParagraph, FdxParaType, FdxScene } from '../ipc/channels';
 
 const parser = new XMLParser({
   ignoreAttributes: false,
@@ -38,6 +41,19 @@ const clean = (s: string): string => s.replace(/\s+/g, ' ').trim();
 const cleanCharacterName = (s: string): string =>
   clean(s).replace(/\s*\([^)]*\)\s*$/, '').trim();
 
+/** Tipo de parágrafo do Final Draft -> tipo de linha do editor de roteiro.
+ *  Keep-bias: tipos desconhecidos (Cast List, New Act, Shot, General…) viram
+ *  'description' — texto nunca é descartado por não ter um tipo mapeado. */
+export function lineTypeOf(fdType: string): FdxParaType {
+  const t = fdType.toLowerCase().trim();
+  if (t === 'scene heading') return 'scene';
+  if (t === 'character') return 'character';
+  if (t === 'parenthetical') return 'parenthetical';
+  if (t === 'dialogue') return 'dialogue';
+  if (t === 'transition') return 'transition';
+  return 'description';
+}
+
 export interface FdxParseResult {
   title?: string;
   scenes: FdxScene[];
@@ -64,17 +80,20 @@ export function parseFdx(xml: string): FdxParseResult {
   const ftLines: string[] = []; // roteiro reconstruído p/ a extração por IA
   let cur: FdxScene | null = null;
   let body: string[] = [];
+  let paragraphs: FdxParagraph[] = [];
   let idx = 0;
   const flush = (): void => {
     if (!cur) return;
     cur.lineCount = body.length;
     cur.snippet = (body.find((l) => l.length > 0) || '').slice(0, 120);
+    cur.paragraphs = paragraphs;
     scenes.push(cur);
   };
   for (const p of paras) {
     const type = String(p?.['@_Type'] ?? '');
     const text = clean(textOf(p?.Text));
-    if (/scene heading/i.test(type)) {
+    const lineType = lineTypeOf(type);
+    if (lineType === 'scene') {
       flush();
       const num = p?.['@_Number'] ?? p?.SceneProperties?.['@_Number'];
       cur = {
@@ -84,19 +103,23 @@ export function parseFdx(xml: string): FdxParseResult {
         snippet: '',
         lineCount: 0,
         characters: [],
+        paragraphs: [],
       };
       idx++;
       body = [];
+      paragraphs = [];
       if (text) ftLines.push('', text);
     } else if (cur) {
-      if (/^character$/i.test(type)) {
+      if (!text) continue; // parágrafo vazio (linha em branco do FD) — não é bloco
+      paragraphs.push({ type: lineType, text });
+      if (lineType === 'character') {
         const name = cleanCharacterName(text);
         if (name) {
           if (!cur.characters.includes(name)) cur.characters.push(name);
           allChars.add(name);
         }
-        if (text) ftLines.push('', text);
-      } else if (text) {
+        ftLines.push('', text);
+      } else {
         body.push(text);
         ftLines.push(text);
       }

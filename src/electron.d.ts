@@ -13,6 +13,13 @@ declare global {
     query: Record<string, string>;
   }
 
+  /** Tipo de linha de um parágrafo (mesmos valores do editor: data-line-type). */
+  type FdxParaType = 'scene' | 'description' | 'character' | 'parenthetical' | 'dialogue' | 'transition';
+  interface FdxParagraph {
+    type: FdxParaType;
+    text: string;
+  }
+
   /** Uma cena extraída do .fdx (heading + corpo até a próxima cena). */
   interface FdxScene {
     index: number;
@@ -21,6 +28,8 @@ declare global {
     snippet: string;
     lineCount: number;
     characters: string[];
+    /** Parágrafos tipados do corpo (sem o heading). Ausente em payloads antigos. */
+    paragraphs?: FdxParagraph[];
   }
 
   /** Snapshot parseado de um .fdx observado (emitido pelo shell). */

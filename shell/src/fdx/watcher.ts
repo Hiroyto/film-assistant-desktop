@@ -35,11 +35,11 @@ async function readFdx(filePath: string, tries = 3): Promise<FdxPayload> {
     try {
       xml = await fs.promises.readFile(filePath, 'utf8');
     } catch (e) {
-      return { ...base, error: `read falhou: ${(e as Error).message}` };
+      return { ...base, error: `read failed: ${(e as Error).message}` };
     }
     if (!/<FinalDraft\b[\s\S]*<\/FinalDraft>/i.test(xml)) {
       if (t < tries - 1) { await delay(120); continue; }
-      return { ...base, error: 'arquivo .fdx incompleto (mid-write?)' };
+      return { ...base, error: 'incomplete .fdx file (mid-write?)' };
     }
     try {
       const { title, scenes, paragraphCount, fullText } = parseFdx(xml);
@@ -55,7 +55,7 @@ async function readFdx(filePath: string, tries = 3): Promise<FdxPayload> {
       };
     } catch (e) {
       if (t < tries - 1) { await delay(120); continue; }
-      return { ...base, error: `parse falhou: ${(e as Error).message}` };
+      return { ...base, error: `parse failed: ${(e as Error).message}` };
     }
   }
   return base;
@@ -88,10 +88,10 @@ export function registerFdx(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle(IPC.FDX_OPEN, async (): Promise<FdxPayload | null> => {
     const win = getWindow();
     const opts: Electron.OpenDialogOptions = {
-      title: 'Abrir .fdx (Final Draft) — modo leitura',
+      title: 'Open .fdx (Final Draft)',
       filters: [
         { name: 'Final Draft', extensions: ['fdx'] },
-        { name: 'Todos os arquivos', extensions: ['*'] },
+        { name: 'All files', extensions: ['*'] },
       ],
       properties: ['openFile'],
     };
