@@ -5817,7 +5817,6 @@ export default function FreeformCorkboard() {
           auth={auth}
           onSynced={() => void refreshEntities()}
           onAiJob={trackExternalBraindump}
-          onImportScreenplay={(text) => runBraindumpExtraction(text, { sourceFormat: 'screenplay' })}
         />
       ) : null}
       {/* Toolbar — one cohesive control strip: stats on the left, controls on

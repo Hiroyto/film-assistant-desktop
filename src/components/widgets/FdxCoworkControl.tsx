@@ -3,12 +3,7 @@
 // auto-sync do editor de roteiro: Auto-sync on/off, "Sync now", status. Com o
 // watch ativo, cada save do Final Draft vira save + extração por cena no board
 // real — o FdxBoard read-only deixa de ser necessário aqui.
-//
-// Mantém o import um-shot por IA (texto inteiro → extract-braindump) como
-// caminho secundário, só quando nenhum watch está ativo (os dois usam o mesmo
-// canal openFdx/closeFdx do shell e não podem coexistir).
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { openFdx, closeFdx } from '../../lib/fdxClient';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { flushPushNow } from '../../data/desktop-lifecycle';
 import { bindFdxSync, openFdxSync, resolveMissingScene, setFdxAuto, stopFdxSync, syncFdxNow } from '../../lib/fdxSync';
 import { useFdxSync } from './useFdxSync';
@@ -21,8 +16,6 @@ interface Props {
   /** O motor enfileirou um job de IA (braindump) — o board mostra o MESMO
    *  loading/meter de um braindump próprio (trackExternalBraindump). */
   onAiJob?: (braindumpId: string, proseLength: number) => void;
-  /** Import um-shot por IA (caminho antigo), opcional. */
-  onImportScreenplay?: (text: string, fileName: string) => void | Promise<void>;
 }
 
 function hhmmss(iso?: string): string {
@@ -40,10 +33,8 @@ const btnSmall: React.CSSProperties = {
   borderRadius: 6, padding: '5px 9px', cursor: 'pointer', fontSize: 12, fontWeight: 600,
 };
 
-export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, onImportScreenplay }: Props): JSX.Element {
+export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob }: Props): JSX.Element {
   const snap = useFdxSync();
-  const [oneShotBusy, setOneShotBusy] = useState(false);
-  const [oneShotMsg, setOneShotMsg] = useState<string | null>(null);
   const lastSyncSeen = useRef<string | undefined>(undefined);
   const lastAiJobSeen = useRef<string | undefined>(undefined);
 
@@ -67,26 +58,6 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, onImportScr
     }
   }, [snap.lastSyncAt, onSynced]);
 
-  const runOneShot = useCallback(async () => {
-    if (oneShotBusy || !onImportScreenplay) return;
-    setOneShotMsg(null);
-    const payload = await openFdx();
-    if (!payload) return;
-    void closeFdx(); // um-shot: não observa o arquivo
-    if (!payload.ok) { setOneShotMsg(payload.error || 'could not read the .fdx'); return; }
-    if (payload.fullText.trim().length < 40) { setOneShotMsg('screenplay is too short or empty'); return; }
-    setOneShotBusy(true);
-    try {
-      await flushPushNow(); // ownership da story no /works antes de escrever no freeform
-      await onImportScreenplay(payload.fullText, payload.fileName);
-      setOneShotMsg('Extraction started — cards will appear as the AI reads the screenplay.');
-    } catch (e) {
-      setOneShotMsg(`failed: ${(e as Error).message}`);
-    } finally {
-      setOneShotBusy(false);
-    }
-  }, [oneShotBusy, onImportScreenplay]);
-
   const start = useCallback(async () => {
     try {
       await flushPushNow(); // o freeform nega escrita de story ainda não registrada no /works
@@ -102,19 +73,10 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, onImportScr
   };
   const wrapPanel: React.CSSProperties = { ...wrapButtons, right: undefined, left: 20, alignItems: 'flex-start' };
 
-  // ---- Inativo: abrir cowork (primário) + import um-shot (secundário) ------
+  // ---- Inativo: só o botão de abrir o cowork -------------------------------
   if (!snap.active) {
     return (
       <div style={wrapButtons}>
-        {oneShotMsg ? (
-          <div
-            role="status"
-            onClick={() => setOneShotMsg(null)}
-            style={{ maxWidth: 320, background: '#1f1f22', color: 'rgba(255,255,255,0.9)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, padding: '6px 10px', fontSize: 12, boxShadow: '0 6px 18px rgba(0,0,0,0.35)' }}
-          >
-            {oneShotMsg}
-          </div>
-        ) : null}
         <button
           type="button"
           onClick={() => void start()}
@@ -123,17 +85,6 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, onImportScr
         >
           ⬇ Open .fdx (cowork)
         </button>
-        {onImportScreenplay ? (
-          <button
-            type="button"
-            onClick={() => void runOneShot()}
-            disabled={oneShotBusy}
-            title="One-shot import: sends the whole screenplay to AI extraction (all card types)"
-            style={{ ...btnSmall, opacity: oneShotBusy ? 0.6 : 0.85 }}
-          >
-            {oneShotBusy ? 'Importing…' : 'one-shot import (AI)'}
-          </button>
-        ) : null}
       </div>
     );
   }
