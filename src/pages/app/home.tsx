@@ -1853,7 +1853,9 @@ const [brainstormEstimate, setBrainstormEstimate] =
     }
   };
 
-  const mutateCoreQuestion = useMutation({
+  // Generics explícitos: os dois ramos devolvem Promises de tipos distintos e o
+  // TS não infere TData da união (quebrou com os tipos do axios >= 1.18).
+  const mutateCoreQuestion = useMutation<any, unknown, { isEmpty: boolean }>({
     mutationFn: (cqData: { isEmpty: boolean }) => {
       console.log('🚀 mutateCoreQuestion: Calling CQ generation with isEmpty:', cqData.isEmpty);
 
@@ -2025,7 +2027,7 @@ const [brainstormEstimate, setBrainstormEstimate] =
     }
   };
 
-  const mutateMetadata = useMutation({
+  const mutateMetadata = useMutation<any, unknown, { field: string; isEmpty: boolean }>({
     mutationFn: (metadataData: { field: string; isEmpty: boolean }) => {
       console.log('🚀 mutateMetadata: Calling Metadata generation with field:', metadataData.field, 'isEmpty:', metadataData.isEmpty);
 
