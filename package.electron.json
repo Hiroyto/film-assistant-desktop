@@ -8,7 +8,7 @@
   "main": "shell/dist/main.js",
   "scripts": {
     "shell:build": "tsc -p shell/tsconfig.json",
-    "renderer:build": "craco build",
+    "renderer:build": "cross-env DESKTOP_BUILD=1 craco build",
     "desktop:start": "npm run shell:build && electron shell/dist/main.js",
     "desktop:package": "npm run renderer:build && npm run shell:build && electron-forge package",
     "desktop:make": "npm run renderer:build && npm run shell:build && electron-forge make",
@@ -21,22 +21,25 @@
     "forge": "./forge.config.js"
   },
   "dependencies": {
-    "@sentry/electron": "^5.4.0",
-    "better-sqlite3": "^11.3.0",
+    "@sentry/electron": "^7.19.0",
+    "better-sqlite3": "^12.11.1",
     "update-electron-app": "^3.0.0"
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.4.0",
+    "@electron-forge/maker-dmg": "^7.4.0",
     "@electron-forge/maker-squirrel": "^7.4.0",
     "@electron-forge/maker-zip": "^7.4.0",
-    "@electron-forge/maker-dmg": "^7.4.0",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.4.0",
+    "@electron-forge/plugin-fuses": "^7.11.2",
     "@electron-forge/publisher-github": "^7.4.0",
+    "@electron/fuses": "^1.8.0",
     "@electron/notarize": "^2.3.0",
-    "@electron/rebuild": "^3.6.0",
+    "@electron/rebuild": "^4.2.0",
     "@playwright/test": "^1.47.0",
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^16.18.79",
-    "electron": "^31.0.0",
+    "electron": "^42.11.4",
     "typescript": "^4.9.5"
   }
 }

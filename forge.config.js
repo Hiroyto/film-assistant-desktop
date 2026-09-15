@@ -9,6 +9,8 @@
 // Setup de assinatura é iniciado já na Fase 1 (não esperar Fase 4) — handoff.md §2.
 
 const path = require('path');
+const { FusesPlugin } = require('@electron-forge/plugin-fuses');
+const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 
 // Windows Authenticode (signtool) — via env. Ex.: WINDOWS_CERT_FILE + WINDOWS_CERT_PASSWORD.
 const windowsSign =
@@ -80,6 +82,23 @@ module.exports = {
     // app.asar. This plugin auto-unpacks native modules to app.asar.unpacked/
     // so `new Database(...)` works in packaged builds (BR-04).
     { name: '@electron-forge/plugin-auto-unpack-natives', config: {} },
+    // Electron Fuses (hardening do binário empacotado — security checklist):
+    //   RunAsNode off: o .exe/.app assinado deixa de servir como runtime Node
+    //     genérico (ELECTRON_RUN_AS_NODE) para qualquer processo local.
+    //   NODE_OPTIONS / --inspect off: sem injeção de código ou debugger via env/CLI.
+    //   OnlyLoadAppFromAsar + AsarIntegrity: o main só carrega de app.asar e o
+    //     Electron valida o hash do asar embutido no binário (Win/macOS).
+    //   CookieEncryption: cookies da session cifrados em disco.
+    // Só afeta o output do package/make — o `electron` de dev segue intacto.
+    new FusesPlugin({
+      version: FuseVersion.V1,
+      [FuseV1Options.RunAsNode]: false,
+      [FuseV1Options.EnableCookieEncryption]: true,
+      [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
+      [FuseV1Options.EnableNodeCliInspectArguments]: false,
+      [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
+      [FuseV1Options.OnlyLoadAppFromAsar]: true,
+    }),
   ],
   makers: [
     {
