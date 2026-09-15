@@ -3,8 +3,22 @@
 // quanto no preload (sandbox:false). Os canais espelham os métodos que os parity
 // specs acionam em window.__TEST__ (parity/specs/*.spec.ts são o contrato).
 
-/** True quando o app roda em modo de teste de paridade (fixtures setam o env). */
-export const IS_TEST = process.env.ELECTRON_IS_TEST === '1';
+/** True quando este processo é o main de um app EMPACOTADO. No preload (sem `app`)
+ *  retorna false — lá a proteção é o main remover ELECTRON_IS_TEST do env quando
+ *  empacotado (ver main.ts), antes de criar qualquer renderer. */
+function isPackagedMain(): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { app } = require('electron') as { app?: { isPackaged: boolean } };
+    return !!app?.isPackaged;
+  } catch {
+    return false;
+  }
+}
+
+/** True quando o app roda em modo de teste de paridade (fixtures setam o env).
+ *  NUNCA true num app empacotado, mesmo que a variável esteja definida. */
+export const IS_TEST = process.env.ELECTRON_IS_TEST === '1' && !isPackagedMain();
 
 /** Canais IPC test-only (renderer -> main). Registrados só quando IS_TEST. */
 export const TEST_IPC = {

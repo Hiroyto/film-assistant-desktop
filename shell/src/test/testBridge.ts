@@ -28,7 +28,7 @@ function serializeMenu(items: MenuItem[]): SerializedMenuItem[] {
     id: it.id ?? null,
     enabled: it.enabled,
     role: it.role,
-    accelerator: it.accelerator,
+    accelerator: it.accelerator ?? undefined, // Electron ≥ 44 tipa como string | null
     type: it.type,
     // `items` = labels rasos do submenu (spec 12 asserta arrayContaining de strings);
     // `submenu` = árvore completa (introspecção detalhada). Ambos derivam da mesma fonte.
