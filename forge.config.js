@@ -48,6 +48,45 @@ const macOSSign =
       }
     : {};
 
+// ---- O que fica FORA do asar ------------------------------------------------
+// `ignore` é uma FUNÇÃO, não uma lista de regex, por um motivo concreto: o
+// packager avalia também os DIRETÓRIOS intermediários e, se um diretório é
+// ignorado, nunca desce nele. A regex antiga
+//   /^\/src\/(?!data\/local-db\/migrations(\/|$))/
+// pretendia "ignorar /src/ exceto as migrations", mas "/src/data" casa com
+// ^\/src\/ e a lookahead nunca chega a ser testada em "/src/data/local-db/
+// migrations" — a pasta era descartada em /src/data, o app saía SEM os .sql e o
+// main (db/migrate.ts) abria um banco sem schema em toda instalação nova
+// (mac 1.1.2: "no such table: sync_queue"; o Windows só funcionava porque um
+// banco com schema já existia de uma execução não empacotada).
+const MIGRATIONS_DIR = '/src/data/local-db/migrations';
+const IGNORED = [
+  /^\/shell\/src\//,
+  /^\/shell\/tsconfig\.json$/,
+  /^\/amplify\//,
+  /^\/public\//,
+  /^\/build-resources\//, // entitlements — usados na assinatura, não vão no app
+  /^\/_reversa_sdd\//,
+  /^\/my-app\//,
+  /^\/\.env$/,
+  /^\/craco\.config\.js$/,
+  /^\/postcss\.config\.js$/,
+  /^\/tailwind\.config\.js$/,
+  /\.map$/,
+];
+/** @param {string} p caminho relativo à raiz do app, com barra inicial ('' = raiz). */
+function ignorePath(p) {
+  if (p === '' || p === '/') return false;
+  if (p === '/src' || p.startsWith('/src/')) {
+    // Mantém a cadeia /src → /src/data → /src/data/local-db → migrations/** ;
+    // todo o resto de /src/ (fontes TS do renderer, já compiladas em build/) sai.
+    const inside = p === MIGRATIONS_DIR || p.startsWith(MIGRATIONS_DIR + '/');
+    const ancestor = (MIGRATIONS_DIR + '/').startsWith(p + '/');
+    return !(inside || ancestor);
+  }
+  return IGNORED.some((re) => re.test(p));
+}
+
 module.exports = {
   packagerConfig: {
     name: 'Film Assistant',
@@ -58,22 +97,7 @@ module.exports = {
     asar: true,
     // Empacota: shell compilado (shell/dist) + build do renderer (build/) + manifesto.
     // Ignora fontes TS, node_modules de dev, specs e o legado de referência.
-    ignore: [
-      // ignora /src/ EXCETO as migrations SQL (lidas pelo main no boot — db/migrate.ts)
-      /^\/src\/(?!data\/local-db\/migrations(\/|$))/,
-      /^\/shell\/src\//,
-      /^\/shell\/tsconfig\.json$/,
-      /^\/amplify\//,
-      /^\/public\//,
-      /^\/build-resources\//, // entitlements — usados na assinatura, não vão no app
-      /^\/_reversa_sdd\//,
-      /^\/my-app\//,
-      /^\/\.env$/,
-      /^\/craco\.config\.js$/,
-      /^\/postcss\.config\.js$/,
-      /^\/tailwind\.config\.js$/,
-      /\.map$/,
-    ],
+    ignore: ignorePath,
     ...windowsSign,
     ...macOSSign,
   },
