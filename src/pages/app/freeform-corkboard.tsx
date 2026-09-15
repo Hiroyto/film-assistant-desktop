@@ -27,6 +27,7 @@ import { getEntityColor, hexToRgba } from '../../components/Freeform/entityColor
 import { PEER_BLUE } from '../../components/Freeform/tokens';
 import { FdxImportButton } from '../../components/widgets/FdxImportButton';
 import { isDesktop } from '../../lib/ipcClient';
+import { flushPushNow } from '../../data/desktop-lifecycle';
 import { SupersessionRequiredError, acceptArcSuggestion, answerStagedQuestion, createArc, createArcFromEvents, createCard, createInformation, createSequence, deleteArc, deleteCard, dismissArcSuggestion, enqueueCardExtraction, enqueueExtractionJob, getCardLayouts, isMockMode, listArcSuggestions, listCardQuestions, listProjectEntities, listStagedQuestions, placeStagedCard, promoteStructuralToRelationship, resolveNarrativeStatusFlip, restoreArc, restoreCard, slugForCard, tagSequenceContains, updateArc, updateCardDescription, updateCardName, updateCardNarrativeStatus, updateCardPosition, type ArcKind, type ArcSuggestion, type CardLayout, type EvokesTransition, type ListProjectEntitiesResponse, type NarrativeStatus, type PersistedQuestion, type ProjectEntity, type StagedQuestion, type SupersessionRequiredResponse } from '../../lib/freeformApi';
 import { prefetchScriptData } from '../../lib/scriptPrefetch';
 import { playPageWipe } from '../../lib/pageWipe';
@@ -714,6 +715,16 @@ export default function FreeformCorkboard() {
           } catch (loadErr) {
             if (attempt >= RETRY_DELAYS.length) throw loadErr;
             console.warn(`[corkboard] load attempt ${attempt + 1} failed, retrying`, loadErr);
+            // Desktop: o freeform NEGA (403) a leitura de uma story que ainda não
+            // existe no /works — e no local-first a story nasce no SQLite com o
+            // push só ENFILEIRADO. Drena a fila antes de re-tentar; assim o board
+            // se recupera sozinho (reload, deep link, fila atrasada) em vez de
+            // abrir vazio sobre um grafo que existe. No-op na web e com fila vazia.
+            if (isDesktop()) {
+              try {
+                await flushPushNow();
+              } catch { /* best-effort — o retry acontece de qualquer jeito */ }
+            }
             await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt]));
             if (cancelled) return;
           }

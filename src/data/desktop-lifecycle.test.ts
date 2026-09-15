@@ -43,6 +43,7 @@ function makeDeps(overrides: Partial<LifecycleDeps> = {}): {
   const startSession = jest.fn((..._a: any[]) => stopSession);
   const startSyncScheduler = jest.fn((..._a: any[]) => stopScheduler);
   const processQueue = jest.fn(async () => {});
+  const reclaimInFlightQueue = jest.fn(async () => 0);
   const runPull = jest.fn(async () => ({ applied: 0, skipped: 0, conflicts: 0 }));
   const safeApiCall = jest.fn(async () => ({ success: true, data: { body: USER_BODY } }));
 
@@ -66,6 +67,7 @@ function makeDeps(overrides: Partial<LifecycleDeps> = {}): {
     processQueue: processQueue as any,
     runPull: runPull as any,
     rearmFailedQueue: jest.fn(async () => {}) as any,
+    reclaimInFlightQueue: reclaimInFlightQueue as any,
     repos,
     ...overrides,
   };
@@ -74,7 +76,7 @@ function makeDeps(overrides: Partial<LifecycleDeps> = {}): {
     deps,
     upserted,
     schedulerDeps: () => (startSyncScheduler.mock.calls[0] || [])[0],
-    spies: { startSession, stopSession, startSyncScheduler, stopScheduler, processQueue, runPull, safeApiCall, isUserPresent: repos.isUserPresent as jest.Mock, upsertUser: repos.upsertUser as jest.Mock },
+    spies: { startSession, stopSession, startSyncScheduler, stopScheduler, processQueue, reclaimInFlightQueue, runPull, safeApiCall, isUserPresent: repos.isUserPresent as jest.Mock, upsertUser: repos.upsertUser as jest.Mock },
   };
 }
 
@@ -146,6 +148,24 @@ describe('startDesktopDataLifecycle', () => {
     expect(upserted).toHaveLength(0);
     // scheduler still starts
     expect(spies.startSyncScheduler).toHaveBeenCalledTimes(1);
+  });
+
+  it('reclaims orphaned in_flight entries at boot (lease 0) and before every flush (lease > 0)', async () => {
+    const { deps, spies } = makeDeps();
+    const handle = startDesktopDataLifecycle({ userId: 'u-6', deps });
+    await handle.ready;
+
+    // Boot: nada pode estar em voo antes do worker existir -> lease 0.
+    expect(spies.reclaimInFlightQueue).toHaveBeenCalledTimes(1);
+    expect(spies.reclaimInFlightQueue.mock.calls[0][1]).toBe(0);
+
+    // Flush (o que o import de .fdx chama para registrar a ownership): recupera
+    // primeiro, drena depois — senão o flush é um no-op para a entry travada.
+    await handle.flushAll();
+    expect(spies.reclaimInFlightQueue).toHaveBeenCalledTimes(2);
+    expect(spies.reclaimInFlightQueue.mock.calls[1][1]).toBeGreaterThan(0);
+    expect(spies.reclaimInFlightQueue.mock.invocationCallOrder[1])
+      .toBeLessThan(spies.processQueue.mock.invocationCallOrder[0]);
   });
 
   it('flushAll drains the queue and stop() tears down session + scheduler', async () => {

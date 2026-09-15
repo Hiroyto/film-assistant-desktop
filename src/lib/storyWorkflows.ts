@@ -38,13 +38,22 @@ export function markStoryWorkflow(storyId: string, workflow: StoryWorkflow): voi
   }
 }
 
-/** The workflow a story belongs to. Work-record field wins; localStorage
- *  fallback covers a backend that drops the field; default is outline. */
+/** The workflow a story belongs to. A `freeform` tag from EITHER source wins;
+ *  only then does the record's field decide; default is outline.
+ *
+ *  Why freeform wins over a record that says `outline`: the local tag is written
+ *  once, at creation, from the writer's explicit choice, and a story never
+ *  converts from corkboard to outline. A work record claiming `outline` for a
+ *  story this device tagged as freeform is a LOST FIELD, not a conversion — and
+ *  obeying it strands the board (the corkboard's graph lives in the freeform
+ *  backend, so the outline editor opens an empty template over real work). The
+ *  desktop hits exactly this: its local-first save never sends `workflow` to
+ *  /works, so the cloud record answers for a field it never received. */
 export function resolveStoryWorkflow(
   story: { workflow?: string } | undefined | null,
   storyId: string,
 ): StoryWorkflow {
   if (story?.workflow === 'freeform') return 'freeform';
-  if (story?.workflow === 'outline') return 'outline';
-  return readMap()[storyId] === 'freeform' ? 'freeform' : 'outline';
+  if (readMap()[storyId] === 'freeform') return 'freeform';
+  return 'outline';
 }

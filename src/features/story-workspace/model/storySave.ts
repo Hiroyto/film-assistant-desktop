@@ -5,6 +5,7 @@ import { storyRepo } from '../../../data/local-db/repositories';
 import { enqueueMutation } from '../../../data/sync-queue';
 import { canonicalToRow, canonicalToWire } from './storySerialization';
 import { clock, TimerHandle } from '../../../lib/clock';
+import { resolveStoryWorkflow } from '../../../lib/storyWorkflows';
 import type { CanonicalStory } from '../../../models/story';
 import type { SyncOperation } from '../../../data/local-db/rows';
 
@@ -29,7 +30,19 @@ async function enqueuePush(story: CanonicalStory, operation: SyncOperation, user
     // Contrato da Lambda /works: `event` roteia a operação (save) e `userId`
     // identifica o owner. O push-worker envia este payload verbatim, então os
     // campos têm de bater com o que o backend lê (igual ao save() legado).
-    payload: { event: 'save', userId, ...canonicalToWire(story) },
+    //
+    // `workflow` viaja junto para as stories de corkboard: a tabela local
+    // `stories` não tem essa coluna (então canonicalToWire não a emite) e sem
+    // isto o work record da nuvem nunca sabe que a story é freeform — quem lesse
+    // o record (outro device, ou a própria Home ao ler works da nuvem) reabriria
+    // o corkboard no editor de outline. Só marcamos o positivo: `outline` é o
+    // default do backend e não precisa ser reafirmado.
+    payload: {
+      event: 'save',
+      userId,
+      ...canonicalToWire(story),
+      ...(resolveStoryWorkflow(undefined, story.storyId) === 'freeform' ? { workflow: 'freeform' } : {}),
+    },
   });
 }
 

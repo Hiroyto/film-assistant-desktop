@@ -35,7 +35,10 @@ import { startSyncScheduler as defaultStartScheduler } from './sync-agent/schedu
 import { processQueue as defaultProcessQueue } from './sync-agent/push-queue';
 import { runPull as defaultRunPull } from './sync-agent/pull-strategy';
 import { initialPullRepos as defaultRepos, storyRepo, characterRepo } from './local-db/repositories';
-import { rearmFailed as defaultRearmFailed } from './local-db/repositories/syncQueueRepo';
+import {
+  rearmFailed as defaultRearmFailed,
+  reclaimStaleInFlight as defaultReclaimStaleInFlight,
+} from './local-db/repositories/syncQueueRepo';
 import { mapStoryToRow, normalizeCharacters } from './sync-agent/transforms';
 import type { RawStory, RawUser } from './sync-agent/transforms';
 
@@ -53,6 +56,8 @@ export interface LifecycleDeps {
   runPull: typeof defaultRunPull;
   /** Re-arma gave-ups da fila (Retry sync manual). @see syncQueueRepo.rearmFailed */
   rearmFailedQueue: (now: string) => Promise<void>;
+  /** Recupera entries presas em 'in_flight'. @see syncQueueRepo.reclaimStaleInFlight */
+  reclaimInFlightQueue: (now: string, leaseMs?: number) => Promise<number>;
   repos: InitialPullRepos;
 }
 
@@ -67,8 +72,15 @@ const PROD_DEPS: LifecycleDeps = {
   processQueue: defaultProcessQueue,
   runPull: defaultRunPull,
   rearmFailedQueue: defaultRearmFailed,
+  reclaimInFlightQueue: defaultReclaimStaleInFlight,
   repos: defaultRepos,
 };
+
+// Lease do markInFlight: uma entry parada em 'in_flight' há mais tempo que isto
+// não tem mais dono (o processo que a pegou morreu) e volta para a fila. Curto
+// o bastante para o flush pré-import do .fdx não esperar, longo o bastante para
+// não roubar um POST realmente em voo (o backend deduplica por requestId).
+const IN_FLIGHT_LEASE_MS = 120_000;
 
 export interface DesktopLifecycleOptions {
   userId: string;
@@ -212,8 +224,21 @@ export function startDesktopDataLifecycle(opts: DesktopLifecycleOptions): Deskto
     deps,
   });
 
+  const reclaimInFlight = async (leaseMs: number): Promise<void> => {
+    try {
+      const n = await deps.reclaimInFlightQueue(new Date().toISOString(), leaseMs);
+      if (n > 0) console.warn(`[desktop-lifecycle] ${n} mutação(ões) presas em in_flight devolvidas à fila`);
+    } catch (e) {
+      console.error('[desktop-lifecycle] reclaim in_flight falhou', e);
+    }
+  };
+
   const flushAll = async (): Promise<void> => {
     try {
+      // Antes de drenar: devolve à fila o que ficou preso em 'in_flight' de um
+      // ciclo morto. Sem isto o flush é um no-op justamente para a story cuja
+      // entry travou — e é dela que o freeform precisa a ownership.
+      await reclaimInFlight(IN_FLIGHT_LEASE_MS);
       await deps.processQueue({ getToken });
     } catch (e) {
       console.error('[desktop-lifecycle] flushAll falhou', e);
@@ -229,6 +254,7 @@ export function startDesktopDataLifecycle(opts: DesktopLifecycleOptions): Deskto
   const syncNow = async (): Promise<void> => {
     try {
       await deps.rearmFailedQueue(new Date().toISOString());
+      await reclaimInFlight(IN_FLIGHT_LEASE_MS);
       await deps.runPull({ userId, getWorks: getWorksOngoing, since: null, onConflict: opts.onConflict });
       await deps.processQueue({ getToken });
     } catch (e) {
@@ -275,6 +301,10 @@ export function startDesktopDataLifecycle(opts: DesktopLifecycleOptions): Deskto
   // (2) Initial pull (1º login) -> (3) scheduler. O scheduler liga MESMO se o
   // initial pull falhar (resiliência: o pull periódico se recupera depois).
   const ready: Promise<void> = (async () => {
+    // Boot: nada pode estar legitimamente em voo antes do worker existir, então
+    // TODA entry em 'in_flight' é órfã de um ciclo anterior (app fechado no meio
+    // do POST, reload do renderer) — lease 0.
+    await reclaimInFlight(0);
     try {
       if (await deps.needsInitialPull(userId, deps.repos)) {
         await deps.runInitialPull(userId, http, deps.repos, {
