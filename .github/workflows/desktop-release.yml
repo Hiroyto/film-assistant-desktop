@@ -73,8 +73,21 @@ jobs:
           echo "Secrets de assinatura presentes para $RUNNER_OS."
 
       # npm ci roda o postinstall (electron-rebuild do better-sqlite3).
+      #
+      # O .npmrc do repo (runtime=electron / target / disturl) existe para a MÁQUINA
+      # DE DEV sem Python: faz o prebuild-install baixar o binário do better-sqlite3
+      # já compilado para a ABI do Electron. No CI ele é PREJUDICIAL: vale para todo
+      # node-gyp do install, e os módulos nativos OPCIONAIS do appdmg (fs-xattr,
+      # macos-alias — só macOS, sem prebuild) passam a compilar contra os headers do
+      # Electron, falham, e o npm descarta a subárvore opcional inteira. O sintoma
+      # aparece só no make: "Cannot find module 'appdmg'" no maker-dmg (v1.1.0).
+      # Os runners têm toolchain: instala-se para o Node do sistema e o postinstall
+      # recompila o better-sqlite3 para o Electron — exatamente como no 1.0.2.
       - name: Install dependencies
-        run: npm ci
+        shell: bash
+        run: |
+          rm -f .npmrc
+          npm ci
 
       # Importa o certificado "Developer ID Application" num keychain temporário.
       # SEM ESTE PASSO o codesign não encontra APPLE_IDENTITY e a assinatura falha
