@@ -51,7 +51,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/') && vars.ALLOW_UNSIGNED_RELEASE != 'true'
         shell: bash
         env:
-          WINDOWS_CERT_FILE: ${{ secrets.WINDOWS_CERT_FILE }}
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
           WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
           APPLE_IDENTITY: ${{ secrets.APPLE_IDENTITY }}
           APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
@@ -59,7 +59,7 @@ jobs:
         run: |
           missing=()
           if [ "$RUNNER_OS" = "Windows" ]; then
-            [ -n "$WINDOWS_CERT_FILE" ] || missing+=(WINDOWS_CERT_FILE)
+            [ -n "$WINDOWS_CERT_PFX_BASE64" ] || missing+=(WINDOWS_CERT_PFX_BASE64)
             [ -n "$WINDOWS_CERT_PASSWORD" ] || missing+=(WINDOWS_CERT_PASSWORD)
           else
             [ -n "$APPLE_IDENTITY" ] || missing+=(APPLE_IDENTITY)
@@ -142,6 +142,40 @@ jobs:
           echo "Identidades de assinatura disponíveis:"
           security find-identity -v -p codesigning "$KEYCHAIN"
 
+      # Windows Authenticode: o forge (forge.config.js) recebe WINDOWS_CERT_FILE como
+      # CAMINHO de um .pfx — que precisa existir no runner. Este passo decodifica o
+      # secret WINDOWS_CERT_PFX_BASE64 (o .pfx em base64, 1 linha) em $RUNNER_TEMP e
+      # publica o caminho em GITHUB_ENV para o passo de publish. Secret vazio = no-op:
+      # o build Windows sai NÃO-ASSINADO (o gate acima já decidiu se isso é aceitável).
+      - name: Materialize Windows code-signing certificate (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${WINDOWS_CERT_PFX_BASE64:-}" ]; then
+            echo "::warning::WINDOWS_CERT_PFX_BASE64 vazio — o build Windows sairá NÃO-ASSINADO."
+            exit 0
+          fi
+          CERT_PATH="$RUNNER_TEMP/win-cert.pfx"
+          B64_PATH="$RUNNER_TEMP/win-cert.b64"
+          printf '%s' "$WINDOWS_CERT_PFX_BASE64" | tr -d '[:space:]' > "$B64_PATH"
+          echo "Secret base64: $(wc -c < "$B64_PATH") caracteres (após limpar espaços)."
+          if ! openssl base64 -d -A -in "$B64_PATH" -out "$CERT_PATH" 2>/dev/null; then
+            echo "::error::Falha ao decodificar WINDOWS_CERT_PFX_BASE64. Regenere com:"
+            echo "::error::openssl base64 -A -in cert.pfx -out cert.pfx.base64"
+            echo "::error::e cole o conteúdo INTEIRO do arquivo (uma linha só, sem quebras)."
+            exit 1
+          fi
+          rm -f "$B64_PATH"
+          if [ ! -s "$CERT_PATH" ]; then
+            echo "::error::O .pfx decodificado está vazio — secret incompleto."
+            exit 1
+          fi
+          echo "Certificado decodificado: $(wc -c < "$CERT_PATH") bytes."
+          echo "WINDOWS_CERT_FILE=$CERT_PATH" >> "$GITHUB_ENV"
+
       - name: Publish to GitHub Releases
         env:
           # O CRA trata warnings como ERRO quando CI=true (o Actions seta isso sozinho).
@@ -170,8 +204,8 @@ jobs:
           # Se você publicar num repo DIFERENTE do que roda o workflow, troque por um
           # PAT (secrets.PUBLISH_TOKEN) com contents:write no repo de releases.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # --- Assinatura Windows (opcional) ---
-          WINDOWS_CERT_FILE: ${{ secrets.WINDOWS_CERT_FILE }}
+          # --- Assinatura Windows (opcional) --- caminho do .pfx materializado acima.
+          WINDOWS_CERT_FILE: ${{ env.WINDOWS_CERT_FILE }}
           WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
           # --- Assinatura + notarização macOS (opcional) ---
           APPLE_IDENTITY: ${{ secrets.APPLE_IDENTITY }}
