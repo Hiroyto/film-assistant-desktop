@@ -42,59 +42,86 @@ export async function processQueue(deps: PushDeps): Promise<void> {
     await syncQueueRepo.markInFlight(row.id, now());
     emit('sync.entry.in_flight', { entryId: row.id, entityType: row.entity_type });
 
-    const token = await deps.getToken();
-    const endpoint = deps.resolveEndpoint?.(row) ?? DEFAULT_ENDPOINTS[row.entity_type] ?? 'works';
-    let body: unknown = {};
     try {
-      body = JSON.parse(row.payload);
-    } catch {
-      /* payload inválido tratado como erro permanente abaixo */
+      await pushOne(row, deps, now);
+    } catch (e) {
+      // markInFlight é um lease sem dono: uma exceção aqui (getToken com sessão
+      // expirada, safeApiCall lançando em vez de devolver {success:false}) deixaria
+      // a entry presa em 'in_flight' PARA SEMPRE — listProcessable só olha
+      // 'pending'/'failed'. Trata como falha normal, com backoff.
+      const attempts = row.attempts + 1;
+      const giveUp = shouldGiveUp(attempts);
+      const reason = (e as Error)?.message ?? 'unknown';
+      await syncQueueRepo.markFailed(
+        row.id,
+        attempts,
+        giveUp ? null : nextAttemptAt(attempts, Date.parse(now()) || undefined),
+        reason,
+        giveUp ? 'failed' : 'pending',
+      );
+      emit('sync.entry.failed', { entryId: row.id, reason, attempts });
     }
-    // COD-008: o request_id viaja no BODY (campo `requestId`) — a Lambda /works roda
-    // em integração non-proxy e lê a idempotência daqui, não do header X-Request-Id.
-    if (body && typeof body === 'object') {
-      (body as Record<string, unknown>).requestId = row.request_id;
-    }
-
-    // Ordem em que o backend recebe a mutation (spec 03 @ordem). No-op fora de teste.
-    recordPush(row.request_id);
-    // CORS (desktop): NÃO enviamos o header X-Request-Id. Ele obrigaria o preflight a
-    // exigir `x-request-id` em Access-Control-Allow-Headers, que a API Gateway não
-    // libera para a origem do desktop (file://null / localhost) — o POST virava
-    // "CORS error" (enquanto chamadas sem esse header, como o delete, passam). A
-    // idempotência não depende do header: o request_id já vai no BODY (acima).
-    // noRetry: o retry é controlado pela FILA (backoff persistente), não pelo safeApiCall.
-    const res = await safeApiCall(endpoint, body, token, {
-      noRetry: true,
-    });
-
-    if (res.success) {
-      await syncQueueRepo.markSucceeded(row.id);
-      emit('sync.entry.succeeded', { entryId: row.id, entityType: row.entity_type });
-      continue;
-    }
-
-    const status: number | undefined = res.originalError?.response?.status;
-    if (status === 409) {
-      // Conflito server-side (version mismatch) -> UI prompt (AD-02).
-      await syncQueueRepo.markConflict(row.id, JSON.stringify(res.originalError?.response?.data ?? {}));
-      emit('sync.conflict', { entityType: row.entity_type, entityId: row.entity_id });
-      continue;
-    }
-
-    const attempts = row.attempts + 1;
-    const giveUp = shouldGiveUp(attempts);
-    await syncQueueRepo.markFailed(
-      row.id,
-      attempts,
-      giveUp ? null : nextAttemptAt(attempts, Date.parse(now()) || undefined),
-      res.error ?? 'unknown',
-      giveUp ? 'failed' : 'pending',
-    );
-    emit('sync.entry.failed', { entryId: row.id, reason: res.error ?? 'unknown', attempts });
   }
 
   await refreshState();
+}
+
+/** Uma entry: POST + veredito (sucesso/conflito/falha). Pode lançar — o caller trata. */
+async function pushOne(
+  row: SyncQueueRow,
+  deps: PushDeps,
+  now: () => string,
+): Promise<void> {
+  const token = await deps.getToken();
+  const endpoint = deps.resolveEndpoint?.(row) ?? DEFAULT_ENDPOINTS[row.entity_type] ?? 'works';
+  let body: unknown = {};
+  try {
+    body = JSON.parse(row.payload);
+  } catch {
+    /* payload inválido tratado como erro permanente abaixo */
+  }
+  // COD-008: o request_id viaja no BODY (campo `requestId`) — a Lambda /works roda
+  // em integração non-proxy e lê a idempotência daqui, não do header X-Request-Id.
+  if (body && typeof body === 'object') {
+    (body as Record<string, unknown>).requestId = row.request_id;
+  }
+
+  // Ordem em que o backend recebe a mutation (spec 03 @ordem). No-op fora de teste.
+  recordPush(row.request_id);
+  // CORS (desktop): NÃO enviamos o header X-Request-Id. Ele obrigaria o preflight a
+  // exigir `x-request-id` em Access-Control-Allow-Headers, que a API Gateway não
+  // libera para a origem do desktop (file://null / localhost) — o POST virava
+  // "CORS error" (enquanto chamadas sem esse header, como o delete, passam). A
+  // idempotência não depende do header: o request_id já vai no BODY (acima).
+  // noRetry: o retry é controlado pela FILA (backoff persistente), não pelo safeApiCall.
+  const res = await safeApiCall(endpoint, body, token, {
+    noRetry: true,
+  });
+
+  if (res.success) {
+    await syncQueueRepo.markSucceeded(row.id);
+    emit('sync.entry.succeeded', { entryId: row.id, entityType: row.entity_type });
+    return;
+  }
+
+  const status: number | undefined = res.originalError?.response?.status;
+  if (status === 409) {
+    // Conflito server-side (version mismatch) -> UI prompt (AD-02).
+    await syncQueueRepo.markConflict(row.id, JSON.stringify(res.originalError?.response?.data ?? {}));
+    emit('sync.conflict', { entityType: row.entity_type, entityId: row.entity_id });
+    return;
+  }
+
+  const attempts = row.attempts + 1;
+  const giveUp = shouldGiveUp(attempts);
+  await syncQueueRepo.markFailed(
+    row.id,
+    attempts,
+    giveUp ? null : nextAttemptAt(attempts, Date.parse(now()) || undefined),
+    res.error ?? 'unknown',
+    giveUp ? 'failed' : 'pending',
+  );
+  emit('sync.entry.failed', { entryId: row.id, reason: res.error ?? 'unknown', attempts });
 }
 
 async function refreshState(): Promise<void> {

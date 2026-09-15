@@ -18,10 +18,20 @@ export async function parsePdfToText(
   file: File,
   onProgress?: (page: number, total: number) => void,
 ): Promise<string> {
-  const pdfjs = await import('pdfjs-dist');
-  pdfjs.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+  // LEGACY build (main AND worker): embute os polyfills core-js, então roda em
+  // qualquer Chromium que o shell venha a usar; os dois lados precisam casar.
+  // O subpath legacy reexporta a API pública do entrypoint principal (ver a
+  // declaração em src/custom.d.ts), então os tipos batem carregando o legacy.
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.min.mjs');
+  // Worker servido do PRÓPRIO app (public/pdf.worker.min.mjs, copiado de
+  // node_modules pelo craco.config.js a cada start/build) — nunca de um CDN:
+  // código remoto no renderer teria acesso a window.electronAPI, e a CSP do
+  // desktop (script-src 'self') não permitiria mesmo.
+  pdfjs.GlobalWorkerOptions.workerSrc = `${process.env.PUBLIC_URL || ''}/pdf.worker.min.mjs`;
 
   const buf = await file.arrayBuffer();
+  // pdf.js ≥ 6.2.108 (GHSA de execução de JS via PDF malicioso corrigido) e sem o
+  // antigo caminho de `new Function` para fontes (isEvalSupported foi removido).
   const pdf = await pdfjs.getDocument({ data: new Uint8Array(buf) }).promise;
 
   const pages: PdfPageItems[] = [];

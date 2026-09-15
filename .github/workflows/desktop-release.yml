@@ -9,8 +9,9 @@ name: Desktop Release
 #   - Suba a versão em package.json e faça push de uma tag `vX.Y.Z`, OU
 #   - rode manualmente em Actions → "Desktop Release" → Run workflow.
 #
-# Assinatura (opcional): preencha os secrets abaixo. Vazios = build NÃO-ASSINADO
-#   (funciona, mas o usuário vê SmartScreen no Windows / Gatekeeper no macOS).
+# Assinatura: OBRIGATÓRIA em releases por tag (o job falha sem os secrets, a menos
+#   que a Variable ALLOW_UNSIGNED_RELEASE=true esteja definida). Em workflow_dispatch
+#   os secrets são opcionais: vazios = build NÃO-ASSINADO (SmartScreen / Gatekeeper).
 
 on:
   push:
@@ -40,6 +41,36 @@ jobs:
         with:
           node-version: 20
           cache: npm
+
+      # Release por TAG exige assinatura: o auto-update (Squirrel / update-electron-app)
+      # confia só em HTTPS + GitHub Releases, então um pacote não-assinado no release
+      # seria aceito pelos clientes. Para publicar sem assinatura conscientemente
+      # (ex.: canal beta interno), defina a Variable ALLOW_UNSIGNED_RELEASE=true.
+      # workflow_dispatch manual continua livre (builds de teste).
+      - name: Require code-signing secrets on release tags
+        if: startsWith(github.ref, 'refs/tags/') && vars.ALLOW_UNSIGNED_RELEASE != 'true'
+        shell: bash
+        env:
+          WINDOWS_CERT_FILE: ${{ secrets.WINDOWS_CERT_FILE }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          APPLE_IDENTITY: ${{ secrets.APPLE_IDENTITY }}
+          APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+        run: |
+          missing=()
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            [ -n "$WINDOWS_CERT_FILE" ] || missing+=(WINDOWS_CERT_FILE)
+            [ -n "$WINDOWS_CERT_PASSWORD" ] || missing+=(WINDOWS_CERT_PASSWORD)
+          else
+            [ -n "$APPLE_IDENTITY" ] || missing+=(APPLE_IDENTITY)
+            [ -n "$APPLE_CERT_P12_BASE64" ] || missing+=(APPLE_CERT_P12_BASE64)
+            [ -n "$APPLE_ID" ] || missing+=(APPLE_ID)
+          fi
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Release em tag sem assinatura de código. Secrets ausentes: ${missing[*]}. Configure-os ou defina a Variable ALLOW_UNSIGNED_RELEASE=true para publicar não-assinado de propósito."
+            exit 1
+          fi
+          echo "Secrets de assinatura presentes para $RUNNER_OS."
 
       # npm ci roda o postinstall (electron-rebuild do better-sqlite3).
       - name: Install dependencies

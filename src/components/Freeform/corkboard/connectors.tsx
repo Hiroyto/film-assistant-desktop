@@ -231,12 +231,35 @@ export function ConnectorLayer({
         </filter>
       </defs>
 
-      {/* Sequence throughline — Sequence→Sequence chronology arrows, auto-chained
-          in plot order at extraction. Same look as the event throughline; these
-          are derived (not individually editable), so no splice/remove affordance. */}
-      {(edges.sequence_precedes ?? []).map((e, i) => {
-        const fr = rectOf(e.from);
-        const tr = rectOf(e.to);
+      {/* Sequence throughline — Sequence→Sequence chronology arrows, plus the
+          MIXED SPINE's cross-altitude links (Sequence↔Event), auto-chained in
+          told order at extraction or drawn by hand. Same look as the event
+          throughline; no splice affordance. */}
+      {[...(edges.sequence_precedes ?? []), ...((edges as any).cross_precedes ?? [])].map((e, i) => {
+        // Visual rule (Ben 2026-08-23): a POPULATED sequence never shows a
+        // direct precedes arrow off its container — the arrow re-anchors to
+        // the boundary MEMBER scene (outgoing = visually last member,
+        // incoming = first). Empty sequences keep their direct arrow, and a
+        // collapsed container (members hidden) falls back to the box. Draw-
+        // time only: the graph edges stay on the sequence for querying.
+        const memberEndpoint = (id: string, role: 'from' | 'to'): string => {
+          if (typeById.get(id) !== 'sequence') return id;
+          let best: string | null = null;
+          let bestY = 0;
+          for (const c of edges.contains ?? []) {
+            if (c.from !== id) continue;
+            const r = rectOf(c.to);
+            if (!r) continue;
+            const y = role === 'from' ? r.y + r.h : r.y;
+            if (best === null || (role === 'from' ? y > bestY : y < bestY)) { best = c.to; bestY = y; }
+          }
+          return best ?? id;
+        };
+        const fromId = memberEndpoint(e.from, 'from');
+        const toId = memberEndpoint(e.to, 'to');
+        if (fromId === toId) return null;
+        const fr = rectOf(fromId);
+        const tr = rectOf(toId);
         if (!fr || !tr) return null;
         const p1 = edgePoint(fr, tr);
         const p2 = edgePoint(tr, fr);
@@ -872,11 +895,172 @@ export function topoSortEventsByPrecedes(
   return out;
 }
 
+
+/**
+ * TOLD ORDER over top-level story units (loose events + sequences). The board
+ * spine, the SC numbers and the script navigator all read this one order, so
+ * the three surfaces can never disagree.
+ *
+ * Two passes:
+ *  1. SEAT each unit from the relation that knows where it sits — a container
+ *     from its earliest member's PRECEDES rank, an empty sequence from a
+ *     cross-altitude link, else from the sequence chain, else seq_order.
+ *  2. TOPO SORT those seats against the union of ALL THREE precedes lists,
+ *     projected onto units (a member scene's unit is its container).
+ *
+ * Pass 2 is why this exists (Ben 2026-08-24: the opening sequence kept getting
+ * bumped to the bottom). A seat only ever consults ONE relation, so a unit
+ * whose ordering lives in a relation the seat never looked at lands
+ * arbitrarily: a loose scene ordered ONLY by cross links takes an
+ * insertion-order event rank — dead last when it is the last event the server
+ * happened to return — and every empty sequence seated against that scene
+ * inherits the wrong seat. The topo pass is authoritative wherever the chain
+ * has an opinion; the seats are the tie-break where it has none.
+ */
+export function orderSpineUnits(
+  entities: ProjectEntity[],
+  precedesEdges: Array<{ from: string; to: string }>,
+  containsEdges: Array<{ from: string; to: string }> = [],
+  sequencePrecedesEdges: Array<{ from: string; to: string }> = [],
+  crossPrecedesEdges: Array<{ from: string; to: string }> = [],
+): { units: ProjectEntity[]; membersOrdered: Map<string, ProjectEntity[]> } {
+  const byId = new Map(entities.map((e) => [e.id, e]));
+  const events = entities.filter((e) => e.type === 'event');
+  const seqs = entities.filter((e) => e.type === 'sequence');
+
+  // CONTAINS both ways: a sequence's member ids, and a member's container.
+  const membersBySeq = new Map<string, string[]>();
+  const containerOf = new Map<string, string>();
+  for (const c of containsEdges) {
+    if (!byId.has(c.from) || !byId.has(c.to)) continue;
+    const arr = membersBySeq.get(c.from);
+    if (arr) arr.push(c.to);
+    else membersBySeq.set(c.from, [c.to]);
+    containerOf.set(c.to, c.from);
+  }
+
+  // --- Pass 1: seats -------------------------------------------------------
+  const globalOrder = topoSortEventsByPrecedes(events, precedesEdges);
+  const rankOf = new Map<string, number>();
+  globalOrder.forEach((e, i) => rankOf.set(e.id, i));
+  const BIG = Number.MAX_SAFE_INTEGER;
+
+  type SpineItem = { id: string; rank: number; created: string };
+  const spineItems: SpineItem[] = [];
+  for (const e of events) {
+    if (containerOf.has(e.id)) continue; // members ride inside their container
+    spineItems.push({ id: e.id, rank: rankOf.get(e.id) ?? BIG, created: String(e.created_at ?? '') });
+  }
+  const seqChain = (() => {
+    const chained = topoSortEventsByPrecedes(seqs, sequencePrecedesEdges);
+    // No chain edges at all: fall back to seq_order (extraction's plot index),
+    // then created_at.
+    const hasChain = sequencePrecedesEdges.some((e) => byId.has(e.from) && byId.has(e.to));
+    if (hasChain) return chained;
+    return [...seqs].sort((a, b) => {
+      const ao = Number((a as any).seq_order ?? NaN), bo = Number((b as any).seq_order ?? NaN);
+      if (Number.isFinite(ao) && Number.isFinite(bo) && ao !== bo) return ao - bo;
+      return String(a.created_at ?? '').localeCompare(String(b.created_at ?? ''));
+    });
+  })();
+  const membersOrdered = new Map<string, ProjectEntity[]>();
+  const memberRankBySeq = new Map<string, number>();
+  for (const sq of seqs) {
+    const memberIds = (membersBySeq.get(sq.id) ?? []).filter((id) => byId.has(id));
+    if (memberIds.length === 0) continue;
+    const members = topoSortEventsByPrecedes(memberIds.map((id) => byId.get(id)!).filter(Boolean), precedesEdges);
+    membersOrdered.set(sq.id, members);
+    memberRankBySeq.set(sq.id, Math.min(...members.map((m) => rankOf.get(m.id) ?? BIG)));
+  }
+  const seatOf = new Map<string, number>();
+  for (const sq of seqs) {
+    const m = memberRankBySeq.get(sq.id);
+    if (m != null) seatOf.set(sq.id, m);
+  }
+  for (const sq of seqs) {
+    if (seatOf.has(sq.id)) continue;
+    const after = crossPrecedesEdges.filter((e) => e.to === sq.id && rankOf.has(e.from)).map((e) => rankOf.get(e.from)! + 0.5);
+    const before = crossPrecedesEdges.filter((e) => e.from === sq.id && rankOf.has(e.to)).map((e) => rankOf.get(e.to)! - 0.5);
+    if (after.length) seatOf.set(sq.id, Math.max(...after));
+    else if (before.length) seatOf.set(sq.id, Math.min(...before));
+  }
+  // Propagate seats along the SEQUENCE CHAIN to a fixpoint: an unseated
+  // sequence sits just after its nearest seated chain predecessor, else just
+  // before its nearest seated chain successor.
+  const chainPred = new Map<string, string[]>();
+  const chainSucc = new Map<string, string[]>();
+  for (const e of sequencePrecedesEdges) {
+    if (!byId.has(e.from) || !byId.has(e.to)) continue;
+    (chainSucc.get(e.from) ?? chainSucc.set(e.from, []).get(e.from)!).push(e.to);
+    (chainPred.get(e.to) ?? chainPred.set(e.to, []).get(e.to)!).push(e.from);
+  }
+  const CHAIN_STEP = 0.001;
+  for (let changed = true, guard = 0; changed && guard < seqs.length + 1; guard++) {
+    changed = false;
+    for (const sq of seqs) {
+      if (seatOf.has(sq.id)) continue;
+      const p = (chainPred.get(sq.id) ?? []).filter((id) => seatOf.has(id)).map((id) => seatOf.get(id)!);
+      const su = (chainSucc.get(sq.id) ?? []).filter((id) => seatOf.has(id)).map((id) => seatOf.get(id)!);
+      if (p.length) { seatOf.set(sq.id, Math.max(...p) + CHAIN_STEP); changed = true; }
+      else if (su.length) { seatOf.set(sq.id, Math.min(...su) - CHAIN_STEP); changed = true; }
+    }
+  }
+  let carry = -1;
+  let step = 0;
+  seqChain.forEach((sq) => {
+    const seat = seatOf.get(sq.id);
+    if (seat != null) {
+      carry = seat; step = 0;
+      spineItems.push({ id: sq.id, rank: seat, created: String(sq.created_at ?? '') });
+      return;
+    }
+    step += 1;
+    spineItems.push({ id: sq.id, rank: carry + step / 1000, created: String(sq.created_at ?? '') });
+  });
+  spineItems.sort((a, b) => (a.rank - b.rank) || (a.created < b.created ? -1 : a.created > b.created ? 1 : 0));
+
+  // --- Pass 2: told-order topo sort over the seated order ------------------
+  const unitOf = (id: string) => containerOf.get(id) ?? id;
+  const toldEdges: Array<{ from: string; to: string }> = [];
+  for (const e of [...precedesEdges, ...crossPrecedesEdges, ...sequencePrecedesEdges]) {
+    const a = unitOf(e.from), b = unitOf(e.to);
+    if (a !== b && byId.has(a) && byId.has(b)) toldEdges.push({ from: a, to: b });
+  }
+  const seated = spineItems.map((it) => byId.get(it.id)!).filter(Boolean);
+  const units = topoSortEventsByPrecedes(seated, toldEdges);
+  return { units, membersOrdered };
+}
+
+/** Every scene in told order, members expanded inside their container — the
+ *  one order the SC numbers and the script navigator read. */
+export function toldOrderEvents(
+  entities: ProjectEntity[],
+  precedesEdges: Array<{ from: string; to: string }>,
+  containsEdges: Array<{ from: string; to: string }> = [],
+  sequencePrecedesEdges: Array<{ from: string; to: string }> = [],
+  crossPrecedesEdges: Array<{ from: string; to: string }> = [],
+): ProjectEntity[] {
+  const { units, membersOrdered } = orderSpineUnits(entities, precedesEdges, containsEdges, sequencePrecedesEdges, crossPrecedesEdges);
+  const out: ProjectEntity[] = [];
+  for (const u of units) {
+    const members = membersOrdered.get(u.id);
+    if (members && members.length) out.push(...members);
+    else if (u.type === 'event') out.push(u);
+  }
+  return out;
+}
+
 export function computeAutoLayout(
   entities: ProjectEntity[],
   precedesEdges: Array<{ from: string; to: string }> = [],
   boardWidth = 1400,
   containsEdges: Array<{ from: string; to: string }> = [],
+  /** Sequence-level PRECEDES (the sequence chain). Ranks member-less
+   *  sequences, which have no event rank of their own. */
+  sequencePrecedesEdges: Array<{ from: string; to: string }> = [],
+  /** Cross-altitude PRECEDES (Sequence↔Event): with these, the spine is ONE
+   *  told-order chain and every unit ranks from a single topo sort. */
+  crossPrecedesEdges: Array<{ from: string; to: string }> = [],
 ): Record<string, Pos> {
   // Composition: the CAST spawns as a GRID/web cluster on the left; the story
   // STRUCTURE (events throughline + sequence containers) runs as a spine to the
@@ -945,49 +1129,28 @@ export function computeAutoLayout(
                          // block, but with enough air that the cards breathe.
   const MEMBER_STRIDE = COLLAPSED_H + MEMBER_GAP;
 
-  // Global PRECEDES rank over EVERY event (members included), so a container's
-  // story position is its earliest member's rank.
-  const globalOrder = topoSortEventsByPrecedes(byType.event ?? [], precedesEdges);
-  const rankOf = new Map<string, number>();
-  globalOrder.forEach((e, i) => rankOf.set(e.id, i));
-  const BIG = Number.MAX_SAFE_INTEGER;
-
-  // Spine items: loose events + container sequences, each with a sort rank.
-  // Member-less sequences render as ordinary cards in the flow too (rank = BIG
-  // so they trail, tie-broken by created_at — they have no story position yet).
-  type SpineItem = { kind: 'event' | 'seq'; id: string; rank: number; created: string };
-  const spineItems: SpineItem[] = [];
-  for (const e of byType.event ?? []) {
-    if (memberEventIds.has(e.id)) continue;
-    spineItems.push({ kind: 'event', id: e.id, rank: rankOf.get(e.id) ?? BIG, created: String(e.created_at ?? '') });
-  }
-  const membersOrderedBySeq = new Map<string, ProjectEntity[]>();
-  for (const s of byType.sequence ?? []) {
-    const memberIds = (membersBySeq.get(s.id) ?? []).filter((id) => byId.has(id));
-    if (memberIds.length === 0) {
-      spineItems.push({ kind: 'event', id: s.id, rank: BIG, created: String(s.created_at ?? '') });
-      continue;
-    }
-    const members = topoSortEventsByPrecedes(memberIds.map((id) => byId.get(id)!).filter(Boolean), precedesEdges);
-    membersOrderedBySeq.set(s.id, members);
-    const rank = Math.min(...members.map((m) => rankOf.get(m.id) ?? BIG));
-    spineItems.push({ kind: 'seq', id: s.id, rank, created: String(s.created_at ?? '') });
-  }
-  spineItems.sort((a, b) => (a.rank - b.rank) || (a.created < b.created ? -1 : a.created > b.created ? 1 : 0));
+  // Spine order + member ordering come from the SHARED told-order pass
+  // (orderSpineUnits above), so the board, the SC numbers and the script
+  // navigator are guaranteed to agree. Geometry only, below.
+  const { units: spineUnits, membersOrdered: membersOrderedBySeq } = orderSpineUnits(
+    entities, precedesEdges, containsEdges, sequencePrecedesEdges, crossPrecedesEdges,
+  );
 
   let seqY = CANVAS_PAD; // visible top of the next spine element
-  for (const item of spineItems) {
-    if (item.kind === 'event') {
-      out[item.id] = { x: spineX, y: seqY };
+  for (const unit of spineUnits) {
+    // A loose scene and an EMPTY sequence are both one card-height row; a
+    // sequence WITH members renders as the container box around them.
+    const members = membersOrderedBySeq.get(unit.id) ?? [];
+    if (members.length === 0) {
+      out[unit.id] = { x: spineX, y: seqY };
       seqY += eventRowStride; // one card + a normal gap
       continue;
     }
     // Container: the box adds BOX_PAD above the anchor and below the last scene.
     // Push the anchor down by BOX_PAD so the BOX TOP (anchor - PAD) lands at seqY,
     // giving the box the same ROW_GAP gap to its neighbors a normal card has.
-    const members = membersOrderedBySeq.get(item.id) ?? [];
     const anchorY = seqY + BOX_PAD;
-    out[item.id] = { x: spineX, y: anchorY };
+    out[unit.id] = { x: spineX, y: anchorY };
     members.forEach((m, i) => { out[m.id] = { x: spineX, y: anchorY + LABEL_H + i * MEMBER_STRIDE }; });
     const lastMemberBottom = anchorY + LABEL_H + (members.length - 1) * MEMBER_STRIDE + COLLAPSED_H;
     seqY = lastMemberBottom + BOX_PAD + ROW_GAP; // box bottom + a normal gap to next

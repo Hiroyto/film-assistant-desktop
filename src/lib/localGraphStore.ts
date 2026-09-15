@@ -29,6 +29,40 @@ export interface StoredGraph {
   payload: ListProjectEntitiesResponse;
   layouts?: Record<string, CardLayout>;
   fetchedAt: number;
+  /** Cognito user who cached this graph. Reads for a DIFFERENT user return
+   *  null, so one account never renders another's cached story on a shared
+   *  browser. Absent on legacy records (pre-user-scoping) — those read through
+   *  once and get re-stamped on the next save. */
+  userId?: string;
+}
+
+// Growth guardrails: the shelf is a cache, not an archive. Without these it
+// grows one full graph per story ever opened and never shrinks (observed: 50
+// graphs, 43 of them deleted stories). Prune runs opportunistically after each
+// save.
+const MAX_ENTRIES = 25;
+const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+/**
+ * The signed-in Cognito user, resolved SYNCHRONOUSLY from Amplify's cached
+ * `LastAuthUser` in localStorage (same value as the `cognito:username` claim
+ * the app keys everything on). Lets the shelf scope reads/writes to the current
+ * account without threading userId (and without an async session fetch) through
+ * every call site. Returns null when logged out or storage is unavailable —
+ * callers then read/write unscoped, exactly as before.
+ */
+function currentCognitoUserId(): string | null {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('CognitoIdentityServiceProvider.') && k.endsWith('.LastAuthUser')) {
+        const v = localStorage.getItem(k);
+        if (v) return v;
+      }
+    }
+  } catch { /* storage blocked (private mode / iframe) */ }
+  return null;
 }
 
 function openDb(): Promise<IDBDatabase> {
@@ -46,7 +80,8 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
-export async function loadStoredGraph(storyId: string): Promise<StoredGraph | null> {
+export async function loadStoredGraph(storyId: string, userId?: string): Promise<StoredGraph | null> {
+  const scopeUser = userId ?? currentCognitoUserId();
   try {
     const db = await openDb();
     return await new Promise<StoredGraph | null>((resolve) => {
@@ -55,6 +90,13 @@ export async function loadStoredGraph(storyId: string): Promise<StoredGraph | nu
       req.onsuccess = () => {
         const rec = req.result as StoredGraph | undefined;
         if (!rec || rec.v !== RECORD_VERSION || !rec.payload?.entities || !rec.payload?.edges) {
+          resolve(null);
+          return;
+        }
+        // User-scoped read: a record owned by a different account reads as
+        // absent, so the caller falls through to the (authz-gated) network
+        // path instead of rendering someone else's cached story.
+        if (scopeUser && rec.userId && rec.userId !== scopeUser) {
           resolve(null);
           return;
         }
@@ -77,8 +119,10 @@ export async function loadStoredGraph(storyId: string): Promise<StoredGraph | nu
 export async function saveStoredGraph(
   storyId: string,
   update: { payload?: ListProjectEntitiesResponse; layouts?: Record<string, CardLayout> },
+  userId?: string,
 ): Promise<void> {
   if (!update.payload && !update.layouts) return;
+  const owner = userId ?? currentCognitoUserId() ?? undefined;
   try {
     const db = await openDb();
     await new Promise<void>((resolve) => {
@@ -96,6 +140,7 @@ export async function saveStoredGraph(
           payload,
           layouts: update.layouts ?? base?.layouts,
           fetchedAt: Date.now(),
+          userId: owner ?? base?.userId,
         };
         store.put(rec);
       };
@@ -104,6 +149,9 @@ export async function saveStoredGraph(
       tx.onerror = () => { db.close(); resolve(); };
     });
     if (update.payload) announceGraphUpdate(storyId);
+    // Bound growth: fire-and-forget so it never delays the caller. The just-
+    // saved story is the newest by fetchedAt, so the cap never evicts it.
+    void pruneStoredGraphs();
   } catch { /* shelf unavailable: the network path is unaffected */ }
 }
 
@@ -113,6 +161,54 @@ export async function clearStoredGraph(storyId: string): Promise<void> {
     await new Promise<void>((resolve) => {
       const tx = db.transaction(STORE, 'readwrite');
       tx.objectStore(STORE).delete(storyId);
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); resolve(); };
+    });
+  } catch { /* ignore */ }
+}
+
+/** Empty the entire shelf. Called on sign-out / account switch so one account's
+ *  cached story graphs never sit readable for the next user of this browser.
+ *  Uses store.clear() (not deleteDatabase) to avoid open-connection races with
+ *  other tabs. */
+export async function clearAllStoredGraphs(): Promise<void> {
+  try {
+    const db = await openDb();
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      tx.objectStore(STORE).clear();
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); resolve(); };
+    });
+  } catch { /* ignore */ }
+}
+
+/** Evict stale (older than maxAgeMs) and overflow (beyond the newest
+ *  maxEntries by fetchedAt) shelves. Idempotent, best-effort, self-contained. */
+export async function pruneStoredGraphs(
+  opts?: { maxEntries?: number; maxAgeMs?: number },
+): Promise<void> {
+  const maxEntries = opts?.maxEntries ?? MAX_ENTRIES;
+  const maxAgeMs = opts?.maxAgeMs ?? MAX_AGE_MS;
+  try {
+    const db = await openDb();
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      const store = tx.objectStore(STORE);
+      const all = store.getAll();
+      all.onsuccess = () => {
+        const recs = (all.result as StoredGraph[]) ?? [];
+        const now = Date.now();
+        const survivors: StoredGraph[] = [];
+        for (const r of recs) {
+          if (r.fetchedAt && now - r.fetchedAt > maxAgeMs) store.delete(r.storyId);
+          else survivors.push(r);
+        }
+        if (survivors.length > maxEntries) {
+          survivors.sort((a, b) => (b.fetchedAt ?? 0) - (a.fetchedAt ?? 0));
+          for (const r of survivors.slice(maxEntries)) store.delete(r.storyId);
+        }
+      };
       tx.oncomplete = () => { db.close(); resolve(); };
       tx.onerror = () => { db.close(); resolve(); };
     });

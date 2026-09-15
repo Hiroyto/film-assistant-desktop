@@ -25,6 +25,7 @@ import {
   tagEventPrecedes,
   untagEventPrecedes,
   tagSequenceContains,
+  untagSequenceContains,
   tagEventInvolvesCharacter,
   tagCauses,
   untagCauses,
@@ -53,7 +54,22 @@ export type StructOp =
   | { kind: 'precedes_tag'; from: string; to: string }
   | { kind: 'precedes_untag'; from: string; to: string }
   | { kind: 'precedes_splice'; anchorFrom: string; anchorTo: string; insertId: string }
+  // FIL-590 — drag-to-reorder in the Beats view. One card leaves its slot in
+  // the chain and lands in another: the gap it left heals (oldPrev→oldNext)
+  // and the gap it lands in opens (newPrev→id→newNext). Queued as ONE op so a
+  // reload can never replay the detach without the re-attach and strand the
+  // card outside the chain. Null ends mean the card was, or becomes, the head
+  // or tail of the chain.
+  | {
+      kind: 'precedes_move';
+      id: string;
+      oldPrev: string | null;
+      oldNext: string | null;
+      newPrev: string | null;
+      newNext: string | null;
+    }
   | { kind: 'contains_move'; sequenceId: string; eventId: string }
+  | { kind: 'contains_untag'; sequenceId: string; eventId: string }
   | { kind: 'involves_tag'; eventId: string; characterId: string }
   | { kind: 'causes_tag'; from: string; to: string }
   | { kind: 'causes_untag'; from: string; to: string }
@@ -208,17 +224,33 @@ function applyEditToPayload(payload: ListProjectEntitiesResponse, op: QueuedEdit
 // Apply a queued structural op's edges-transform onto a payload. Purely
 // additive/subtractive on the edges arrays; missing endpoints are harmless
 // (downstream renderers alive-filter) and the push-side 404 drop converges.
+/** Which edge list a PRECEDES between these two ids lives in (mixed spine). */
+function precedesListFor(payload: ListProjectEntitiesResponse, from: string, to: string): 'precedes' | 'sequence_precedes' | 'cross_precedes' {
+  const t = (id: string) => payload.entities.find((x) => x.id === id)?.type;
+  const a = t(from), b = t(to);
+  if (a === 'sequence' && b === 'sequence') return 'sequence_precedes';
+  if (a === 'sequence' || b === 'sequence') return 'cross_precedes';
+  return 'precedes';
+}
+
 function applyStructOpToPayload(payload: ListProjectEntitiesResponse, op: QueuedStructOp): ListProjectEntitiesResponse {
   const e = payload.edges;
   switch (op.kind) {
-    case 'precedes_tag':
-      // Mirrors the server's reverse-auto-flip: tagging A→B drops B→A.
-      return { ...payload, edges: { ...e, precedes: [
-        ...e.precedes.filter((p) => !(p.from === op.from && p.to === op.to) && !(p.from === op.to && p.to === op.from)),
+    case 'precedes_tag': {
+      // Mirrors the server's reverse-auto-flip: tagging A→B drops B→A. The
+      // list depends on the endpoints' altitudes (mixed spine).
+      const key = precedesListFor(payload, op.from, op.to);
+      const cur = ((e as any)[key] ?? []) as Array<{ from: string; to: string }>;
+      return { ...payload, edges: { ...e, [key]: [
+        ...cur.filter((p) => !(p.from === op.from && p.to === op.to) && !(p.from === op.to && p.to === op.from)),
         { from: op.from, to: op.to },
       ] } };
-    case 'precedes_untag':
-      return { ...payload, edges: { ...e, precedes: e.precedes.filter((p) => !(p.from === op.from && p.to === op.to)) } };
+    }
+    case 'precedes_untag': {
+      const key = precedesListFor(payload, op.from, op.to);
+      const cur = ((e as any)[key] ?? []) as Array<{ from: string; to: string }>;
+      return { ...payload, edges: { ...e, [key]: cur.filter((p) => !(p.from === op.from && p.to === op.to)) } };
+    }
     case 'precedes_splice':
       return { ...payload, edges: { ...e, precedes: [
         ...e.precedes.filter((p) =>
@@ -228,12 +260,33 @@ function applyStructOpToPayload(payload: ListProjectEntitiesResponse, op: Queued
         { from: op.anchorFrom, to: op.insertId },
         { from: op.insertId, to: op.anchorTo },
       ] } };
+    case 'precedes_move': {
+      // Drop every edge the move invalidates (the moved card's two old ends
+      // and the link across its landing gap), then lay the new chain in.
+      const drop = (from: string | null, to: string | null) => (p: { from: string; to: string }) =>
+        !(from != null && to != null && p.from === from && p.to === to);
+      const kept = e.precedes
+        .filter(drop(op.oldPrev, op.id))
+        .filter(drop(op.id, op.oldNext))
+        .filter(drop(op.newPrev, op.newNext));
+      const added: Array<{ from: string; to: string }> = [];
+      if (op.oldPrev && op.oldNext) added.push({ from: op.oldPrev, to: op.oldNext });
+      if (op.newPrev) added.push({ from: op.newPrev, to: op.id });
+      if (op.newNext) added.push({ from: op.id, to: op.newNext });
+      // An added edge may already exist (moving one slot over reuses a link) —
+      // dedupe so the topo sort doesn't double-count in-degrees.
+      const seen = new Set(kept.map((p) => `${p.from}|${p.to}`));
+      const fresh = added.filter((a) => !seen.has(`${a.from}|${a.to}`));
+      return { ...payload, edges: { ...e, precedes: [...kept, ...fresh] } };
+    }
     case 'contains_move':
       // Disjoint server-side: a scene is in at most one sequence.
       return { ...payload, edges: { ...e, contains: [
         ...e.contains.filter((c) => c.to !== op.eventId),
         { from: op.sequenceId, to: op.eventId },
       ] } };
+    case 'contains_untag':
+      return { ...payload, edges: { ...e, contains: e.contains.filter((c) => !(c.from === op.sequenceId && c.to === op.eventId)) } };
     case 'involves_tag':
       return e.involves.some((i) => i.from === op.eventId && i.to === op.characterId)
         ? payload
@@ -282,7 +335,12 @@ function openWs(s: Session) {
   if (!s.wsWanted || s.ws || !s.userId) return;
   const wsEndpoint = process.env.REACT_APP_WEBSOCKET_ENDPOINT;
   if (!wsEndpoint) return;
-  const ws = new WebSocket(wsEndpoint);
+  // Pass the Cognito idToken on connect so a $connect authorizer can verify the
+  // socket's identity server-side (browsers can't set WS headers, so the token
+  // rides the query string). The stored userId must come from this verified
+  // token, not the client-sent identify frame.
+  const wsUrl = s.token ? `${wsEndpoint}?token=${encodeURIComponent(s.token)}` : wsEndpoint;
+  const ws = new WebSocket(wsUrl);
   s.ws = ws;
   ws.onopen = () => {
     if (s.ws !== ws) return;
@@ -424,8 +482,27 @@ async function pushStructOp(s: Session, op: QueuedStructOp): Promise<void> {
       await tagEventPrecedes({ fromEventId: op.anchorFrom, toEventId: op.insertId, projectId }, token);
       await tagEventPrecedes({ fromEventId: op.insertId, toEventId: op.anchorTo, projectId }, token);
       return;
+    case 'precedes_move': {
+      // Untag before tag: the server auto-flips a reverse PRECEDES on tag, so
+      // laying the new chain down first could silently eat an edge the detach
+      // was about to remove anyway. Dead legs (null ends) are simply skipped.
+      if (op.oldPrev) await untagEventPrecedes({ fromEventId: op.oldPrev, toEventId: op.id, projectId }, token);
+      if (op.oldNext) await untagEventPrecedes({ fromEventId: op.id, toEventId: op.oldNext, projectId }, token);
+      if (op.newPrev && op.newNext) {
+        await untagEventPrecedes({ fromEventId: op.newPrev, toEventId: op.newNext, projectId }, token);
+      }
+      if (op.oldPrev && op.oldNext) {
+        await tagEventPrecedes({ fromEventId: op.oldPrev, toEventId: op.oldNext, projectId }, token);
+      }
+      if (op.newPrev) await tagEventPrecedes({ fromEventId: op.newPrev, toEventId: op.id, projectId }, token);
+      if (op.newNext) await tagEventPrecedes({ fromEventId: op.id, toEventId: op.newNext, projectId }, token);
+      return;
+    }
     case 'contains_move':
       await tagSequenceContains({ sequenceId: op.sequenceId, eventId: op.eventId, projectId }, token);
+      return;
+    case 'contains_untag':
+      await untagSequenceContains({ sequenceId: op.sequenceId, eventId: op.eventId, projectId }, token);
       return;
     case 'involves_tag':
       await tagEventInvolvesCharacter({ eventId: op.eventId, characterId: op.characterId, projectId }, token);

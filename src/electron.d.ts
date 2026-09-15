@@ -13,6 +13,39 @@ declare global {
     query: Record<string, string>;
   }
 
+  /** Tipo de linha de um parágrafo (mesmos valores do editor: data-line-type). */
+  type FdxParaType = 'scene' | 'description' | 'character' | 'parenthetical' | 'dialogue' | 'transition';
+  interface FdxParagraph {
+    type: FdxParaType;
+    text: string;
+  }
+
+  /** Uma cena extraída do .fdx (heading + corpo até a próxima cena). */
+  interface FdxScene {
+    index: number;
+    number: string;
+    heading: string;
+    snippet: string;
+    lineCount: number;
+    characters: string[];
+    /** Parágrafos tipados do corpo (sem o heading). Ausente em payloads antigos. */
+    paragraphs?: FdxParagraph[];
+  }
+
+  /** Snapshot parseado de um .fdx observado (emitido pelo shell). */
+  interface FdxPayload {
+    path: string;
+    fileName: string;
+    ok: boolean;
+    title?: string;
+    sceneCount: number;
+    paragraphCount: number;
+    scenes: FdxScene[];
+    fullText: string;
+    updatedAt: string;
+    error?: string;
+  }
+
   interface ElectronAPI {
     readonly isDesktop: true;
     readonly platform: NodeJS.Platform | string;
@@ -34,6 +67,14 @@ declare global {
     onMenu?: (handler: (event: string) => void) => () => void;
     /** Relaunch para instalar o update baixado (SCR-0029). */
     installUpdate?: () => Promise<void>;
+
+    // --- Protótipo coworking .fdx (SOMENTE LEITURA) ---
+    /** Abre um seletor de .fdx e começa a observá-lo. Retorna o snapshot inicial. */
+    openFdx?: () => Promise<FdxPayload | null>;
+    /** Para de observar o .fdx atual. */
+    closeFdx?: () => Promise<void>;
+    /** Inscreve handler para mudanças do .fdx observado. Retorna unsubscribe. */
+    onFdxChanged?: (handler: (payload: FdxPayload) => void) => () => void;
   }
 
   /**

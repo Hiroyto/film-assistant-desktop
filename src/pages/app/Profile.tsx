@@ -12,6 +12,9 @@ import { User } from '../../models/user'
 import { useAuthenticator } from '@aws-amplify/ui-react';
 import { useNavigate } from 'react-router-dom';
 import { resolveStoryWorkflow } from '../../lib/storyWorkflows';
+import { clearStoredGraph } from '../../lib/localGraphStore';
+import { storyRepo } from '../../data/local-db/repositories';
+import { worksFromLocal } from '../../features/story-workspace/model/worksFromLocal';
 import { Settings, CreditCard } from "lucide-react";
 import Footer from "../../components/footer";
 import { isDesktop, openExternal } from "../../lib/ipcClient";
@@ -50,7 +53,9 @@ export default function Profile(props: any) {
                 cap: res.data.body.cap,
                 subscription: res.data.body.subscription,
                 sign_up_date: res.data.body.sign_up_date,
-                works: res.data.body.works ?? {},
+                // Desktop: `works` é fonte-LOCAL (SQLite) — o backend NÃO sobrescreve
+                // (mesma guarda do handleDynamoUser do App.tsx).
+                ...(isDesktop() ? {} : { works: res.data.body.works ?? {} }),
                 privacy: res.data.body.privacy,
             }));
         } catch (error) {
@@ -91,7 +96,7 @@ export default function Profile(props: any) {
             const storyIdsArray = storyIds instanceof Set ? Array.from(storyIds) : [storyIds];
             const isDeletingCurrentWork = storyIdsArray.includes(data.storyId);
             const res = await handleDeletion(storyIds)
-            return { res, isDeletingCurrentWork };
+            return { res, isDeletingCurrentWork, storyIdsArray };
         },
         onMutate: (storyIds: Set<string> | string) => {
             if (storyIds instanceof Set) {
@@ -101,14 +106,33 @@ export default function Profile(props: any) {
             }
         },
 
-        onSuccess: async (result: { res: any; isDeletingCurrentWork: boolean }) => {
-            const { res, isDeletingCurrentWork } = result;
+        onSuccess: async (result: { res: any; isDeletingCurrentWork: boolean; storyIdsArray: string[] }) => {
+            const { res, isDeletingCurrentWork, storyIdsArray } = result;
 
             if (res.data.statusCode === 200) {
                 toast.success("Work deleted!");
 
-                // Atualiza dados mais recentes do usuário
-                await handleDynamoUser();
+                // Drop the deleted stories' local graph shelves so they don't
+                // linger in IndexedDB forever (the shelf never self-prunes on
+                // delete).
+                for (const sid of storyIdsArray) void clearStoredGraph(sid);
+
+                // Atualiza dados mais recentes do usuário. No desktop a grade é
+                // local-first (o refetch da nuvem não a sobrescreve mais), e o
+                // delete legado só chama a Lambda — então some-se localmente
+                // também, senão a story volta do SQLite no próximo render.
+                if (isDesktop()) {
+                    const at = new Date().toISOString();
+                    try {
+                        for (const sid of storyIdsArray) await storyRepo.softDelete(sid, at);
+                        const works = await worksFromLocal(token?.payload['cognito:username'] as string);
+                        setUser((prev: any) => (prev ? { ...prev, works } : prev));
+                    } catch (e) {
+                        console.error('[profile] delete local falhou', e);
+                    }
+                } else {
+                    await handleDynamoUser();
+                }
                 if (isDeletingCurrentWork) {
                     const generateStoryId = () => `story_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
 

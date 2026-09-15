@@ -25,6 +25,9 @@ export function buildAppMenu(getWindow: () => BrowserWindow | null, opts: { isDe
         { label: 'New Story', accelerator: 'CmdOrCtrl+N', click: () => emit('story.new') },
         { label: 'Save', accelerator: 'CmdOrCtrl+S', id: 'menu-save', click: () => emit('story.save') },
         { type: 'separator' },
+        // Cowork read-only: acompanha um .fdx editado por outro app (ex.: Final Draft).
+        { label: 'Open Screenplay (.fdx)…', accelerator: 'CmdOrCtrl+Shift+O', click: () => emit('fdx.open') },
+        { type: 'separator' },
         { label: 'Settings…', enabled: false }, // future feature
         { type: 'separator' },
         isMac ? { role: 'close' } : { role: 'quit', accelerator: 'CmdOrCtrl+Q' },

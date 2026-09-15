@@ -8,7 +8,8 @@ import { initTelemetry } from '../../lib/telemetry';
 import { SyncStatusBar } from './sync-status-bar';
 import { UpdateAvailableModal } from './update-available';
 import { ConflictResolutionModal } from './conflict-resolution';
-import { requestSyncNow } from '../../data/desktop-lifecycle';
+import { FdxCoworkPanel } from './FdxCoworkPanel';
+import { requestSyncNow, applyRemoteStory } from '../../data/desktop-lifecycle';
 import { emit as emitSyncEvent, on as onSyncEvent } from '../../data/sync-agent/events';
 import { recordConflictResolved } from '../../test-bridge/conflictRecorder';
 import { storyRepo } from '../../data/local-db/repositories';
@@ -43,6 +44,9 @@ function routeMenu(event: string): void {
       break;
     case 'updater.check':
       window.dispatchEvent(new CustomEvent('app:check-updates'));
+      break;
+    case 'fdx.open':
+      window.dispatchEvent(new CustomEvent('app:open-fdx'));
       break;
     default:
       break;
@@ -92,6 +96,7 @@ export function DesktopShell(): JSX.Element | null {
         />
       </div>
       <UpdateAvailableModal />
+      <FdxCoworkPanel />{/* protótipo coworking .fdx (só leitura) */}
       {/* 'remote' = aceitar a versão do backend (re-pull, não-destrutivo).
           'local' = manter a minha (re-enfileira p/ sobrescrever o backend; possível
           após o push-cutover A1). 'both' (duplicar) segue pendente — decisão de produto. */}
@@ -101,7 +106,10 @@ export function DesktopShell(): JSX.Element | null {
           // Instrumentação de teste (spec 12 t17) — inerte em produção até ser armada.
           recordConflictResolved({ entityType, entityId, resolution: choice });
           if (choice === 'remote') {
-            await requestSyncNow(); // re-pull aplica a versão do backend
+            // Força a versão do backend no SQLite local (limpa o conflito de vez);
+            // re-pull sozinho só re-detectaria o mesmo conflito e voltaria no boot.
+            const applied = entityType === 'story' ? await applyRemoteStory(entityId) : false;
+            if (!applied) await requestSyncNow();
           } else if (choice === 'local' && entityType === 'story') {
             // Keep mine (AD-02): re-enfileira a Story local (S1..S9/foundation) para
             // sobrescrever o remoto. characters têm caminho de save próprio.

@@ -88,7 +88,7 @@ export function BraindumpMeter({
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13.5, fontWeight: 700 }}>
         <span style={{ width: 8, height: 8, borderRadius: 999, background: METER_ORANGE, boxShadow: `0 0 10px ${METER_ORANGE}`, animation: 'cb-blink 1s ease-in-out infinite' }} />
-        Building your outline…
+        Building your beats…
         {winPhase && (
           <span style={{ marginLeft: 'auto', fontSize: 11.5, fontWeight: 600, color: 'rgba(255,255,255,0.5)', fontVariantNumeric: 'tabular-nums' }}>
             {fmtElapsed(elapsedMs)}
@@ -160,6 +160,8 @@ export function Shell({
   title,
   canRename,
   onRename,
+  onOpenScript,
+  onPrefetchScript,
   children,
 }: {
   storyId?: string;
@@ -168,6 +170,14 @@ export function Shell({
   /** Real freeform stories can be renamed inline; demo/wow can't. */
   canRename?: boolean;
   onRename?: (newTitle: string) => void | Promise<void>;
+  /** Warms the script page's data (fired on pointerenter of "Script →"). */
+  onPrefetchScript?: () => void;
+  /** Opens the screenplay. Renders the header's top-right "Script →" — the
+   *  mirror of the script page's top-left "← Board", so the two surfaces are
+   *  one round trip on the same line rather than a header link one way and a
+   *  toolbar button the other. Omitted on the loading / error shells, where
+   *  there is nothing yet to go and write. */
+  onOpenScript?: () => void;
   children: React.ReactNode;
 }) {
   const dark = useThemeMode() === 'dark';
@@ -339,6 +349,32 @@ export function Shell({
             )}
           </h1>
         )}
+        <div style={{ flex: 1 }} />
+        {onOpenScript && (
+          <button
+            data-tour="toolbar-script"
+            onClick={onOpenScript}
+            onPointerEnter={onPrefetchScript}
+            title="Write the screenplay: your scenes in story order, ready to draft"
+            style={{
+              // Deliberately identical to the script page's "← Board": same
+              // orange, size, and weight, so the pair reads as one door with
+              // two handles. It sits in the header rather than the toolbar
+              // because leaving for the pages is not a board control.
+              background: 'transparent',
+              border: 'none',
+              padding: 0,
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+              color: '#ff8c42',
+              fontSize: 13,
+              fontWeight: 700,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Script →
+          </button>
+        )}
       </div>
       {/* Demo tab strip only on demo projects — real stories don't see it.
           PRE-PROD: remove the /freeform-demo route + DEMO_TABS entirely. */}
@@ -421,7 +457,15 @@ export function DemoTabStrip({ activeProjectId }: { activeProjectId?: string }) 
 // CorkboardLoading — the board's loading state. A centered brain mark inside a
 // spinning accent ring + a soft pulsing glow, on the dark stage. Replaces the
 // bare "Loading corkboard…" text node.
-export function CorkboardLoading() {
+export function CorkboardLoading({
+  label = 'Loading corkboard…',
+  sub = 'Pulling your scenes, characters, and arcs from the graph.',
+  minHeight = '60vh',
+}: {
+  label?: string;
+  sub?: string;
+  minHeight?: string;
+} = {}) {
   const dark = useThemeMode() === 'dark';
   const accent = '#ff6b35';
   return (
@@ -432,11 +476,21 @@ export function CorkboardLoading() {
         alignItems: 'center',
         justifyContent: 'center',
         gap: 16,
-        minHeight: '60vh',
+        minHeight,
         textAlign: 'center',
         fontFamily: 'system-ui, sans-serif',
       }}
     >
+      {/* Self-contained keyframes so the mark works outside Shell (the
+          script page's loading gate borrows it). Duplicate @keyframes
+          definitions are harmless — last one wins, same rules. */}
+      <style>{`
+        @keyframes cb-spin { to { transform: rotate(360deg); } }
+        @keyframes cb-glow-pulse {
+          0%, 100% { opacity: 0.55; transform: scale(0.96); }
+          50% { opacity: 1; transform: scale(1.04); }
+        }
+      `}</style>
       <div style={{ position: 'relative', width: 66, height: 66, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         {/* Soft glow behind the mark. */}
         <div
@@ -485,10 +539,10 @@ export function CorkboardLoading() {
         </svg>
       </div>
       <div style={{ fontSize: 14.5, fontWeight: 600, color: dark ? '#d4d4dc' : '#3d4250', letterSpacing: 0.2 }}>
-        Loading corkboard…
+        {label}
       </div>
       <div style={{ fontSize: 12, color: dark ? '#6e6e78' : '#9a9aa4', maxWidth: 280, lineHeight: 1.5 }}>
-        Pulling your scenes, characters, and arcs from the graph.
+        {sub}
       </div>
     </div>
   );

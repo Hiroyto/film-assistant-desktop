@@ -80,6 +80,31 @@ export async function rearmFailed(now: string): Promise<void> {
   );
 }
 
+/**
+ * Recupera entries ÓRFÃS em 'in_flight'. markInFlight é um LEASE sem dono: se o
+ * processo morre entre ele e o veredito (app fechado no meio do POST, reload do
+ * renderer, exceção antes do markFailed), a entry fica 'in_flight' para sempre —
+ * listProcessable só olha 'pending'/'failed' e nem o "Retry sync" (rearmFailed)
+ * a ressuscita. Consequência real: a story nunca chega ao /works, e o backend do
+ * freeform passa a negar suas escritas com "Not authorized for this story".
+ *
+ * `leaseMs` protege quem está genuinamente em voo: só entries cujo last_attempt_at
+ * é mais velho que o lease voltam para 'pending'. No boot use 0 — nada pode estar
+ * em voo antes do worker existir. `attempts` NÃO é incrementado: a tentativa
+ * nunca teve veredito, então não deve contar para o give-up.
+ */
+export async function reclaimStaleInFlight(now: string, leaseMs = 0): Promise<number> {
+  const cutoff = new Date((Date.parse(now) || Date.now()) - leaseMs).toISOString();
+  const res = await run(
+    `UPDATE sync_queue
+        SET status='pending', next_attempt_at=?
+      WHERE status='in_flight'
+        AND (last_attempt_at IS NULL OR last_attempt_at <= ?)`,
+    [now, cutoff],
+  );
+  return res?.changes ?? 0;
+}
+
 export async function clear(): Promise<void> {
   await run('DELETE FROM sync_queue', []);
 }

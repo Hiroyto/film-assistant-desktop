@@ -216,6 +216,10 @@ export interface ExtractBraindumpJobFields {
   /** Set to 'screenplay' for PDF/script imports so the backend applies the
    *  screenplay-specific segmentation prompt. Omitted for prose braindumps. */
   sourceFormat?: 'screenplay';
+  /** Placement Control v1c — the dock intent. `{ targetId }` places this
+   *  dump's new cards at the target (inside a Sequence / after an Event);
+   *  'aside' parks them all in the strip. Omitted = the system decides. */
+  declaredPlacement?: { targetId: string; containment?: 'none'; position?: 'before'; action?: 'merge' } | 'aside';
   /** Dev-only: stream entities over WS as they extract (card-by-card reveal).
    *  Set by the dev FE; prod leaves it unset and runs the batch path. */
   streaming?: boolean;
@@ -536,6 +540,9 @@ export interface ProjectEdges {
   /** Sequence → Sequence (forward only) — the sequence throughline, auto-chained
    *  in plot order at extraction time. Same edge label as precedes, Sequence ends. */
   sequence_precedes: Array<{ from: string; to: string }>;
+  /** Cross-altitude PRECEDES (Sequence→Event / Event→Sequence): the mixed
+   *  story spine. Empty on older reads. */
+  cross_precedes?: Array<{ from: string; to: string }>;
   /** Character → Character custom predicate (MARRIED_TO, HIRED, etc.) */
   structural: Array<{
     from: string;
@@ -2628,6 +2635,145 @@ export async function dismissArcSuggestion(
   const result = await freshApiCall(apiPath!, { event: 'dismiss-arc-suggestion', ...req }, token);
   if (!result.success) throw new Error(result.error || 'dismiss-arc-suggestion failed');
   return (result.data?.body ?? result.data) as DismissArcSuggestionResponse;
+}
+
+// ============================================
+// Staged questions — Placement Control v1b (the staging strip)
+// ============================================
+
+export type StagedQuestionType = 'merge_suggestion' | 'compare' | 'unplaced' | 'altitude';
+export type StagedQuestionStatus = 'pending' | 'accepted' | 'dismissed' | 'retired';
+
+/** One strip row, straight off the StagedQuestions table (snake_case kept). */
+export interface StagedQuestion {
+  projectId: string;
+  /** The staged card's vertex id. One open question per card. */
+  cardId: string;
+  kind: 'scene' | 'section';
+  question_type: StagedQuestionType;
+  candidate_title: string;
+  /** Suggested/compared existing card; '' when the question has no target. */
+  target_vid: string;
+  target_title: string;
+  reason: string;
+  source_braindump_id: string;
+  status: StagedQuestionStatus;
+  created_at: string;
+  updated_at: string;
+  answered_at?: string;
+}
+
+export interface ListStagedQuestionsRequest {
+  projectId: string;
+  /** Defaults to 'pending' server-side; 'all' returns full history. */
+  status?: StagedQuestionStatus | 'all';
+}
+export interface ListStagedQuestionsResponse {
+  questions: StagedQuestion[];
+}
+
+export interface AnswerStagedQuestionRequest {
+  projectId: string;
+  userId: string;
+  cardId: string;
+  /** 'merge' folds the staged card into target_vid; 'keep' un-stages it clean
+   *  and records not_same_as negative memory on both cards. On an 'altitude'
+   *  row ("one scene, or a group of scenes?") 'keep' just dismisses and
+   *  'convert' re-reads the card at the other altitude (new vertex). */
+  answer: 'merge' | 'keep' | 'convert';
+}
+export interface ConvertCardAltitudeResult {
+  converted: true;
+  fromId: string;
+  toId: string;
+  fromLabel: 'Event' | 'Sequence';
+  toLabel: 'Event' | 'Sequence';
+  movedMentions?: number;
+  retracted?: { ordering: number; containment: number; involves: number; occursIn: number; other: number };
+  orphanedMembers?: string[];
+  anchorsLeft?: number;
+  retry?: boolean;
+}
+export interface AnswerStagedQuestionResponse {
+  answered: true;
+  cardId: string;
+  answer: 'merge' | 'keep' | 'convert';
+  merge?: { merged: boolean; targetId: string; aliases: string[] };
+  convert?: ConvertCardAltitudeResult;
+}
+
+/** The spine drop (Placement Control v1c): where a dragged staged card lands. */
+export interface StagedPlacement {
+  targetId: string;
+  /** Start seam: the card chains INTO the target. */
+  position?: 'before';
+  /** Outside seam: chain after the target but skip its container. */
+  containment?: 'none';
+  /** Between-drop: also chain card→next, retracting the single target→next
+   *  PRECEDES edge (the one lane that retracts an ordering edge, visibly). */
+  nextId?: string;
+  /** Dropped ON a card: fold into it via merge-cards. */
+  action?: 'merge';
+}
+export interface PlaceStagedCardRequest {
+  projectId: string;
+  userId: string;
+  cardId: string;
+  placement: StagedPlacement;
+}
+export interface PlaceStagedCardResponse {
+  placed: true;
+  cardId: string;
+  targetId: string;
+  action?: 'merge';
+  edges?: Array<{ from: string; to: string; label: string }>;
+  /** The one PRECEDES edge a between-drop replaced, when it existed. */
+  retracted?: { from: string; to: string } | null;
+  nextDegraded?: boolean;
+  stagedCleared?: boolean;
+  merge?: { merged: boolean; targetId: string; aliases: string[] };
+}
+
+/** List the strip's pending questions. Bootstraps on mount so questions
+ *  persisted while the tab was closed still surface (the reload story). */
+export async function listStagedQuestions(
+  req: ListStagedQuestionsRequest,
+  token: string,
+): Promise<ListStagedQuestionsResponse> {
+  if (useMock) return Promise.resolve({ questions: [] });
+  const result = await freshApiCall(apiPath!, { event: 'list-staged-questions', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'list-staged-questions failed');
+  return (result.data?.body ?? result.data) as ListStagedQuestionsResponse;
+}
+
+/** Answer a strip question. 'merge' runs merge-cards server-side (edges,
+ *  anchors, provenance fold onto the target; the staged card's title becomes
+ *  an alias; the card is trashed). 'keep' un-stages the card onto the board. */
+export async function answerStagedQuestion(
+  req: AnswerStagedQuestionRequest,
+  token: string,
+): Promise<AnswerStagedQuestionResponse> {
+  if (useMock) {
+    return Promise.resolve({ answered: true, cardId: req.cardId, answer: req.answer });
+  }
+  const result = await freshApiCall(apiPath!, { event: 'answer-staged-question', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'answer-staged-question failed');
+  return (result.data?.body ?? result.data) as AnswerStagedQuestionResponse;
+}
+
+/** Place a staged card (the spine drop): unstage + write the declared edges.
+ *  A between-drop replaces exactly one PRECEDES edge, reported back so the
+ *  displacement can be shown. */
+export async function placeStagedCard(
+  req: PlaceStagedCardRequest,
+  token: string,
+): Promise<PlaceStagedCardResponse> {
+  if (useMock) {
+    return Promise.resolve({ placed: true, cardId: req.cardId, targetId: req.placement.targetId });
+  }
+  const result = await freshApiCall(apiPath!, { event: 'place-staged-card', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'place-staged-card failed');
+  return (result.data?.body ?? result.data) as PlaceStagedCardResponse;
 }
 
 /** Slug helper used only in mocks. Mirrors backend formula loosely. */

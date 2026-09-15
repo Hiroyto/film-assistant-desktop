@@ -2,7 +2,14 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
+    <!-- Tab icon: the app head mark (source of truth: src/assets/images/App Head.png,
+         1024x1024; these are sips-resized copies, since a favicon must be served
+         from public/ and the 592KB original would be downloaded on every page
+         load). The legacy favicon.ico is kept only as the bare-/favicon.ico
+         fallback some clients request without reading these tags. -->
+    <link rel="icon" type="image/png" sizes="32x32" href="%PUBLIC_URL%/app-head-32.png" />
+    <link rel="icon" type="image/png" sizes="180x180" href="%PUBLIC_URL%/app-head-180.png" />
+    <link rel="icon" href="%PUBLIC_URL%/favicon.ico" sizes="any" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#000000" />
     <meta
@@ -30,7 +37,7 @@
       name="twitter:description"
       content="Outline it or just write it. filmassistant.io builds your board as you work, keeps it current with every page, and gives notes grounded in your whole story."
     />
-    <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
+    <link rel="apple-touch-icon" href="%PUBLIC_URL%/app-head-180.png" />
     <!--
       manifest.json provides metadata used when your web app is installed on a
       user's mobile device or desktop. See https://developers.google.com/web/fundamentals/web-app-manifest/
@@ -59,29 +66,15 @@
       Learn how to configure a non-root public URL by running `npm run build`.
     -->
     <title>filmassistant.io | Screenwriting with a Living Outline</title>
-     <!-- Google tag (gtag.js) -->
-     <script async src="https://www.googletagmanager.com/gtag/js?id=G-5Q1VS7MNJ9"></script>
-     <script>
-       window.dataLayer = window.dataLayer || [];
-       function gtag(){dataLayer.push(arguments);}
-       gtag('js', new Date());
- 
-       gtag('config', 'G-5Q1VS7MNJ9');
-     </script>
+    <!-- Third-party embeds (Google Analytics, GetTerms) live in web-analytics.js:
+         it is a same-origin script (allowed by the desktop CSP) and it skips
+         itself inside the Electron shell, where remote scripts would share the
+         renderer with window.electronAPI. -->
+    <script src="%PUBLIC_URL%/web-analytics.js"></script>
   </head>
   <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>
     <div id="root"></div>
-    <script type="text/javascript">
-      (function(d, s, id) {
-        var js, ref = d.getElementsByTagName(s)[0];
-        if (d.getElementById(id)) return;
-        js = d.createElement(s);
-        js.id = id;
-        js.src = "https://app.getterms.io/dist/js/embed.js";
-        ref.parentNode.insertBefore(js, ref);
-      })(document, "script", "getterms-embed-js");
-    </script>
     <!--
       This HTML file is a template.
       If you open it directly in the browser, you will see an empty page.

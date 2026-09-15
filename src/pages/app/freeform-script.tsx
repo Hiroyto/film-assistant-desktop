@@ -19,7 +19,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { fetchAuthSession } from 'aws-amplify/auth';
 import type { Editor } from '@tiptap/react';
 import { Extension } from '@tiptap/core';
@@ -55,7 +55,10 @@ import {
   type ListProjectEntitiesResponse,
   type NarrativeStatus,
 } from '../../lib/freeformApi';
-import { topoSortEventsByPrecedes } from '../../components/Freeform/corkboard/connectors';
+import { takeScriptPrefetch } from '../../lib/scriptPrefetch';
+import { playPageWipe } from '../../lib/pageWipe';
+import { CorkboardLoading } from '../../components/Freeform/corkboard/shell';
+import { toldOrderEvents } from '../../components/Freeform/corkboard/connectors';
 import { useTour, type TourStep } from '../../components/Tour/TourProvider';
 import { ArcSheet, CharacterSheet, EventSheet, LocationSheet, RelationshipSheet, SequenceSheet } from '../../components/Freeform/corkboard/sheets';
 import { ThemeCtx } from '../../components/Freeform/corkboard/theme';
@@ -259,7 +262,7 @@ const NAV_W_MAX = 520;
 // tab re-ran every already-fixed bug in one session — retire loop, missing
 // verdict, double-run); this makes "which code is this tab running" a
 // one-glance check in the console.
-const FF_SCRIPT_BUILD = '2026-07-25b';
+const FF_SCRIPT_BUILD = '2026-07-28a';
 
 // Peer-note tier colors + the pin color rule (intent gap = orange). Module
 // scope so both the in-canvas markers and the fixed hover card share them.
@@ -444,6 +447,7 @@ const filterHtmlBlocks = (html: string, keep: (id: string, text: string) => bool
 
 export default function FreeformScript() {
   const { storyId } = useParams<{ storyId: string }>();
+  const routerNavigate = useNavigate();
   const [auth, setAuth] = useState<{ userId: string; token: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -504,6 +508,13 @@ export default function FreeformScript() {
   const [statusToastDismissed, setStatusToastDismissed] = useState(false);
   const [notesLoaded, setNotesLoaded] = useState<boolean>(false);
   const [readingScene, setReadingScene] = useState<string | null>(null); // scene id being (re)read
+  // Peer discoverability (Marko 2026-08-23): the toolbar chip's scope menu +
+  // the one-shot margin invitation on a board with no peer history.
+  const [peerMenuOpen, setPeerMenuOpen] = useState(false);
+  const [inviteDismissed, setInviteDismissed] = useState<boolean>(() => {
+    try { return localStorage.getItem(`ff-peer-invite-${storyId}`) === '1'; } catch { return true; }
+  });
+  const [inviteGeom, setInviteGeom] = useState<{ top: number; x: number; w: number; eventId: string } | null>(null);
   // ---- First-run tour of the SCRIPT surface (rides the same Tour engine as
   // the corkboard wow; the wow's toolbar beat points here). Four beats:
   // navigator, the pages, the peer Read button, Notes/Review. The Read button
@@ -545,7 +556,7 @@ export default function FreeformScript() {
         },
         {
           id: 'script-page',
-          selector: '.ff-script-host .paginated-page-card',
+          selector: '.ff-script-host .paginated-page-sheet',
           placement: 'side',
           content: body(
             'Now just write.',
@@ -828,21 +839,35 @@ export default function FreeformScript() {
         if (cancelled) return;
         setAuth({ userId, token });
 
-        const RETRY_DELAYS = [1800, 4000];
-        let entities: Awaited<ReturnType<typeof listProjectEntities>> | null = null;
-        for (let attempt = 0; ; attempt++) {
-          try {
-            entities = await listProjectEntities({ projectId: storyId }, token);
-            break;
-          } catch (e) {
-            if (attempt >= RETRY_DELAYS.length) throw e;
-            await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt]));
-          }
+        // The board's Script button prefetches this trio on pointerenter
+        // (scriptPrefetch): take the in-flight bundle when it's fresh, else
+        // fetch here — all three CONCURRENTLY (they used to run serially
+        // behind the entities retry loop, ~2x the warm wall-clock).
+        let entities: Awaited<ReturnType<typeof listProjectEntities>>;
+        let bds: { projectId: string; braindumps: any[] };
+        let stexts: { projectId: string; sceneTexts: Array<{ eventId: string; html: string; updatedAt: string; stale?: boolean }> };
+        const warmed = takeScriptPrefetch(storyId);
+        const warmBundle = warmed ? await warmed.catch(() => null) : null;
+        if (warmBundle) {
+          ({ entities, bds, stexts } = warmBundle);
+        } else {
+          const RETRY_DELAYS = [1800, 4000];
+          const entitiesWithRetry = (async () => {
+            for (let attempt = 0; ; attempt++) {
+              try {
+                return await listProjectEntities({ projectId: storyId }, token);
+              } catch (e) {
+                if (attempt >= RETRY_DELAYS.length) throw e;
+                await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt]));
+              }
+            }
+          })();
+          [entities, bds, stexts] = await Promise.all([
+            entitiesWithRetry,
+            listBraindumps({ projectId: storyId }, token).catch(() => ({ projectId: storyId, braindumps: [] })),
+            listSceneTexts({ projectId: storyId }, token).catch(() => ({ projectId: storyId, sceneTexts: [] })),
+          ]);
         }
-        const [bds, stexts] = await Promise.all([
-          listBraindumps({ projectId: storyId }, token).catch(() => ({ projectId: storyId, braindumps: [] })),
-          listSceneTexts({ projectId: storyId }, token).catch(() => ({ projectId: storyId, sceneTexts: [] })),
-        ]);
         if (cancelled || !entities) return;
         setGraphData(entities); // proxy/full cards read this; refreshed on open
         void saveStoredGraph(storyId, { payload: entities }); // FIL-518: keep the shelf warm
@@ -985,7 +1010,16 @@ export default function FreeformScript() {
         const events = entities.entities.filter(
           (e: ProjectEntity) => e.type === 'event' && !e.deleted_at && e.narrative_status !== 'backstory' && !retiredIds.has(e.id),
         );
-        const spine = topoSortEventsByPrecedes(events, entities.edges?.precedes ?? []);
+        // Same told order as the board's spine + SC numbers (orderSpineUnits),
+        // so the navigator can never disagree with the outline it mirrors.
+        const spine = toldOrderEvents(
+          entities.entities.filter((e: ProjectEntity) => !e.deleted_at && !retiredIds.has(e.id)
+            && !(e.type === 'event' && e.narrative_status === 'backstory')),
+          entities.edges?.precedes ?? [],
+          entities.edges?.contains ?? [],
+          (entities.edges as any)?.sequence_precedes ?? [],
+          (entities.edges as any)?.cross_precedes ?? [],
+        ).filter((e: ProjectEntity) => events.some((x: ProjectEntity) => x.id === e.id));
 
         // ---- Left navigator: sequences group their member scenes (one section
         // per sequence at its first occurrence in the spine, same semantics as
@@ -2468,6 +2502,66 @@ export default function FreeformScript() {
   // editor mounts/remounts async so the first layout may need a retry). NOT on
   // scroll — the pins are inside the scroll container and move natively.
   const notesVisible = notesLoaded && allNotes.length > 0;
+  // One-shot margin INVITATION (Marko 2026-08-23): on a story where the peer
+  // has never left a note, anchor a quiet dashed card at the last block of
+  // the first written scene — the same margin the pins will later occupy, at
+  // the moment pages exist to read. Dies forever on dismiss or first read
+  // (notes existing kills the eligibility). Geometry walk mirrors
+  // relayoutPins' coordinate math but only needs one paragraph rect.
+  const inviteEligible = notesLoaded && allNotes.length === 0 && !inviteDismissed && !readingScene && !readingDraft;
+  useEffect(() => {
+    if (!inviteEligible) { setInviteGeom(null); return; }
+    let raf = 0;
+    const compute = () => {
+      const editors = getAllEditorsRef.current?.() ?? [];
+      if (editors.length === 0) { setInviteGeom(null); return; }
+      const canvas = (editors[0].view.dom.closest('.paginated-canvas') as HTMLElement | null) ?? null;
+      if (canvas !== canvasEl) setCanvasEl(canvas);
+      if (!canvas) { setInviteGeom(null); return; }
+      // Target: the active scene if written, else the first written scene.
+      const writable = (id: string) => { const st = statusById.get(id); return st === 'written' || st === 'stale'; };
+      const rows = navSections.flatMap((sec) => sec.scenes);
+      const target = (activeSceneId && writable(activeSceneId) ? activeSceneId : rows.find((sc) => writable(sc.eventId))?.eventId) ?? null;
+      if (!target) { setInviteGeom(null); return; }
+      const canvasRect = canvas.getBoundingClientRect();
+      const scrollTop = canvas.scrollTop;
+      const scrollLeft = canvas.scrollLeft;
+      let region: string | null = null;
+      let pageRightX = 0;
+      let last = null as { ed: any; pos: number } | null;
+      for (const ed of editors) {
+        try {
+          const dom = ed.view.dom as HTMLElement;
+          const padR = parseFloat(getComputedStyle(dom).paddingRight) || 0;
+          pageRightX = Math.max(pageRightX, dom.getBoundingClientRect().right - padR - canvasRect.left + scrollLeft);
+        } catch { /* ignore */ }
+        ed.state.doc.descendants((node: any, pos: number) => {
+          if (node.type?.name !== 'paragraph') return true;
+          const tag = node.attrs?.['data-scene-id'];
+          if (tag) region = String(tag);
+          if (region === target) last = { ed, pos };
+          return false;
+        });
+      }
+      if (!last) { setInviteGeom(null); return; }
+      try {
+        const r = (last.ed.view.nodeDOM(last.pos) as HTMLElement | null)?.getBoundingClientRect?.();
+        if (!r || r.height === 0) { setInviteGeom(null); return; }
+        const x = pageRightX + 24;
+        const w = Math.max(150, Math.min(230, canvas.clientWidth - x - 14));
+        setInviteGeom({ top: r.top - canvasRect.top + scrollTop, x, w, eventId: target });
+      } catch { setInviteGeom(null); }
+    };
+    const schedule = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; compute(); }); };
+    schedule();
+    window.addEventListener('resize', schedule);
+    const iv = window.setInterval(schedule, 900);
+    return () => { window.removeEventListener('resize', schedule); window.clearInterval(iv); if (raf) cancelAnimationFrame(raf); };
+  }, [inviteEligible, navSections, statusById, activeSceneId, canvasEl]);
+  const dismissInvite = useCallback(() => {
+    setInviteDismissed(true);
+    try { localStorage.setItem(`ff-peer-invite-${storyId}`, '1'); } catch { /* fine */ }
+  }, [storyId]);
   useEffect(() => {
     if (!notesVisible) return;
     let raf = 0;
@@ -2975,9 +3069,14 @@ export default function FreeformScript() {
     : '';
 
   if (loading) {
+    // Same mark as the board's loading state, so the two doors read as one
+    // app (Ben 2026-08-23). ThemeCtx wraps it because the mark reads the
+    // corkboard theme context, which this page doesn't otherwise provide.
     return (
-      <div style={{ minHeight: '100vh', background: '#0a0a0b', color: '#aeaeb6', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui, sans-serif' }}>
-        Loading script…
+      <div style={{ minHeight: '100vh', background: theme === 'dark' ? '#0a0a0b' : '#f7f3ea', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui, sans-serif' }}>
+        <ThemeCtx.Provider value={theme}>
+          <CorkboardLoading label="Loading script…" sub="Laying your scenes out on the page." minHeight="0" />
+        </ThemeCtx.Provider>
       </div>
     );
   }
@@ -3010,9 +3109,10 @@ export default function FreeformScript() {
           ? { '--tb-hair': '#26262c', '--tb-mut': '#8a8a93', '--tb-txt': '#c9c9d1', '--tb-hov': 'rgba(255,255,255,0.055)', '--tb-peer': '#54bfdb', '--tb-peer-bg': 'rgba(84,191,219,0.13)', '--tb-peer-bg-h': 'rgba(84,191,219,0.2)' }
           : { '--tb-hair': '#e3dbcb', '--tb-mut': '#8a8578', '--tb-txt': '#4a4a45', '--tb-hov': 'rgba(0,0,0,0.045)', '--tb-peer': '#0f7f9f', '--tb-peer-bg': 'rgba(15,127,159,0.10)', '--tb-peer-bg-h': 'rgba(15,127,159,0.16)' }),
       } as React.CSSProperties}>
-        <Link
-          to={`/freeform/${storyId}`}
-          onClick={() => {
+        <a
+          href={`/freeform/${storyId}`}
+          onClick={(e) => {
+            e.preventDefault();
             // Fire the exit extractions NOW, while the document walk is
             // still healthy — the unmount cleanup's walk can be torn down
             // (degraded guard drops it) and the tail would wait for the
@@ -3020,11 +3120,14 @@ export default function FreeformScript() {
             // arriving right as it opens.
             void runSave();
             flushExtractions();
+            // Wipe LEFT back to the board (the mirror of the board's
+            // wipe-right in): navigation fires while the screen is covered.
+            playPageWipe('left', () => routerNavigate(`/freeform/${storyId}`));
           }}
           style={{ color: '#ff8c42', textDecoration: 'none', fontSize: 13, fontWeight: 700 }}
         >
           ← Board
-        </Link>
+        </a>
         <span style={{ color: theme === 'dark' ? '#e6e6ea' : '#1a1a1a', fontSize: 14, fontWeight: 700 }}>Script</span>
         <span style={{ color: '#6b6b74', fontSize: 12 }}>
           {sceneCount} scene{sceneCount === 1 ? '' : 's'} from your outline
@@ -3056,19 +3159,36 @@ export default function FreeformScript() {
             {manualOnly ? 'Auto-sync off' : 'Auto-sync on'}
           </button>
           <span style={{ width: 1, height: 16, background: 'var(--tb-hair)', flexShrink: 0 }} />
-          <div className="ff-tb-seg" data-tour="script-peer-seg">
+          {/* Peer group — ALWAYS on stage (Marko 2026-08-23: every peer
+              affordance used to be hover-revealed or note-gated, so the peer
+              was invisible until first use). The identity chip leads; cold it
+              is the invitation and opens the scope menu; warm it carries the
+              count and the Notes/Review segments as before. */}
+          <div data-tour="script-peer-seg" style={{ position: 'relative', display: 'inline-flex' }}>
+          <div className="ff-tb-seg" style={{ borderColor: 'rgba(84,191,219,0.4)', borderRadius: 999 }}>
             <button
-              className={`ff-tb-btn ff-tb-seg-btn${notesOpen ? ' on' : ''}`}
-              onClick={() => setNotesOpen((v) => !v)}
-              title={notesOpen ? 'Hide the peer-note pins in the margin (they show on hover)' : 'Show the peer-note pins in the margin'}
+              className="ff-tb-btn"
+              onClick={() => setPeerMenuOpen((v) => !v)}
+              title="Your peer: it reads pages and measures them against what each scene is meant to do"
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 700, color: '#54bfdb',
+                height: '100%', padding: '0 12px', borderRadius: 0, border: 'none',
+                background: 'linear-gradient(135deg, rgba(84,191,219,0.20), rgba(84,191,219,0.08))',
+                boxShadow: notesVisible ? 'inset -1px 0 0 rgba(84,191,219,0.4)' : 'none',
+              }}
             >
-              Notes
-              {allNotes.length > 0 && (
-                <span className="ff-tb-count">{allNotes.length}</span>
-              )}
+              <span style={{ display: 'inline-flex', opacity: 0.9 }}><InternIcon size={12} /></span>
+              Peer{allNotes.length > 0 ? <span style={{ fontVariantNumeric: 'tabular-nums', opacity: 0.9 }}>· {allNotes.length}</span> : null}
             </button>
             {notesVisible && (
               <>
+                <button
+                  className={`ff-tb-btn ff-tb-seg-btn${notesOpen ? ' on' : ''}`}
+                  onClick={() => setNotesOpen((v) => !v)}
+                  title={notesOpen ? 'Hide the peer-note pins in the margin (they show on hover)' : 'Show the peer-note pins in the margin'}
+                >
+                  Notes
+                </button>
                 <span className="ff-tb-seg-div" />
                 <button
                   className={`ff-tb-btn ff-tb-seg-btn${reviewOpen ? ' on' : ''}`}
@@ -3079,6 +3199,59 @@ export default function FreeformScript() {
                 </button>
               </>
             )}
+          </div>
+            {peerMenuOpen && (() => {
+              const activeSt = activeSceneId ? (statusById.get(activeSceneId) ?? 'unwritten') : 'unwritten';
+              const activeWritable = activeSt === 'written' || activeSt === 'stale';
+              const activeMeta = activeSceneId ? sceneLabelById.get(activeSceneId) : undefined;
+              const activeSec = navSections.find((sec) => sec.seqId && sec.scenes.some((sc) => sc.eventId === activeSceneId));
+              const itemStyle = (enabled: boolean): React.CSSProperties => ({
+                display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left',
+                padding: '8px 10px', borderRadius: 7, border: 'none', background: 'transparent',
+                fontSize: 12.5, fontWeight: 600, fontFamily: 'system-ui, sans-serif',
+                color: enabled ? (theme === 'dark' ? '#e6e6ea' : '#2c2c28') : (theme === 'dark' ? '#5c5c66' : '#b0a996'),
+                cursor: enabled ? 'pointer' : 'default',
+              });
+              const scope: React.CSSProperties = { marginLeft: 'auto', fontFamily: 'ui-monospace, monospace', fontSize: 10.5, fontWeight: 500, color: theme === 'dark' ? '#6b6b74' : '#9a9488', maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+              const gl = <span style={{ display: 'inline-flex', color: '#54bfdb', flexShrink: 0 }}><InternIcon size={12} /></span>;
+              return (
+                <>
+                  {/* click-away backdrop */}
+                  <div onClick={() => setPeerMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 1200 }} />
+                  <div style={{
+                    position: 'absolute', top: 32, right: 0, width: 296, zIndex: 1201, padding: 8,
+                    background: theme === 'dark' ? '#1a1a1e' : '#fffdf7', borderRadius: 11,
+                    border: `1px solid ${theme === 'dark' ? '#2e2e35' : '#e3dbcb'}`,
+                    boxShadow: '0 14px 40px rgba(0,0,0,0.4)',
+                  }}>
+                    <div style={{ padding: '6px 10px 10px', fontSize: 12, lineHeight: 1.55, color: theme === 'dark' ? '#8a8a93' : '#8a8578' }}>
+                      The peer reads your pages and measures them against what each scene is <b style={{ color: theme === 'dark' ? '#e6e6ea' : '#2c2c28', fontWeight: 600 }}>meant to do</b>. Notes land in the margin.
+                    </div>
+                    <button
+                      onClick={() => { if (!activeWritable || !activeSceneId) return; setPeerMenuOpen(false); void readScene(activeSceneId); }}
+                      className="ff-peer-menu-item" style={itemStyle(!!activeWritable)}
+                      title={activeWritable ? undefined : 'Write the scene first, then the peer can read it'}
+                    >
+                      {gl}Read this scene<span style={scope}>{activeMeta ? `SC ${String(activeMeta.scNo).padStart(2, '0')}` : ''}</span>
+                    </button>
+                    {activeSec?.seqId && (
+                      <button
+                        onClick={() => { setPeerMenuOpen(false); void readSequence(activeSec.seqId!, activeSec.title); }}
+                        className="ff-peer-menu-item" style={itemStyle(true)}
+                      >
+                        {gl}Read this sequence<span style={scope}>{activeSec.title}</span>
+                      </button>
+                    )}
+                    <button
+                      onClick={() => { setPeerMenuOpen(false); void readDraft(); }}
+                      className="ff-peer-menu-item" style={itemStyle(true)}
+                    >
+                      {gl}Read the whole draft<span style={scope}>{sceneCount} scene{sceneCount === 1 ? '' : 's'}</span>
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
           </div>
           <button
             className="ff-tb-btn ff-tb-sync"
@@ -3127,9 +3300,12 @@ export default function FreeformScript() {
                       width: '100%', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
                       padding: '5px 9px', borderRadius: 6, fontSize: 11, fontWeight: 700, fontFamily: 'system-ui, sans-serif',
                       cursor: readingDraft ? 'default' : 'pointer',
-                      border: `1px solid ${draftCnt > 0 ? 'rgba(84,191,219,0.5)' : (theme === 'dark' ? '#2a2a30' : '#e0d8c8')}`,
-                      background: draftCnt > 0 ? 'rgba(84,191,219,0.12)' : 'transparent',
-                      color: draftCnt > 0 ? '#54bfdb' : (theme === 'dark' ? '#8a8a93' : '#8a8578'),
+                      // Peer things are peer-blue (Marko 2026-08-23): this is
+                      // the peer's biggest gesture, not a view toggle.
+                      border: '1px solid rgba(84,191,219,0.4)',
+                      background: 'linear-gradient(135deg, rgba(84,191,219,0.16), rgba(84,191,219,0.06))',
+                      boxShadow: '0 0 10px rgba(84,191,219,0.15)',
+                      color: '#54bfdb',
                     }}
                   >
                     {readingDraft
@@ -3177,7 +3353,7 @@ export default function FreeformScript() {
                           onClick={(e) => { e.stopPropagation(); void readSequence(sec.seqId!, sec.title); }}
                           disabled={busy}
                           title={seqNoteCount > 0 ? `${seqNoteCount} sequence note${seqNoteCount === 1 ? '' : 's'} — re-read this sequence` : 'Read this whole sequence with the peer'}
-                          style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 4, padding: '1px 6px', borderRadius: 5, fontSize: 9.5, fontWeight: 800, cursor: busy ? 'default' : 'pointer', border: `1px solid ${seqNoteCount > 0 ? 'rgba(84,191,219,0.5)' : (theme === 'dark' ? '#2a2a30' : '#e0d8c8')}`, background: seqNoteCount > 0 ? 'rgba(84,191,219,0.12)' : 'transparent', color: seqNoteCount > 0 ? '#54bfdb' : (theme === 'dark' ? '#7a7a83' : '#999') }}
+                          style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 4, padding: '1px 6px', borderRadius: 5, fontSize: 9.5, fontWeight: 800, cursor: busy ? 'default' : 'pointer', border: `1px solid rgba(84,191,219,${seqNoteCount > 0 ? 0.5 : 0.35})`, background: seqNoteCount > 0 ? 'rgba(84,191,219,0.12)' : 'transparent', color: '#54bfdb' }}
                         >
                           {busy
                             ? <span style={{ width: 8, height: 8, borderRadius: '50%', border: '2px solid rgba(84,191,219,0.3)', borderTopColor: '#54bfdb', display: 'inline-block', animation: 'ffspin 0.9s linear infinite' }} />
@@ -3241,9 +3417,13 @@ export default function FreeformScript() {
                           flex: 1, minWidth: 0,
                           // Hover reveal: the row grows to fit the full title —
                           // the wrap itself snaps, but the container height
-                          // eases, so the expansion reads as motion.
+                          // eases, so the expansion reads as motion. The cap is
+                          // a clip guard, not a fixed height (max-height never
+                          // stretches short rows), so it must clear the longest
+                          // realistic title — 64 clipped ~5-line scene names
+                          // (the "malfunctioning lifter" cut-off).
                           display: 'block', overflow: 'hidden',
-                          maxHeight: hovered ? 64 : 18,
+                          maxHeight: hovered ? 140 : 18,
                           transition: 'max-height 180ms cubic-bezier(0.32,0.72,0,1)',
                           ...(hovered
                             ? { whiteSpace: 'normal', wordBreak: 'break-word' }
@@ -3400,13 +3580,15 @@ export default function FreeformScript() {
              context so the markers scroll natively with the pages (no shake).
              The page stays centered; cards fit the existing right margin. */
           .ff-script-host .paginated-canvas { position: relative; }
-          /* Screenplay margins: the page text is a fixed 6in column; the card
+          /* Screenplay margins: the page text is a fixed 6in column; the editor
              pads 1in both sides, so the 6in column sits left-biased (1in left /
              1.5in right — backwards). Bump the left pad to 1.5in so the column
              carries proper 1.5in-left / 1in-right screenplay margins, and the
              content box equals the text width (markers land beside the text).
-             Overrides the inline 96px padding-left; scoped to freeform only. */
-          .ff-script-host .paginated-page-card { padding-left: 144px !important; }
+             Overrides the inline 96px padding-left; scoped to freeform only.
+             Targets the single continuous editor (.paginated-editor-content),
+             which now owns the horizontal margins (was .paginated-page-card). */
+          .ff-script-host .paginated-canvas .paginated-editor-content { padding-left: 144px !important; }
           /* Standard screenplay element indents (1in = 96px here). The shared
              editor's theme rules use approximate margins; these land the exact
              StudioBinder spec, freeform-scoped. Scene/action/shot/etc. stay at
@@ -3496,6 +3678,37 @@ export default function FreeformScript() {
           Review panel is the place to see everything). Everything renders INSIDE
           the scroll container (content coords) so it tracks the pages natively —
           no shake. Generation is the per-scene peer button (readScene). */}
+      {/* The margin invitation (one-shot, story-scoped) — see inviteEligible. */}
+      {inviteEligible && inviteGeom && canvasEl && createPortal(
+        <div
+          onClick={() => { dismissInvite(); void readScene(inviteGeom.eventId); }}
+          title="Read this scene with the peer"
+          style={{
+            position: 'absolute', top: inviteGeom.top, left: inviteGeom.x, width: inviteGeom.w,
+            zIndex: 40, cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 6,
+            padding: '10px 12px', borderRadius: 9,
+            border: '1px dashed rgba(84,191,219,0.4)',
+            background: theme === 'dark' ? 'rgba(84,191,219,0.05)' : 'rgba(15,127,159,0.05)',
+            fontFamily: 'system-ui, sans-serif',
+            animation: 'ffpop 220ms cubic-bezier(0.32,0.72,0,1)',
+          }}
+        >
+          <button
+            onClick={(e) => { e.stopPropagation(); dismissInvite(); }}
+            title="Dismiss"
+            style={{ position: 'absolute', top: 5, right: 7, border: 'none', background: 'transparent', color: theme === 'dark' ? '#4b4b52' : '#b0a996', fontSize: 12, cursor: 'pointer', padding: 2, lineHeight: 1 }}
+          >
+            ×
+          </button>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 7, color: '#54bfdb', fontSize: 11.5, fontWeight: 700 }}>
+            <InternIcon size={13} />The peer can read this
+          </span>
+          <span style={{ color: theme === 'dark' ? '#8a8a93' : '#8a8578', fontSize: 11, lineHeight: 1.5 }}>
+            It measures your pages against what the scene is meant to do. Notes land right here.
+          </span>
+        </div>,
+        canvasEl,
+      )}
       {(notesOpen || (reviewOpen && openNoteId != null)) && notesLoaded && allNotes.length > 0 && canvasEl && createPortal(
         (() => {
           const dark = theme === 'dark';

@@ -18,6 +18,8 @@ import { isDesktop } from '../lib/ipcClient';
 import { saveStory } from '../features/story-workspace/model/storySave';
 import { cacheDataToCanonical } from '../features/story-workspace/model/cacheDataAdapter';
 import { worksFromLocal } from '../features/story-workspace/model/worksFromLocal';
+import { storyRepo } from '../data/local-db/repositories';
+import { flushPushNow } from '../data/desktop-lifecycle';
 import { useTour } from './Tour/useTour';
 import { isWowSeen, markWowSeen } from './Freeform/corkboard/wowShared';
 
@@ -417,6 +419,20 @@ export function HomePage(props: HomePageProps) {
       const seed = pendingBrainstormRef.current.trim();
       pendingBrainstormRef.current = '';
 
+      // Belt as well as braces (FIL-585): router state is the fast path, but
+      // it dies on a refresh and on any redirect that lands on the corkboard a
+      // second time — and the spark is the writer's FIRST sentence about their
+      // story. Park it under the story's own key too; the corkboard clears the
+      // key once it consumes it.
+      const parkSeed = (id: string) => {
+        if (!seed) return;
+        try {
+          sessionStorage.setItem(`ff-braindump-seed:${id}`, seed);
+        } catch {
+          /* private mode / quota — router state still carries it */
+        }
+      };
+
       // The corkboard owns its own state (freeform backend, keyed by storyId),
       // but the WORK RECORD (title + workflow tag) must land in the same store
       // the grid reads, so a corkboard story shows up beside outline stories and
@@ -434,9 +450,15 @@ export function HomePage(props: HomePageProps) {
           await saveStory(cacheDataToCanonical(newData), userId, { forceImmediate: true });
           const works = await worksFromLocal(userId);
           setUser((prev: any) => (prev ? { ...prev, works } : prev));
+          // O corkboard abre em seguida e a PRIMEIRA coisa que ele faz é ler o
+          // backend do freeform — que nega (403) enquanto a story não existir no
+          // /works. `forceImmediate` só ENFILEIRA o push; sem drenar a fila aqui,
+          // a story chega ao backend depois do board, e o board abre em 403.
+          await flushPushNow();
         } catch (e) {
           console.error('freeform local save failed', e);
         }
+        parkSeed(newStoryId);
         navigate(`/freeform/${newStoryId}`, {
           state: { justCreated: true, ...(seed ? { braindump: seed } : null) },
         });
@@ -452,6 +474,7 @@ export function HomePage(props: HomePageProps) {
           if (result?.data?.statusCode !== 200) return; // limit error already surfaced
           const corkboardId = await resolveCreatedStoryId(newData.title, prevWorkKeys, newStoryId);
           markStoryWorkflow(corkboardId, 'freeform');
+          parkSeed(corkboardId);
           navigate(`/freeform/${corkboardId}`, {
             state: { justCreated: true, ...(seed ? { braindump: seed } : null) },
           });
@@ -530,6 +553,8 @@ export function HomePage(props: HomePageProps) {
         await saveStory(cacheDataToCanonical(newData), userId, { forceImmediate: true });
         const works = await worksFromLocal(userId);
         setUser((prev: any) => (prev ? { ...prev, works } : prev));
+        // Registra a ownership no /works ANTES do corkboard ler o freeform (403).
+        await flushPushNow();
       } catch (e) {
         console.error('wow local save failed', e);
       }
@@ -611,7 +636,13 @@ export function HomePage(props: HomePageProps) {
 
       setUser((prev: User) => ({
         ...prev,
-        works: res.data.body.works ?? {},
+        // Desktop: `works` é fonte-LOCAL (SQLite via worksFromLocal) — o backend
+        // NÃO sobrescreve, igual ao handleDynamoUser do App.tsx. Este efeito roda
+        // a cada mount da Home (inclusive na volta do corkboard), então sem a
+        // guarda o mapa da nuvem substituía a grade local-first: uma story que
+        // ainda não subiu some da grade, e um work record da nuvem com
+        // `workflow` errado reabria uma story de corkboard no editor de outline.
+        ...(isDesktop() ? {} : { works: res.data.body.works ?? {} }),
         cap: res.data.body.cap,
         subscription: res.data.body.subscription,
         sign_up_date: res.data.body.sign_up_date,
@@ -628,6 +659,26 @@ export function HomePage(props: HomePageProps) {
     if (!token?.payload) return;
     handleDynamoUser();
   }, [token, handleDynamoUser]);
+
+  // Grade depois de um delete. Na web o refetch da nuvem já reflete a remoção;
+  // no desktop a grade é local-first (o refetch não a toca mais), e o delete
+  // legado só chama a Lambda — então some-se localmente também, senão a story
+  // volta do SQLite no próximo render.
+  const refreshWorksAfterDelete = useCallback(async (storyIds: string[]) => {
+    if (!isDesktop()) {
+      await handleDynamoUser();
+      return;
+    }
+    const userId = token?.payload['cognito:username'] as string;
+    const at = new Date().toISOString();
+    try {
+      for (const sid of storyIds) await storyRepo.softDelete(sid, at);
+      const works = await worksFromLocal(userId);
+      setUser((prev: any) => (prev ? { ...prev, works } : prev));
+    } catch (e) {
+      console.error('[home] delete local falhou', e);
+    }
+  }, [handleDynamoUser, token, setUser]);
 
   // ============================================================
   // DELETE STORY
@@ -649,7 +700,7 @@ export function HomePage(props: HomePageProps) {
       const storyIdsArray = storyIds instanceof Set ? Array.from(storyIds) : [storyIds];
       const isDeletingCurrentWork = storyIdsArray.includes(data.storyId);
       const res = await handleDeletion(storyIds)
-      return { res, isDeletingCurrentWork };
+      return { res, isDeletingCurrentWork, storyIdsArray };
     },
     onMutate: (storyIds: Set<string> | string) => {
       if (storyIds instanceof Set) {
@@ -658,13 +709,13 @@ export function HomePage(props: HomePageProps) {
         setDeletingItems(new Set([...deletingItems, storyIds]));
       }
     },
-    onSuccess: async (result: { res: any; isDeletingCurrentWork: boolean }) => {
-      const { res, isDeletingCurrentWork } = result;
+    onSuccess: async (result: { res: any; isDeletingCurrentWork: boolean; storyIdsArray: string[] }) => {
+      const { res, isDeletingCurrentWork, storyIdsArray } = result;
 
       if (res.data.statusCode === 200) {
         toast.success("Work deleted!");
 
-        await handleDynamoUser();
+        await refreshWorksAfterDelete(storyIdsArray);
         if (isDeletingCurrentWork) {
           const generateStoryId = () => `story_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
 

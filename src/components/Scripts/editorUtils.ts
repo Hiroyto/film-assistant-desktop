@@ -95,6 +95,17 @@ export const compareSceneIds = (a: string, b: string): number => {
  * @param content - Raw tagged content from the AI generation response
  * @returns HTML string ready to insert into the TipTap editor
  */
+/** Escape text before interpolating it into HTML. Model output is untrusted:
+ *  `<img onerror>` in a generated line would otherwise execute when the HTML is
+ *  parsed (even into a detached div), with full access to window.electronAPI. */
+const escapeHtml = (s: string): string =>
+  s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
 export const convertTaggedContentToHTML = (content: string): string => {
   /** Map of tag codes to their corresponding screenplay line types */
   const tagToLineType: Record<string, string> = {
@@ -125,7 +136,7 @@ export const convertTaggedContentToHTML = (content: string): string => {
       if (text) {
         // Tag and content on the same line — ideal format
         convertedLines.push(
-          `<p data-line-type="${lineType}" style="font-family: 'Courier New', monospace; font-size: 12pt;">${text}</p>`
+          `<p data-line-type="${lineType}" style="font-family: 'Courier New', monospace; font-size: 12pt;">${escapeHtml(text)}</p>`
         );
         pendingTag = null;
       } else {
@@ -143,7 +154,7 @@ export const convertTaggedContentToHTML = (content: string): string => {
         continue;
       } else {
         convertedLines.push(
-          `<p data-line-type="${pendingTag}" style="font-family: 'Courier New', monospace; font-size: 12pt;">${trimmed}</p>`
+          `<p data-line-type="${pendingTag}" style="font-family: 'Courier New', monospace; font-size: 12pt;">${escapeHtml(trimmed)}</p>`
         );
         pendingTag = null;
       }
@@ -157,7 +168,7 @@ export const convertTaggedContentToHTML = (content: string): string => {
 
     // Plain text defaults to description
     convertedLines.push(
-      `<p data-line-type="description" style="font-family: 'Courier New', monospace; font-size: 12pt;">${trimmed}</p>`
+      `<p data-line-type="description" style="font-family: 'Courier New', monospace; font-size: 12pt;">${escapeHtml(trimmed)}</p>`
     );
   }
 

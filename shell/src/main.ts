@@ -16,10 +16,63 @@ import { registerDbHandlers } from './db/dbHandlers';
 import { closeDb } from './db/database';
 import { buildAppMenu } from './menu/appMenu';
 import { registerTestBridge } from './test/testBridge';
+import { registerFdx } from './fdx/watcher';
+import { openExternal } from './platform/external';
 
 const isDev = !app.isPackaged;
 
+// Segurança: a ponte de teste (ELECTRON_IS_TEST=1) jamais pode ser ativada num app
+// empacotado. O main já ignora a flag quando isPackaged (test/testState.ts); aqui
+// removemos a variável do ambiente para que o preload dos renderers (que herdam o
+// env deste processo) também não a veja.
+if (app.isPackaged) delete process.env.ELECTRON_IS_TEST;
+
 let mainWindow: BrowserWindow | null = null;
+
+/** URL de boot do renderer: dev server/static server em dev, build/index.html empacotado. */
+const RENDERER_START_URL = isDev ? process.env.ELECTRON_START_URL || 'http://localhost:3000' : null;
+
+/**
+ * Só o renderer do próprio app pode ficar na janela principal: em dev, a origem do
+ * ELECTRON_START_URL; empacotado, arquivos locais (file://). Qualquer outra URL é
+ * navegação para conteúdo remoto — que herdaria o preload (window.electronAPI) e,
+ * com ele, acesso ao SQLite local. Bloqueamos e mandamos para o browser do OS.
+ */
+function isAllowedRendererUrl(url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  if (u.protocol === 'about:' || u.protocol === 'devtools:') return true;
+  if (RENDERER_START_URL) return u.origin === new URL(RENDERER_START_URL).origin;
+  return u.protocol === 'file:';
+}
+
+/** Guardas de navegação da janela (Electron security checklist #13/#14). */
+function hardenWebContents(win: BrowserWindow): void {
+  const wc = win.webContents;
+  wc.on('will-navigate', (event, url) => {
+    if (isAllowedRendererUrl(url)) return;
+    event.preventDefault();
+    console.warn('[security] navegação bloqueada para', url);
+    void openExternal(url);
+  });
+  // Novas janelas (window.open / target=_blank) nunca são criadas dentro do app:
+  // http(s) vai para o browser externo; o resto é descartado.
+  wc.setWindowOpenHandler(({ url }) => {
+    console.warn('[security] window.open bloqueado para', url);
+    void openExternal(url);
+    return { action: 'deny' };
+  });
+  wc.on('will-attach-webview', (event) => event.preventDefault());
+  // Sem pedidos de permissão (câmera, mic, notificações, …) — o app não usa nenhum.
+  wc.session.setPermissionRequestHandler((_wc, permission, callback) => {
+    console.warn('[security] permissão negada:', permission);
+    callback(false);
+  });
+}
 
 // CORS bypass para a API Gateway AWS. O renderer roda numa origem que o backend
 // não libera (dev: http://localhost:3000; empacotado: file:// → Origin null), e
@@ -41,7 +94,10 @@ function installApiCorsBypass(): void {
     } catch {
       /* url inválida — não mexe */
     }
-    if (!AWS_API_HOST.test(host)) {
+    // Só requisições vindas da janela principal (o renderer do app) recebem o bypass.
+    const fromMainWindow =
+      !!mainWindow && !mainWindow.isDestroyed() && details.webContentsId === mainWindow.webContents.id;
+    if (!AWS_API_HOST.test(host) || !fromMainWindow) {
       callback({ responseHeaders: details.responseHeaders });
       return;
     }
@@ -79,19 +135,16 @@ function createWindow(): void {
     },
   });
 
+  hardenWebContents(mainWindow);
+
   // Renderer = SPA React (mesmo codebase, build CRA). AD-07: codebase único.
-  if (isDev) {
-    const startUrl = process.env.ELECTRON_START_URL || 'http://localhost:3000';
-    void mainWindow.loadURL(startUrl);
+  if (RENDERER_START_URL) {
+    void mainWindow.loadURL(RENDERER_START_URL);
     // Sob a suíte de paridade (ELECTRON_IS_TEST=1) NÃO abrimos o DevTools destacado:
     // ele viraria uma segunda janela e poderia ser retornado por _electron.firstWindow().
     if (process.env.ELECTRON_IS_TEST !== '1') mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
     void mainWindow.loadFile(path.join(__dirname, '..', '..', 'build', 'index.html'));
-    // Debug do build EMPACOTADO: FA_DEBUG=1 abre o DevTools (console do renderer)
-    // para ver erros que só ocorrem no app publicado, não no `desktop:start`.
-    // Temporário — remover quando o bug de sync estiver resolvido.
-    if (process.env.FA_DEBUG === '1') mainWindow.webContents.openDevTools({ mode: 'detach' });
   }
 
   mainWindow.once('ready-to-show', () => mainWindow?.show());
@@ -132,6 +185,7 @@ if (!gotSingleInstanceLock) {
     createWindow();
     buildAppMenu(() => mainWindow, { isDev }); // SCR-0027 menu nativo
     registerTestBridge(() => mainWindow); // no-op fora de ELECTRON_IS_TEST=1
+    registerFdx(() => mainWindow); // protótipo coworking .fdx (só leitura)
     wireShellToRenderer();
     emitDeepLinkFromArgv(process.argv); // Windows cold-start com deep link
 

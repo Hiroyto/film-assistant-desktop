@@ -87,6 +87,7 @@ import { FixtureProvider, type FixtureState } from './test-bridge/fixtureContext
 import { runFixtureBoot } from './test-bridge/fixtures';
 import { TourContext } from './components/Tour/TourProvider';
 import { tutorialSteps } from './models/tutorialSteps';
+import { clearAllStoredGraphs } from './lib/localGraphStore';
 
 // Desktop packages the renderer over file:// where HTML5 history routing 404s on
 // navigation; use HashRouter on desktop and keep BrowserRouter on web so the web
@@ -1666,6 +1667,10 @@ function AppContent() {
       } catch (e) {
         console.error('[signout] local flush falhou (prossegue)', e);
       }
+      // Clear the local story-graph shelf so this account's cached graphs are
+      // never readable by the next user of this browser (the shelf is otherwise
+      // per-origin, not per-user, and never pruned).
+      await clearAllStoredGraphs();
       await amplifySignOut();
       navigate('/');
     } catch (error) {
@@ -2051,4 +2056,4 @@ function AppContent() {
   );
 }
 
-export default App;
+export default App;
