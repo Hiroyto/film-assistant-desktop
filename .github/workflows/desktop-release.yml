@@ -39,7 +39,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22 # piso das deps: electron 42, @electron/rebuild 4, node-abi 4, pdfjs-dist 6.3 exigem >= 22.12; better-sqlite3 12 só tem prebuild para Node >= 22
           cache: npm
 
       # Release por TAG exige assinatura: o auto-update (Squirrel / update-electron-app)
