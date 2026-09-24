@@ -60,7 +60,36 @@ const macOSSign =
 // (mac 1.1.2: "no such table: sync_queue"; o Windows só funcionava porque um
 // banco com schema já existia de uma execução não empacotada).
 const MIGRATIONS_DIR = '/src/data/local-db/migrations';
+// Os IGNORES PADRÃO do @electron/packager (copy-filter.js, DEFAULT_IGNORES) só
+// são acrescentados quando `ignore` é uma lista de regex; com uma FUNÇÃO o
+// packager usa exatamente o que ela devolve e nada mais. Foi assim que a 1.1.3
+// passou de 219 MB para 510 MB: o `.git` do checkout do CI (o repo versiona
+// ~240 MB de vídeos em src/) entrou inteiro no app.asar. Reproduzimos a lista
+// padrão aqui, mais as pastas de tooling que também nunca são runtime.
+const PACKAGER_DEFAULT_IGNORES = [
+  /\/package-lock\.json$/,
+  /\/yarn\.lock$/,
+  /\/pnpm-lock\.yaml$/,
+  /^\/\.git(\/|$)/,
+  /^\/node_modules\/\.bin(\/|$)/,
+  /\.o(bj)?$/,
+  /\/node_gyp_bins(\/|$)/,
+];
 const IGNORED = [
+  ...PACKAGER_DEFAULT_IGNORES,
+  // Cache de build/lint/test (babel-loader, eslint, jest, terser). Não é um
+  // módulo, então o prune não o toca, e nada de runtime lê dali. Numa máquina
+  // de dev chega a mais de 1 GB; no CI é o cache do próprio craco build.
+  /^\/node_modules\/\.cache(\/|$)/,
+  // (\/|$): ignora também a ENTRADA do diretório, senão sobra uma pasta vazia.
+  /^\/\.github(\/|$)/,
+  /^\/\.claude(\/|$)/,
+  /^\/\.vscode(\/|$)/,
+  /^\/out(\/|$)/,
+  /^\/parity(\/|$)/,        // snapshots do teste de paridade web/desktop
+  /^\/test-results(\/|$)/,
+  /^\/backend-tests(\/|$)/,
+  /^\/package-lock\.web\.json$/,
   /^\/shell\/src\//,
   /^\/shell\/tsconfig\.json$/,
   /^\/amplify\//,
