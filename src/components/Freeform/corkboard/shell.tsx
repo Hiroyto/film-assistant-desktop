@@ -1,5 +1,6 @@
 // components/Freeform/corkboard/shell.tsx — split out of freeform-corkboard.tsx (FIL-496).
 import React, { useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { hexToRgba } from '../../../components/Freeform/entityColors';
 import { useThemeMode } from './theme';
 
@@ -321,8 +322,13 @@ export function Shell({
         }
       `}</style>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 8 }}>
-        <a
-          href="/dashboard"
+        {/* Router Link, not a raw <a href="/dashboard">: the packaged desktop
+            app runs from file:// under a HashRouter, where a raw absolute href
+            is a full browser navigation to file:///dashboard — a page that
+            does not exist (black window). The dev server masked it by serving
+            index.html for every path. */}
+        <Link
+          to="/dashboard"
           title="Back to your stories"
           style={{
             fontSize: 12,
@@ -332,7 +338,7 @@ export function Shell({
           }}
         >
           ← Stories
-        </a>
+        </Link>
         {canRename && editingTitle ? (
           <input
             autoFocus
