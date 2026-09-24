@@ -32,6 +32,8 @@ interface UseCascadeEventsArgs {
 }
 
 export interface UseCascadeEventsState {
+  /** Raise a receipt that did not arrive on the socket (the braindump lane). */
+  pushEvent: (event: CascadeEvent) => void;
   isConnected: boolean;
   /** Toasts currently visible (each has its own 5s dwell, managed by CascadeToast). */
   activeToasts: CascadeEvent[];
@@ -85,6 +87,16 @@ export function useCascadeEvents({
     },
     [resolveCardLabel],
   );
+
+  // A receipt raised locally rather than off the socket. The braindump lane
+  // has no cascade_complete of its own, but it lands new cards on the board the
+  // same way, so it builds an event and pushes it through the same toast, tray
+  // and details panel (Ben, 2026-09-09).
+  const pushEvent = useCallback((event: CascadeEvent) => {
+    setActiveToasts((toasts) =>
+      toasts.some((t) => t.cardResponseId === event.cardResponseId) ? toasts : [...toasts, event],
+    );
+  }, []);
 
   const dismissToast = useCallback(
     (cardResponseId: string) => {
@@ -205,6 +217,7 @@ export function useCascadeEvents({
 
   return {
     isConnected,
+    pushEvent,
     activeToasts,
     trayEntries,
     summaryPanelTarget,

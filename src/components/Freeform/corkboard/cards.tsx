@@ -1159,50 +1159,22 @@ export function ArcCompact({
   signal: CardSignal;
   accentColor: string;
 }) {
-  const dark = useThemeMode() === 'dark';
   const evokesCount = signal.evokesEntries?.length ?? 0;
   const kind = (entity.kind as ArcKind | undefined) ?? undefined;
+  // SIMPLE HEADER (Ben 2026-09-01): the collapsed thread face is the title
+  // (the shared card header) plus one quiet signal row. The old stack — kind
+  // line, italic status, a clamped description cropping mid-line at the card
+  // edge — read as clutter next to the newer card grammar; all of it lives
+  // on the full sheet.
   return (
     <div>
       <SignalRow
         items={[
           kind && arcKindLabel(kind),
-          evokesCount > 0 && `${evokesCount} event${evokesCount === 1 ? '' : 's'}`,
-          (signal.arcInvolvesCharNames?.length ?? 0) > 0 &&
-            `${signal.arcInvolvesCharNames!.length} char${signal.arcInvolvesCharNames!.length === 1 ? '' : 's'}`,
+          evokesCount > 0 && `${evokesCount} scene${evokesCount === 1 ? '' : 's'}`,
+          signal.arcStatusLabel || false,
         ]}
       />
-      {signal.arcStatusLabel && (
-        <div
-          style={{
-            marginTop: 4,
-            fontSize: 10.5,
-            color: hexToRgba(accentColor, 0.95),
-            fontStyle: 'italic',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {signal.arcStatusLabel}
-        </div>
-      )}
-      {entity.description && (
-        <div
-          style={{
-            marginTop: 4,
-            fontSize: 11,
-            color: dark ? '#9a9aa4' : '#666',
-            lineHeight: 1.35,
-            display: '-webkit-box',
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: 'vertical',
-            overflow: 'hidden',
-          }}
-        >
-          {entity.description}
-        </div>
-      )}
     </div>
   );
 }

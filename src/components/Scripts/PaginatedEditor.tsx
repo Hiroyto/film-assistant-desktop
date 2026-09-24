@@ -26,7 +26,7 @@ import { useEditor, EditorContent, Editor, Extensions } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Underline from "@tiptap/extension-underline";
 import { ScreenwritingParagraph } from "./editor/extensions/Screenwritingline";
-import { KeyboardShortcuts, SafeSelection } from "./editor/extensions";
+import { KeyboardShortcuts, SafeSelection, PlainTextPaste } from "./editor/extensions";
 import PageBreaks from "./editor/extensions/PageBreaks";
 
 // ─── Dimensões da página ────────────────────────────────────────────────────
@@ -65,6 +65,9 @@ const PaginatedEditor = forwardRef<PaginatedEditorHandle, PaginatedEditorProps>(
     function PaginatedEditor({ editorTheme, onActiveEditorReady, extensions = [], initialContent }, ref) {
         const isDark = editorTheme === "dark";
         const [pageCount, setPageCount] = useState(1);
+        // Page one is a title page (typed `title` lines): the script's own
+        // page numbers start on the sheet after it, Final Draft's layout.
+        const [titlePage, setTitlePage] = useState(false);
 
         // onActiveEditorReady via ref para não recriar o editor.
         const onReadyRef = useRef(onActiveEditorReady);
@@ -81,12 +84,13 @@ const PaginatedEditor = forwardRef<PaginatedEditorHandle, PaginatedEditorProps>(
                 ScreenwritingParagraph.configure({ HTMLAttributes: { class: "screenplay-line" } }),
                 KeyboardShortcuts,
                 SafeSelection,
+                PlainTextPaste,
                 PageBreaks.configure({
                     pageHeight: PAGE_H,
                     contentHeight: CONTENT_H,
                     marginV: MARGIN_V,
                     pageGap: PAGE_GAP,
-                    onPageCountChange: (n) => setPageCount(Math.max(1, n)),
+                    onPageCountChange: (n, tp) => { setPageCount(Math.max(1, n)); setTitlePage(!!tp); },
                 }),
                 ...extensions,
             ],
@@ -105,7 +109,7 @@ const PaginatedEditor = forwardRef<PaginatedEditorHandle, PaginatedEditorProps>(
                         "background: transparent",
                         "font-family: 'Courier New', monospace",
                         "font-size: 12pt",
-                        "line-height: 1.5",
+                        "line-height: 1",
                         "white-space: pre-wrap",
                         "word-break: break-word",
                     ].join(";"),
@@ -184,13 +188,21 @@ const PaginatedEditor = forwardRef<PaginatedEditorHandle, PaginatedEditorProps>(
                                 borderRadius: 2, boxSizing: "border-box",
                             }}
                         >
-                            <div style={{
-                                position: "absolute", top: 8, right: 12, fontSize: 10,
-                                fontFamily: "monospace", color: isDark ? "#555" : "#bbb",
-                                userSelect: "none", pointerEvents: "none",
-                            }}>
-                                {i + 1}
-                            </div>
+                            {/* Page number, Final Draft's default header (FD10 manual,
+                                Header and Footer + Page Layout): "Page #." on the right,
+                                header margin 0.5in from the top, text margin 1in, right
+                                margin 1in, Courier 12pt, no header on the first page. */}
+                            {i > (titlePage ? 1 : 0) && (
+                                <div style={{
+                                    position: "absolute", top: 48, right: MARGIN_H,
+                                    fontSize: 16, lineHeight: "16px",
+                                    fontFamily: "'Courier New', Courier, monospace",
+                                    color: isDark ? "#c9c9d2" : "#111",
+                                    userSelect: "none", pointerEvents: "none",
+                                }}>
+                                    {titlePage ? i : i + 1}.
+                                </div>
+                            )}
                         </div>
                     ))}
                 </div>

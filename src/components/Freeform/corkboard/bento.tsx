@@ -6,6 +6,8 @@ import { hexToRgba } from '../../../components/Freeform/entityColors';
 import RGL, { WidthProvider, type Layout } from 'react-grid-layout';
 import { liftColor, useThemeMode } from './theme';
 import { HoverTip } from './tooltip';
+// Type-only, so the bento<->orbit pair does not become a runtime cycle.
+import type { OrbitAdd, OrbitItem } from './orbit';
 
 // =====================================================================
 // Bento section-tile system (card-surface rework).
@@ -45,6 +47,47 @@ export type SectionTileDef = {
   /** One-line explanation shown via the header "i" hover tooltip. */
   hint?: string;
   content: React.ReactNode;
+  /** FIL-588 — the same section broken into individual cards, for the orbit
+   *  sheet, which floats them around the focal instead of listing them in a
+   *  tile. Optional on purpose: a tile without items still renders `content`
+   *  there, so categories convert one at a time rather than all at once. The
+   *  bento ignores this field entirely. */
+  items?: OrbitItem[];
+  /** FIL-588 — lets the orbit's Add button become the picker itself instead
+   *  of opening this tile's whole editor across the board. Bento ignores it. */
+  add?: OrbitAdd;
+  /** FIL-588 — how the orbit arranges this category's `items`.
+   *  'ring' (default) floats them around the focal card. 'throughline' drops
+   *  the focal entirely and lays them out as an ORDERED rail: a category
+   *  whose meaning IS the sequence (the scenes a character moves through)
+   *  cannot say that with a ring, where every satellite is equidistant and
+   *  order is nowhere. Bento ignores it. */
+  layout?: 'ring' | 'throughline';
+  /** Replaces the orbit chip's colour dot — for a category with a persona,
+   *  like the peer. Bento ignores it. */
+  icon?: React.ReactNode;
+  /** Replaces the focal card's OWN body while this category wants the middle
+   *  of the sheet for something else — the peer puts its read there while a
+   *  question is open. Cross-fades; the focal's material comes back when this
+   *  goes away. Bento ignores it. */
+  focalOverride?: React.ReactNode;
+  /** Whether the override is currently showing. Kept SEPARATE from the content
+   *  so the content can stay mounted while hidden — a grid-rows transition has
+   *  nothing to interpolate toward if the content only appears on the same
+   *  frame as the size change, and Chrome skips the animation entirely. */
+  focalOverrideActive?: boolean;
+  /** Rendered INSIDE the focal card while this category is on stage. For the
+   *  peer that's the Ask button: the thing you press to get more cards
+   *  belongs on the card being asked about, not in a corner. Bento ignores it. */
+  focalAction?: React.ReactNode;
+  /** Rendered in the orbit's ACTION BAR while this category is on stage. For a
+   *  control that acts on the whole run rather than on one card — the scene
+   *  cascade's arc lens. Bento ignores it. */
+  barAction?: React.ReactNode;
+  /** Rendered ABOVE the stage (below the chips) while this category is on
+   *  stage — the character cascade's Build Arc bar and primary-arc band.
+   *  Bento ignores it. */
+  stageHeader?: React.ReactNode;
 };
 
 export type BentoLayoutBuilder = (

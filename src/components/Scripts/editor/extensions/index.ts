@@ -17,3 +17,4 @@
 export { ScreenwritingParagraph, type ScreenwritingLineType } from "./Screenwritingline";
 export { default as KeyboardShortcuts } from "./KeyboardShortcuts";
 export { default as SafeSelection } from "./SafeSelection";
+export { default as PlainTextPaste, reformatScreenplay } from "./PlainTextPaste";

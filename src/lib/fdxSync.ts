@@ -404,6 +404,33 @@ export function contiguousGroups(indices: number[]): number[][] {
   return groups;
 }
 
+// ---- Respostas do strip que trocam o card (puro) ---------------------------
+// Uma pergunta do strip ("merge or keep both?", "scene or sequence?", o drop
+// EM CIMA de um card) pode resolver o card que uma cena do .fdx compõe em OUTRO
+// card: o mintado vai para o lixo e o alvo (ou o card re-mintado na outra
+// altitude) sobrevive. Sem este remapeamento a rodada seguinte veria o card
+// morto, trataria a cena como NOVA e a mandaria de novo para a IA — que
+// levantaria a mesma pergunta outra vez, em loop.
+
+/** Move todos os registros que apontam para `fromIds` para `toId` e descarta
+ *  o estado de save/extração dos cards mortos. O sobrevivente NÃO ganha
+ *  estado: as páginas dele agora incluem a(s) cena(s) movida(s), e o hash
+ *  novo já obriga a rodada seguinte a re-salvar e re-extrair. Devolve quantos
+ *  registros mudaram; muta o store recebido. */
+export function remapStoreCard(store: FdxSyncStore, fromIds: string[], toId: string): number {
+  const from = new Set(fromIds.filter((id) => id && id !== toId));
+  if (!toId || from.size === 0) return 0;
+  let moved = 0;
+  for (const rec of Object.values(store.scenes)) {
+    if (from.has(rec.eventId)) {
+      rec.eventId = toId;
+      moved++;
+    }
+  }
+  if (moved > 0) for (const id of from) delete store.events[id];
+  return moved;
+}
+
 // ---- Controlador (singleton) -----------------------------------------------
 
 export type FdxSyncStatus = 'idle' | 'syncing' | 'error';
@@ -453,6 +480,9 @@ export interface FdxSyncSnapshot {
   missing: Array<{ recordId: string; eventId: string; heading: string; since: string; sharedCard: boolean }>;
   /** Decisões keep/trash em andamento (UI desabilita os botões). */
   resolvingIds: string[];
+  /** Todos os cards que alguma cena do arquivo compõe (vivas ou sumidas):
+   *  uma pergunta do strip sobre um deles é uma pergunta DO COWORK. */
+  mappedEventIds: string[];
 }
 
 type Auth = { userId: string; token: string };
@@ -536,6 +566,7 @@ export function getFdxSyncSnapshot(): FdxSyncSnapshot {
         sharedCard: live.some((o) => o.eventId === r.eventId),
       })),
     resolvingIds: [...resolving],
+    mappedEventIds: [...new Set(recs.map((r) => r.eventId))],
   };
 }
 
@@ -710,6 +741,23 @@ export async function resolveMissingScene(recordId: string, choice: 'keep' | 'tr
     resolving.delete(recordId);
     emit();
   }
+}
+
+/** O board respondeu uma pergunta do strip que trocou o card de lugar (merge
+ *  num alvo, conversão de altitude, drop em cima de um card): as cenas do
+ *  .fdx que compunham o(s) card(s) morto(s) passam a compor o sobrevivente.
+ *  No-op quando nenhuma cena mapeada é afetada (a pergunta não era do
+ *  cowork). Com o watch ativo, re-roda a última leitura do arquivo para que
+ *  as páginas do sobrevivente carreguem a(s) cena(s) movida(s) já — sem
+ *  esperar o próximo save do Final Draft. */
+export function remapFdxSyncCard(from: string | string[], toId: string): void {
+  if (!storyId) return;
+  const moved = remapStoreCard(store, Array.isArray(from) ? from : [from], toId);
+  if (moved === 0) return;
+  persistStore(storyId, store);
+  console.info('[fdx-sync] remapped scene records after a strip answer', { from, toId, moved });
+  emit();
+  if (active && lastPayload?.ok) void runSync(lastPayload);
 }
 
 /**

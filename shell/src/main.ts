@@ -5,7 +5,7 @@
 // (resume/before-quit — AD-03), auto-update (AD-09). A camada de dados (SQLite via
 // IPC db:query) é plugada na Tarefa 07; as telas novas do shell, na Tarefa 15.
 
-import { app, BrowserWindow, session } from 'electron';
+import { app, BrowserWindow, session, WebContents, WebPreferences } from 'electron';
 import * as path from 'path';
 import { IPC } from './ipc/channels';
 import { registerIpcHandlers, sendToRenderer } from './ipc/bridge';
@@ -18,6 +18,8 @@ import { buildAppMenu } from './menu/appMenu';
 import { registerTestBridge } from './test/testBridge';
 import { registerFdx } from './fdx/watcher';
 import { openExternal } from './platform/external';
+import { CUSTOM_CHROME, DEFAULT_CHROME_COLOR, STRIP_WEB_PREFERENCES, chromeWindowOptions, mountCustomChrome } from './window/chrome';
+import { appContentsOf } from './window/appContents';
 
 const isDev = !app.isPackaged;
 
@@ -50,9 +52,8 @@ function isAllowedRendererUrl(url: string): boolean {
   return u.protocol === 'file:';
 }
 
-/** Guardas de navegação da janela (Electron security checklist #13/#14). */
-function hardenWebContents(win: BrowserWindow): void {
-  const wc = win.webContents;
+/** Guardas de navegação do renderer do app (Electron security checklist #13/#14). */
+function hardenWebContents(wc: WebContents): void {
   wc.on('will-navigate', (event, url) => {
     if (isAllowedRendererUrl(url)) return;
     event.preventDefault();
@@ -96,7 +97,7 @@ function installApiCorsBypass(): void {
     }
     // Só requisições vindas da janela principal (o renderer do app) recebem o bypass.
     const fromMainWindow =
-      !!mainWindow && !mainWindow.isDestroyed() && details.webContentsId === mainWindow.webContents.id;
+      !!mainWindow && !mainWindow.isDestroyed() && details.webContentsId === appContentsOf(mainWindow).id;
     if (!AWS_API_HOST.test(host) || !fromMainWindow) {
       callback({ responseHeaders: details.responseHeaders });
       return;
@@ -114,12 +115,18 @@ function installApiCorsBypass(): void {
 }
 
 function createWindow(): void {
+  const appWebPreferences: WebPreferences = {
+    preload: path.join(__dirname, 'preload.js'),
+    contextIsolation: true,
+    nodeIntegration: false,
+    sandbox: false, // permite o preload usar ipcRenderer/Node
+  };
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
     minWidth: 900,
     minHeight: 600,
-    backgroundColor: '#1a1a1c', // bgdark1 (tailwind.config.js)
+    backgroundColor: DEFAULT_CHROME_COLOR,
     // Ícone da janela/taskbar. Em dev vem de public/; empacotado, do build/
     // (CRA copia public/icon.png -> build/icon.png). No macOS o dock usa o .icns
     // do packagerConfig, então isto é sobretudo para Windows/Linux.
@@ -127,27 +134,36 @@ function createWindow(): void {
       ? path.join(__dirname, '..', '..', 'public', 'icon.png')
       : path.join(__dirname, '..', '..', 'build', 'icon.png'),
     show: false,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false, // permite o preload usar ipcRenderer/Node
-    },
+    ...chromeWindowOptions(),
+    // Com a moldura custom a janela só desenha a faixa de título: o preload (e, com
+    // ele, o acesso ao SQLite) vai apenas para o webContents do app.
+    webPreferences: CUSTOM_CHROME ? STRIP_WEB_PREFERENCES : appWebPreferences,
   });
 
-  hardenWebContents(mainWindow);
+  const appWc = CUSTOM_CHROME ? mountCustomChrome(mainWindow, appWebPreferences) : mainWindow.webContents;
+  hardenWebContents(appWc);
 
   // Renderer = SPA React (mesmo codebase, build CRA). AD-07: codebase único.
   if (RENDERER_START_URL) {
-    void mainWindow.loadURL(RENDERER_START_URL);
+    void appWc.loadURL(RENDERER_START_URL);
     // Sob a suíte de paridade (ELECTRON_IS_TEST=1) NÃO abrimos o DevTools destacado:
     // ele viraria uma segunda janela e poderia ser retornado por _electron.firstWindow().
-    if (process.env.ELECTRON_IS_TEST !== '1') mainWindow.webContents.openDevTools({ mode: 'detach' });
+    if (process.env.ELECTRON_IS_TEST !== '1') appWc.openDevTools({ mode: 'detach' });
   } else {
-    void mainWindow.loadFile(path.join(__dirname, '..', '..', 'build', 'index.html'));
+    void appWc.loadFile(path.join(__dirname, '..', '..', 'build', 'index.html'));
   }
 
-  mainWindow.once('ready-to-show', () => mainWindow?.show());
+  if (CUSTOM_CHROME) {
+    // O 'ready-to-show' da janela seria o paint da faixa (instantâneo): espera o app.
+    const show = (): void => {
+      if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) mainWindow.show();
+    };
+    appWc.once('dom-ready', show);
+    appWc.once('did-fail-load', show);
+    setTimeout(show, 5000); // nunca deixar a janela invisível
+  } else {
+    mainWindow.once('ready-to-show', () => mainWindow?.show());
+  }
   mainWindow.on('closed', () => {
     mainWindow = null;
   });

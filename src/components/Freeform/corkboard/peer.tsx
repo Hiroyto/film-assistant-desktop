@@ -50,6 +50,8 @@ export function setPeerWriteActive(active: boolean) {
 // which the tour's guide-ask step still needs). WowFlow ties it to its phase so
 // it always clears (any non-bento phase, skip, or unmount).
 export const wowBentoPeerGate = { active: false };
+/** Fired at the start of every ask(), with { cardId }. */
+export const PEER_ASK_EVENT = 'ff-peer-ask';
 export function setWowBentoPeerActive(active: boolean) {
   wowBentoPeerGate.active = active;
 }
@@ -160,6 +162,9 @@ export function usePeerSession({
   // Build the slice + kick the async first-pass. Called on mount (canvas) or
   // explicitly (sheet). Safe to call again for a re-ask.
   const ask = useCallback(async () => {
+    // The first-run tour listens for this to advance past its "ask the peer"
+    // step, whichever surface the ask came from (sheet or canvas card).
+    try { window.dispatchEvent(new CustomEvent(PEER_ASK_EVENT, { detail: { cardId: entity.id } })); } catch { /* ignore */ }
     if (!focalSupported) {
       setStatusLine(
         `Ask peer for ${focalType} cards is coming next — slice loader is Character-only today.`,
@@ -1026,6 +1031,9 @@ export function QuestionComposer({
   onResponseSubmitted,
   initialThread,
   initialClosedThread,
+  hideQuestionText,
+  rationaleAlwaysOpen,
+  bare,
 }: {
   question: PeerQuestion;
   persistedStatus: 'open' | 'stashed' | 'answered' | 'dismissed';
@@ -1057,6 +1065,18 @@ export function QuestionComposer({
     threadId: string;
     turns: ChatTurn[];
   };
+  /** FIL-588 — the orbit's peer satellite already shows the question as the
+   *  card's own title, so the composer must not print it a second time. */
+  hideQuestionText?: boolean;
+  /** FIL-588 — the orbit satellite IS the card, so the composer must not
+   *  bring its own: no wrapper padding, no bottom divider, no disclosure
+   *  caret. Stacking both meant ~22px of padding a side and a stray rule
+   *  under the answer field. */
+  bare?: boolean;
+  /** FIL-588 — show the peer's reasoning straight away instead of behind the
+   *  "Why" toggle. On a card the writer has deliberately opened, the
+   *  commentary IS what they opened it for. */
+  rationaleAlwaysOpen?: boolean;
   /** Closed (read-only) A5 thread that was previously committed or explicitly
    *  closed. Lets the writer revisit the conversation even after answering. */
   initialClosedThread?: {
@@ -1460,11 +1480,31 @@ export function QuestionComposer({
       ? error
       : '';
 
+  // In bare mode this rides the action row beside Chat and the trash; a line
+  // of its own was a whole row spent on one four-letter word.
+  const whyToggle = question.rationale ? (
+    <button
+      type="button"
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => { e.stopPropagation(); setRationaleOpen((v) => !v); }}
+      style={{
+        background: 'transparent', border: 'none', padding: 0, cursor: 'pointer',
+        color: dark ? '#787882' : '#999', fontSize: 10.5, fontWeight: 600,
+        fontFamily: NOTE_FONT_SANS,
+      }}
+      title={rationaleOpen ? "Hide the peer's reasoning" : "Show the peer's reasoning for asking this"}
+    >
+      {rationaleOpen ? '▾ Why' : '▸ Why'}
+    </button>
+  ) : null;
+
   return (
     <div
       onMouseDown={(e) => e.stopPropagation()}
       style={
-        card
+        bare
+          ? { padding: 0 }
+          : card
           ? {
               border: dark ? '1px solid #26262c' : `1px solid ${hexToRgba(PEER_BLUE, 0.15)}`,
               borderRadius: 6,
@@ -1484,17 +1524,27 @@ export function QuestionComposer({
       {!chatOpen && (
         <div onClick={onToggle} style={{ cursor: 'pointer' }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-            {!card && (
+            {!card && !bare && (
               <span style={{ color: PEER_BLUE, fontSize: 11, marginTop: 3 }}>
                 {isOpen ? '▾' : '▸'}
               </span>
             )}
-            <div style={{ flex: 1, minWidth: 0, fontFamily: NOTE_FONT_SANS, fontSize: 10.5, color: PEER_BLUE, fontWeight: 600, lineHeight: 1.45 }}>
-              {question.workingSectionLabel}
-              {isAnswered && (
-                <span style={{ color: '#10b981', marginLeft: 8, whiteSpace: 'nowrap' }}>✓ Answered</span>
-              )}
-            </div>
+            {/* In bare mode the satellite already wears this label as its
+                kicker and its answered state as a tag — repeating both inside
+                the card is the same line twice. The actions still need the
+                row, so it collapses to a spacer rather than disappearing. */}
+            {bare ? (
+              <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center' }}>
+                {isOpen && whyToggle}
+              </div>
+            ) : (
+              <div style={{ flex: 1, minWidth: 0, fontFamily: NOTE_FONT_SANS, fontSize: 10.5, color: PEER_BLUE, fontWeight: 600, lineHeight: 1.45 }}>
+                {question.workingSectionLabel}
+                {isAnswered && (
+                  <span style={{ color: '#10b981', marginLeft: 8, whiteSpace: 'nowrap' }}>✓ Answered</span>
+                )}
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
               {/* Chat: visible whenever there's a thread to view (even after
                   answer), OR when the question is still open to new conversation. */}
@@ -1547,24 +1597,38 @@ export function QuestionComposer({
                     e.stopPropagation();
                     setPersistedStatus('dismissed');
                   }}
-                  style={peerActionBtn}
+                  style={{ ...peerActionBtn, display: 'inline-flex', alignItems: 'center', lineHeight: 0, padding: 2 }}
                   title="Not taking this question"
+                  aria-label="Dismiss this question"
                 >
-                  Dismiss
+                  {/* A trash can, not the word — it sits beside Chat on the
+                      orbit's peer card, where two text buttons read as two
+                      equal choices. This one isn't. */}
+                  <svg width="13" height="13" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
+                    <path
+                      d="M5.5 1C5.22386 1 5 1.22386 5 1.5C5 1.77614 5.22386 2 5.5 2H9.5C9.77614 2 10 1.77614 10 1.5C10 1.22386 9.77614 1 9.5 1H5.5ZM3 3.5C3 3.22386 3.22386 3 3.5 3H5H10H11.5C11.7761 3 12 3.22386 12 3.5C12 3.77614 11.7761 4 11.5 4H11V12C11 12.5523 10.5523 13 10 13H5C4.44772 13 4 12.5523 4 12V4L3.5 4C3.22386 4 3 3.77614 3 3.5ZM5 4H10V12H5V4Z"
+                      fill="currentColor"
+                      fillRule="evenodd"
+                      clipRule="evenodd"
+                    />
+                  </svg>
                 </button>
               )}
             </div>
           </div>
 
-          <div style={{ marginTop: 7 }}>
-            {/* The question IS the peer's voice — serif, the hero. */}
-            <div style={{ fontFamily: NOTE_FONT_SERIF, fontSize: 14, color: noteSurface(dark).voice, lineHeight: 1.55 }}>
-              {question.questionText}
+          {!hideQuestionText && (
+            <div style={{ marginTop: 7 }}>
+              {/* The question IS the peer's voice — serif, the hero. */}
+              <div style={{ fontFamily: NOTE_FONT_SERIF, fontSize: 14, color: noteSurface(dark).voice, lineHeight: 1.55 }}>
+                {question.questionText}
+              </div>
             </div>
-          </div>
+          )}
 
-          {isOpen && question.rationale && (
-            <div style={{ marginTop: 8 }}>
+          {isOpen && question.rationale && (rationaleOpen || rationaleAlwaysOpen || !bare) && (
+            <div style={{ marginTop: bare ? 6 : 8 }}>
+              {!rationaleAlwaysOpen && !bare && (
               <button
                 type="button"
                 onMouseDown={(e) => e.stopPropagation()}
@@ -1586,7 +1650,8 @@ export function QuestionComposer({
               >
                 {rationaleOpen ? '▾ Why' : '▸ Why'}
               </button>
-              {rationaleOpen && (
+              )}
+              {(rationaleOpen || rationaleAlwaysOpen) && (
                 <div
                   style={{
                     marginTop: 6,
@@ -1660,7 +1725,7 @@ export function QuestionComposer({
         // the peer's blue: 2px frame that brightens on focus with a layered
         // glow, word count + status floating inside bottom-left, gradient
         // submit pill floating inside bottom-right.
-        <div style={{ marginTop: 8, marginLeft: card ? -10 : 19, marginRight: card ? -10 : 0, position: 'relative' }}>
+        <div style={{ marginTop: bare ? 6 : 8, marginLeft: bare ? 0 : card ? -10 : 19, marginRight: bare ? 0 : card ? -10 : 0, position: 'relative' }}>
           <textarea
             ref={answerRef}
             value={draft}
@@ -1678,9 +1743,9 @@ export function QuestionComposer({
             rows={1}
             style={{
               width: '100%',
-              padding: '10px 13px',
+              padding: bare ? '8px 11px' : '10px 13px',
               // Clear the floating submit pill + status line once there's text.
-              paddingBottom: draft.trim() ? 48 : 10,
+              paddingBottom: draft.trim() ? 48 : bare ? 8 : 10,
               fontSize: 13,
               lineHeight: 1.55,
               fontFamily: 'system-ui, sans-serif',
@@ -1689,7 +1754,7 @@ export function QuestionComposer({
               outline: 'none',
               resize: 'none',
               overflow: 'hidden',
-              minHeight: 42,
+              minHeight: bare ? 34 : 42,
               background: dark ? '#16171c' : '#fff',
               color: dark ? '#e6e6ea' : '#1d2230',
               boxSizing: 'border-box',

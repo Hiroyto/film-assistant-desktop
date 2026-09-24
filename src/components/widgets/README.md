@@ -38,6 +38,6 @@ legados (`bgdark*`, `orange*`, `fontWhite*`) preservados.
 
 ## Integração
 
-Montar no shell-frame do renderer (após assemblagem do App): `<SyncStatusBar/>` (footer),
+Montar no shell-frame do renderer (após assemblagem do App): `<SyncStatusBar/>` (badge flutuante, canto inferior esquerdo),
 `<UpdateAvailableModal/>` e `<ConflictResolutionModal resolve={...} loadDiff={...}/>` no root;
 `window.electronAPI.onMenu(event => routeMenuEvent(event))` para os itens nativos.

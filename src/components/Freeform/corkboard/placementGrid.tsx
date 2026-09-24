@@ -62,6 +62,7 @@ export function PlacementGrid({
   entities,
   contains,
   eventOrder,
+  seqChain,
   positions,
   canvasWidth,
   onPick,
@@ -81,6 +82,9 @@ export function PlacementGrid({
   contains: Array<{ from: string; to: string }>;
   /** Scene ids in story order (the SC-chip spine sort). */
   eventOrder: string[];
+  /** Sequence PRECEDES edges (the section chain), so empty sequences can
+   *  render at their chain slot instead of trailing the wall. */
+  seqChain?: Array<{ from: string; to: string }>;
   /** Canvas-space card positions — the FLIP start points. */
   positions: Record<string, { x: number; y: number } | undefined>;
   /** Width of the VISIBLE canvas slice in canvas coords (viewport / zoom),
@@ -93,7 +97,7 @@ export function PlacementGrid({
   /** Spine-drop mode: a staged card is mid-drag from the strip. The same
    *  seams take DROPS instead of taps, and the between-gutter names the one
    *  link it will replace. */
-  dropCard?: { title: string } | null;
+  dropCard?: { title: string; kind?: 'scene' | 'section' } | null;
   onDrop?: (pick: GridPick) => void;
   /** Top-left of the VISIBLE canvas slice in canvas coords. The wall anchors
    *  here so it lands where the writer is looking, not at the canvas origin. */
@@ -107,7 +111,7 @@ export function PlacementGrid({
    *  container toggle in/out of the selection; members and sequences are
    *  shown for context only. No seams, no footer (the parent renders the
    *  naming form). */
-  select?: { selectedIds: Set<string>; onToggle: (id: string) => void } | null;
+  select?: { selectedIds: Set<string>; onToggle: (id: string) => void; anyScene?: boolean; accent?: string } | null;
   /** Exit choreography: the parent keeps this mounted and flips `open` false
    *  instead of unmounting; the cells fly back to their board positions while
    *  the backdrop fades, then onExited fires and the parent unmounts. */
@@ -122,8 +126,16 @@ export function PlacementGrid({
   onLeaveUnplaced?: () => void;
 }) {
   const dropping = !!dropCard && !!onDrop;
+  // SECTION PLACEMENT (Ben 2026-08-31, closing the v1 cut): a section on the
+  // wall cannot nest and cannot merge into a scene, so its taps mean
+  // chaining. Sequence surfaces read "after" instead of "into", cards lose
+  // the merge affordance, and the gap seams keep their mixed-spine meaning
+  // (a section may legally sit beside scenes in the told-order chain).
+  const sectionDrop = dropping && dropCard?.kind === 'section';
+  const noMergeEff = noMerge || sectionDrop;
   const focusMode = !!focus;
   const selectMode = !!select;
+  const selAccent = select?.accent ?? '#41c476';
   // View-only affordance gating: both focus and select modes turn off the
   // placement seams/taps; select adds its own tap (toggle).
   const inert = focusMode || selectMode;
@@ -165,6 +177,87 @@ export function PlacementGrid({
     [entities, contains],
   );
 
+  // WALL STORY ORDER (Ben 2026-09-02): empty sequences used to render as a
+  // tail after every scene (the wall began scenes-only), so the wall's
+  // reading order contradicted the board's chain - "Nell runs…" (chain head,
+  // empty) drew after sections that have members. Interleave instead: walk
+  // the sequence chain; a run of empty sections docks immediately BEFORE the
+  // with-members section that follows it in the chain, and empties nothing
+  // follows keep the tail. slotOfScene / slotOfEmpty give every cell its
+  // wall slot; all geometry below is slot-based.
+  const { slotOfScene, slotOfEmpty } = useMemo(() => {
+    const emptyIdxById = new Map(emptySeqs.map((e, j) => [e.id, j]));
+    // Chain order over ALL story units - sequences AND scenes (Kahn over
+    // seqChain, which carries every precedes bucket, lexicographic
+    // tiebreak). Scenes must be in the walk (Ben 2026-09-02, second pass):
+    // the chain threads THROUGH loose scenes (mixed spine), and a
+    // sequences-only walk docked "runs → survey → loose scene → section"'s
+    // empties at the section, letting the loose scene jump the chain head.
+    const unitIds = entities.filter((e) => e.type === 'sequence' || e.type === 'event').map((e) => e.id);
+    const unitSet = new Set(unitIds);
+    const adj = new Map<string, string[]>(); const indeg = new Map<string, number>();
+    for (const id of unitIds) { adj.set(id, []); indeg.set(id, 0); }
+    for (const p of seqChain ?? []) {
+      if (unitSet.has(p.from) && unitSet.has(p.to)) {
+        adj.get(p.from)!.push(p.to);
+        indeg.set(p.to, (indeg.get(p.to) ?? 0) + 1);
+      }
+    }
+    const q = unitIds.filter((id) => (indeg.get(id) ?? 0) === 0).sort();
+    const chainOrder: string[] = [];
+    while (q.length) {
+      const id = q.shift()!;
+      chainOrder.push(id);
+      for (const nx of adj.get(id) ?? []) {
+        const d = (indeg.get(nx) ?? 0) - 1; indeg.set(nx, d);
+        if (d === 0) { let k = 0; while (k < q.length && q[k] < nx) k++; q.splice(k, 0, nx); }
+      }
+    }
+    for (const id of unitIds) if (!chainOrder.includes(id)) chainOrder.push(id);
+    // Wall anchor per unit: a scene anchors at its own cell (a member scene
+    // at its section's first member, so empties never break a region run);
+    // a with-members section anchors at its first member.
+    const sceneIdxById = new Map(scenes.map((s, i) => [s.id, i]));
+    const firstMemberAt = new Map<string, number>();
+    scenes.forEach((s, i) => {
+      const seq = containerOf.get(s.id);
+      if (seq && !firstMemberAt.has(seq.id)) firstMemberAt.set(seq.id, i);
+    });
+    // Assign each empty sequence an insertion point: before the next unit in
+    // the chain that has a wall cell; tail otherwise.
+    const before = new Map<number, string[]>(); // scene index -> empty ids docked before it
+    const tail: string[] = [];
+    let pending: string[] = [];
+    for (const id of chainOrder) {
+      if (emptyIdxById.has(id)) { pending.push(id); continue; }
+      const sceneIdx = sceneIdxById.get(id);
+      const at = sceneIdx !== undefined
+        ? (containerOf.has(id) ? firstMemberAt.get(containerOf.get(id)!.id) : sceneIdx)
+        : firstMemberAt.get(id);
+      if (at !== undefined && pending.length) {
+        before.set(at, [...(before.get(at) ?? []), ...pending]);
+        pending = [];
+      }
+    }
+    tail.push(...pending);
+    // Walk scenes, splicing docked empties in; leftovers trail.
+    const sceneSlots: number[] = new Array(scenes.length).fill(0);
+    const emptySlots: number[] = new Array(emptySeqs.length).fill(0);
+    const assigned = new Set<string>([...before.values()].flat().concat(tail));
+    let slot = 0;
+    scenes.forEach((s, i) => {
+      for (const id of before.get(i) ?? []) { emptySlots[emptyIdxById.get(id)!] = slot; slot += 1; }
+      sceneSlots[i] = slot; slot += 1;
+    });
+    for (const id of tail) { emptySlots[emptyIdxById.get(id)!] = slot; slot += 1; }
+    // Belt: an empty the chain walk somehow never reached still gets a cell.
+    emptySeqs.forEach((e, j) => {
+      if (!assigned.has(e.id)) { emptySlots[j] = slot; slot += 1; }
+    });
+    return { slotOfScene: sceneSlots, slotOfEmpty: emptySlots };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entities, emptySeqs, scenes, containerOf, seqChain]);
+
   // ---- the wall: strict reading order, centered, wrapping ----------------
   // Geometry frozen at mount: the corkboard re-renders (and its rect shifts)
   // constantly; a wall that re-anchors mid-session would slide under the
@@ -181,7 +274,10 @@ export function PlacementGrid({
   // A focused SCENE cell expands to show its summary; the wall REFLOWS around
   // it: rows below shift down by the measured extra height (reported by the
   // cell after render), so the expansion opens a slot instead of overlapping.
-  const focusIdx = focus ? scenes.findIndex((s) => s.id === focus.id) : -1;
+  // focusIdx is a SLOT (wall cell) index, not a scenes[] index — all
+  // geometry below is slot-based since the empty-sequence interleave.
+  const focusSceneIdx = focus ? scenes.findIndex((s) => s.id === focus.id) : -1;
+  const focusIdx = focusSceneIdx >= 0 ? slotOfScene[focusSceneIdx] : -1;
   const focusRow = focusIdx >= 0 ? Math.floor(focusIdx / cols) : -1;
   const [focusExtra, setFocusExtra] = useState(0);
   useEffect(() => { setFocusExtra(0); }, [focus?.id]);
@@ -207,14 +303,17 @@ export function PlacementGrid({
       let j = i;
       while (j + 1 < scenes.length && containerOf.get(scenes[j + 1].id)?.id === seq.id) j += 1;
       const segs: Array<{ x: number; y: number; w: number; h: number }> = [];
-      const r0 = Math.floor(i / cols), r1 = Math.floor(j / cols);
+      // Run geometry in SLOT space (members stay slot-contiguous: empties
+      // only ever dock at run boundaries, never inside one).
+      const s0 = slotOfScene[i], s1 = slotOfScene[j];
+      const r0 = Math.floor(s0 / cols), r1 = Math.floor(s1 / cols);
       for (let r = r0; r <= r1; r++) {
-        const a = Math.max(i, r * cols), b = Math.min(j, r * cols + cols - 1);
+        const a = Math.max(s0, r * cols), b = Math.min(s1, r * cols + cols - 1);
         const pa = cellPos(a), pb = cellPos(b);
         // Horizontal pads: the run's outer ends use the wide seam channel;
         // row-wrap continuation edges keep the tight pad.
-        const lp = a === i ? REGION_END_PAD : REGION_PAD;
-        const rp = b === j ? REGION_END_PAD : REGION_PAD;
+        const lp = a === s0 ? REGION_END_PAD : REGION_PAD;
+        const rp = b === s1 ? REGION_END_PAD : REGION_PAD;
         segs.push({
           x: pa.x - lp, y: pa.y - REGION_PAD,
           w: pb.x + CELL_W + rp - (pa.x - lp),
@@ -227,7 +326,7 @@ export function PlacementGrid({
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scenes, containerOf, cols, originX, focusRow, focusIdx, focusExtra]);
+  }, [scenes, containerOf, cols, originX, focusRow, focusIdx, focusExtra, slotOfScene]);
 
   const [settled, setSettled] = useState(false);
   useEffect(() => {
@@ -326,9 +425,15 @@ export function PlacementGrid({
     // doesn't pop at unmount.
     const p = settled && !closing ? { x, y } : start;
     const isFocus = focus?.id === e.id;
+    // A focused SEQUENCE highlights as one unit: drape ring plus an orange
+    // outline on every member cell inside it (Ben 2026-08-31 — reviewing a
+    // "scene or sequence?" ask is exactly about what the section holds, so
+    // the members must read as part of the highlighted subject).
+    const inFocusSeq = !!focus?.id && containerOf.get(e.id)?.id === focus.id;
     const summary = isFocus ? String(e.summary ?? e.description ?? '') : '';
     // Select mode: only container-less scenes are pickable; members dim.
-    const selectable = selectMode && !member;
+    // Wrap-select picks loose scenes only; arc tagging picks ANY scene.
+    const selectable = selectMode && (select!.anyScene === true || !member);
     const isSelected = selectMode && select!.selectedIds.has(e.id);
     // Report the expanded height so the wall reflows around this cell (rows
     // below shift by the extra). Same-value guard: this inner component
@@ -347,12 +452,12 @@ export function PlacementGrid({
         onClick={(ev) => {
           ev.stopPropagation();
           if (selectMode) { if (selectable) select!.onToggle(e.id); return; }
-          if (focusMode || noMerge) return;
+          if (focusMode || noMergeEff) return;
           onPick({ targetId: e.id, targetTitle: `merge into “${short(titleOf(e), 22)}”`, action: 'merge' });
         }}
         onMouseEnter={() => setHov(true)}
         onMouseLeave={() => setHov(false)}
-        {...(noMerge ? {} : dropProps(() => ({ targetId: e.id, targetTitle: `merge into “${short(titleOf(e), 22)}”`, action: 'merge' }), setHov))}
+        {...(noMergeEff ? {} : dropProps(() => ({ targetId: e.id, targetTitle: `merge into “${short(titleOf(e), 22)}”`, action: 'merge' }), setHov))}
         style={{
           position: 'absolute', left: p.x, top: p.y, width: CELL_W,
           // The focused cell EXPANDS to show its summary (the question is
@@ -363,7 +468,7 @@ export function PlacementGrid({
           // Hovered card rises above the sequence chips so its merge tooltip
           // (a child, trapped in this stacking context) can't hide behind them.
           zIndex: isFocus ? 141 : hov ? 142 : 136,
-          border: `1px solid ${isSelected ? '#41c476' : hair}`,
+          border: `1px solid ${isSelected ? selAccent : inFocusSeq ? ORANGE : hair}`,
           borderLeft: `3px solid ${member ? `${GREEN}0.8)` : '#5f7fe8'}`,
           // overflow stays visible: the merge tooltip floats above the card
           // (the title clips itself via line-clamp).
@@ -371,11 +476,13 @@ export function PlacementGrid({
           opacity: closing ? 0 : (selectMode && !selectable ? 0.45 : 1),
           transition: closing ? `${trans}, opacity 240ms 280ms` : trans,
           boxShadow: isSelected
-            ? '0 0 0 2.5px #41c476, 0 0 18px rgba(65,196,118,0.35)'
+            ? `0 0 0 2.5px ${selAccent}, 0 0 18px ${selAccent}55`
             : isFocus
               ? `0 0 0 2.5px ${ORANGE}, 0 0 20px rgba(255,140,66,0.35)`
-              : hov && selectable ? '0 0 0 2px rgba(65,196,118,0.7)'
-              : hov && !inert ? `0 0 0 2px ${ORANGE}` : 'none',
+              : inFocusSeq
+                ? '0 0 10px rgba(255,140,66,0.25)'
+                : hov && selectable ? `0 0 0 2px ${selAccent}b3`
+                : hov && !inert ? `0 0 0 2px ${ORANGE}` : 'none',
         }}
       >
         <div style={{
@@ -409,7 +516,7 @@ export function PlacementGrid({
             + “{short(focus.ghostTitle, 34)}”
           </div>
         )}
-        {hov && !inert && !noMerge && (
+        {hov && !inert && !noMergeEff && (
           <span style={{
             position: 'absolute', right: 8, bottom: 7,
             font: '700 9.5px system-ui', color: '#fff',
@@ -435,6 +542,10 @@ export function PlacementGrid({
     // "Between" = same container, OR both loose (no boundary crossed). A
     // gutter on a sequence boundary keeps its after/outside meaning.
     if (L && R && ((cL && cL.id === cR?.id) || (!cL && !cR))) {
+      // A SECTION never splices between two scenes INSIDE a sequence — it
+      // cannot live there (Ben 2026-08-31). Between two loose cards stays
+      // legal (mixed spine).
+      if (sectionDrop && cL) return opts;
       // Drop mode is the one lane where "between" MEANS between: the pair's
       // own PRECEDES edge is replaced (named here so the writer sees the
       // displacement before releasing). Tap mode stays add-only "after L".
@@ -461,6 +572,63 @@ export function PlacementGrid({
   // state. Engaging the sequence (chip or frame) turns its OUTLINE orange —
   // "the dump lands on this sequence" — and reveals its in-region seams
   // (rest state keeps boundaries to a single line).
+  // One traced outline around a wrapped region's row segments (Ben
+  // 2026-09-02: "the green should wrap" — two independent rounded boxes read
+  // as two sequences). Segments are first extended down through the row gap
+  // so consecutive rows touch, then the union's rectilinear outline is walked
+  // clockwise (right staircase down, left staircase up) and rounded at each
+  // corner. Returns null when consecutive rows share no columns (a disjoint
+  // union has no single outline) — caller falls back to per-row boxes.
+  const regionOutline = (
+    rs: Array<{ x: number; y: number; w: number; h: number }>,
+    radius: number,
+  ): { d: string; x0: number; y0: number; w: number; h: number } | null => {
+    const joined = rs.map((g, i) =>
+      i < rs.length - 1 ? { ...g, h: Math.max(g.h, rs[i + 1].y - g.y) } : { ...g });
+    for (let i = 1; i < joined.length; i++) {
+      const a = joined[i - 1], b = joined[i];
+      if (Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x) < 24) return null;
+    }
+    const pts: Array<[number, number]> = [];
+    const push = (x: number, y: number) => {
+      const p = pts[pts.length - 1];
+      if (!p || p[0] !== x || p[1] !== y) pts.push([x, y]);
+    };
+    const firstSeg = joined[0], lastSeg = joined[joined.length - 1];
+    push(firstSeg.x, firstSeg.y); push(firstSeg.x + firstSeg.w, firstSeg.y);
+    for (let i = 0; i + 1 < joined.length; i++) {
+      const a = joined[i], b = joined[i + 1];
+      push(a.x + a.w, a.y + a.h); push(b.x + b.w, a.y + a.h);
+    }
+    push(lastSeg.x + lastSeg.w, lastSeg.y + lastSeg.h); push(lastSeg.x, lastSeg.y + lastSeg.h);
+    for (let i = joined.length - 1; i > 0; i--) {
+      const a = joined[i], b = joined[i - 1];
+      push(a.x, a.y); push(b.x, a.y);
+    }
+    // Drop collinear midpoints so every remaining vertex is a true corner.
+    const corners = pts.filter((p, i) => {
+      const prev = pts[(i + pts.length - 1) % pts.length], next = pts[(i + 1) % pts.length];
+      return !((prev[0] === p[0] && p[0] === next[0]) || (prev[1] === p[1] && p[1] === next[1]));
+    });
+    const xs = corners.map((p) => p[0]), ys = corners.map((p) => p[1]);
+    const x0 = Math.min(...xs) - 3, y0 = Math.min(...ys) - 3;
+    const w = Math.max(...xs) - x0 + 6, h = Math.max(...ys) - y0 + 6;
+    const n = corners.length;
+    const d: string[] = [];
+    for (let i = 0; i < n; i++) {
+      const p = corners[i], prev = corners[(i + n - 1) % n], next = corners[(i + 1) % n];
+      const inL = Math.hypot(p[0] - prev[0], p[1] - prev[1]);
+      const outL = Math.hypot(next[0] - p[0], next[1] - p[1]);
+      if (!inL || !outL) continue;
+      const rr = Math.min(radius, inL / 2, outL / 2);
+      const pin = [p[0] - ((p[0] - prev[0]) / inL) * rr, p[1] - ((p[1] - prev[1]) / inL) * rr];
+      const pout = [p[0] + ((next[0] - p[0]) / outL) * rr, p[1] + ((next[1] - p[1]) / outL) * rr];
+      d.push(`${i === 0 ? 'M' : 'L'}${pin[0] - x0},${pin[1] - y0}`,
+        `Q${p[0] - x0},${p[1] - y0} ${pout[0] - x0},${pout[1] - y0}`);
+    }
+    return { d: `${d.join(' ')} Z`, x0, y0, w, h };
+  };
+
   const RegionGroup = ({ seq, segs, first, last, chipAt }: {
     seq: ProjectEntity;
     segs: Array<{ x: number; y: number; w: number; h: number }>;
@@ -470,30 +638,61 @@ export function PlacementGrid({
     const [areaHov, setAreaHov] = useState(false);
     const on = areaHov && !inert;
     const isFocus = focus?.id === seq.id;
+    const outline = segs.length > 1 ? regionOutline(segs, 12) : null;
+    // Hit areas: extended through the row gap when the outline joins them, so
+    // hover/click/drop cover the whole drape.
+    const hitSegs = outline
+      ? segs.map((g, i) => (i < segs.length - 1 ? { ...g, h: Math.max(g.h, segs[i + 1].y - g.y) } : g))
+      : segs;
     return (
       <>
-        {segs.map((g, si) => (
+        {outline && (
+          <svg
+            width={outline.w} height={outline.h}
+            style={{
+              position: 'absolute', left: outline.x0, top: outline.y0,
+              zIndex: 130, pointerEvents: 'none', overflow: 'visible',
+              opacity: settled && !closing ? 1 : 0,
+              transition: `${trans}, opacity 420ms`,
+              filter: isFocus
+                ? 'drop-shadow(0 0 10px rgba(255,140,66,0.45))'
+                : on ? 'drop-shadow(0 0 8px rgba(255,140,66,0.2))' : 'none',
+            }}
+          >
+            <path
+              d={outline.d}
+              fill={`${GREEN}${on ? '0.09' : '0.07'})`}
+              stroke={isFocus || on ? ORANGE : `${GREEN}0.35)`}
+              strokeWidth={isFocus ? 2.5 : 1.5}
+              style={{ transition: 'stroke 120ms, fill 120ms' }}
+            />
+          </svg>
+        )}
+        {hitSegs.map((g, si) => (
           <div
             key={`seg-${si}`}
             onMouseEnter={() => setAreaHov(true)}
             onMouseLeave={() => setAreaHov(false)}
             {...dropProps(() => ({ targetId: seq.id, targetTitle: `into “${short(titleOf(seq), 22)}”` }), setAreaHov)}
-            onClick={(e) => { e.stopPropagation(); if (inert) return; onPick({ targetId: seq.id, targetTitle: `into “${short(titleOf(seq), 22)}”` }); }}
+            onClick={(e) => { e.stopPropagation(); if (inert) return; onPick(sectionDrop ? { targetId: seq.id, targetTitle: `after “${short(titleOf(seq), 22)}”` } : { targetId: seq.id, targetTitle: `into “${short(titleOf(seq), 22)}”` }); }}
             style={{
               position: 'absolute', left: g.x, top: g.y, width: g.w, height: g.h,
-              background: `${GREEN}${on ? '0.09' : '0.07'})`,
-              border: `1.5px solid ${isFocus ? ORANGE : on ? ORANGE : `${GREEN}0.35)`}`,
+              background: outline ? 'transparent' : `${GREEN}${on ? '0.09' : '0.07'})`,
+              border: outline ? 'none' : `1.5px solid ${isFocus ? ORANGE : on ? ORANGE : `${GREEN}0.35)`}`,
               borderRadius: 12, zIndex: 131, opacity: settled && !closing ? 1 : 0,
               // height animates with the focus reflow (the drape grows around
               // an expanded cell while the rows below slide down).
               transition: `${trans}, height 520ms cubic-bezier(.22,.9,.26,1), border-color 120ms, background 120ms`,
               cursor: inert ? 'default' : 'pointer',
-              boxShadow: isFocus ? '0 0 20px rgba(84,191,219,0.3)' : on ? '0 0 14px rgba(255,140,66,0.2)' : 'none',
+              // Was rgba(84,191,219,…) — a peer-blue glow left over from
+              // before the orange flip, which made a focused sequence read
+              // dimmer than a hovered one.
+              boxShadow: outline ? 'none' : isFocus ? `0 0 0 2px ${ORANGE}, 0 0 22px rgba(255,140,66,0.35)` : on ? '0 0 14px rgba(255,140,66,0.2)' : 'none',
             }}
           />
         ))}
         <SeqChip seq={seq} x={chipAt.x} y={chipAt.y} onHover={setAreaHov} engaged={on} focused={isFocus} />
-        {!inert && (
+        {!inert && !sectionDrop && (
           <>
             <Slat thin
               x={segs[0].x + REGION_END_PAD / 2 - 8} y={segs[0].y + REGION_PAD}
@@ -520,7 +719,7 @@ export function PlacementGrid({
     const hov = (selfHov && !inert) || !!engaged;
     return (
       <button
-        onClick={(e) => { e.stopPropagation(); if (inert) return; onPick({ targetId: seq.id, targetTitle: `into “${short(titleOf(seq), 22)}”` }); }}
+        onClick={(e) => { e.stopPropagation(); if (inert) return; onPick(sectionDrop ? { targetId: seq.id, targetTitle: `after “${short(titleOf(seq), 22)}”` } : { targetId: seq.id, targetTitle: `into “${short(titleOf(seq), 22)}”` }); }}
         onMouseEnter={() => { setSelfHov(true); onHover?.(true); }}
         onMouseLeave={() => { setSelfHov(false); onHover?.(false); }}
         {...dropProps(() => ({ targetId: seq.id, targetTitle: `into “${short(titleOf(seq), 22)}”` }), (h) => { setSelfHov(h); onHover?.(h); })}
@@ -543,7 +742,7 @@ export function PlacementGrid({
         {titleOf(seq)}
         {selfHov && !inert && (
           <span style={{ display: 'block', font: '400 10px system-ui', color: quiet, marginTop: 2 }}>
-            tap to place inside
+            {sectionDrop ? 'tap to chain after' : 'tap to place inside'}
           </span>
         )}
       </button>
@@ -557,32 +756,42 @@ export function PlacementGrid({
       <RegionGroup key={`region-${seq.id}-${ri}`} seq={seq} segs={segs} first={first} last={last} chipAt={chipAt} />,
     );
   });
+  // Slot-neighbor lookup for seam decisions (interleaved wall).
+  const sceneAtSlot = new Map<number, number>();
+  slotOfScene.forEach((s, i) => sceneAtSlot.set(s, i));
+  const emptyAtSlot = new Map<number, number>();
+  slotOfEmpty.forEach((s, j) => emptyAtSlot.set(s, j));
+  const lastSlot = totalCells - 1;
   // Cells + gutters.
   scenes.forEach((e, i) => {
-    const p = cellPos(i);
+    const slot = slotOfScene[i];
+    const p = cellPos(slot);
     nodes.push(<Mini key={e.id} e={e} x={p.x} y={p.y} member={containerOf.has(e.id)} />);
     if (inert) return; // view-only / select: no placement seams
-    const L = i > 0 ? scenes[i - 1] : null;
-    const opts = gutterOptions(i % cols === 0 ? L : L, e);
-    if (opts.length) {
-      nodes.push(<Slat key={`g-${i}`} x={p.x - GAP_X / 2 - SEAM_W / 2} y={p.y} options={opts} />);
+    // Left seam: between scenes when the previous SLOT is the previous
+    // scene; after an interleaved empty sequence when one sits to the left.
+    const prevSceneIdx = sceneAtSlot.get(slot - 1);
+    const prevEmptyIdx = emptyAtSlot.get(slot - 1);
+    if (prevEmptyIdx !== undefined) {
+      const A = emptySeqs[prevEmptyIdx];
+      nodes.push(<Slat key={`g-${i}`} x={p.x - GAP_X / 2 - SEAM_W / 2} y={p.y} options={[
+        { label: `after “${short(titleOf(A), 20)}”`,
+          pick: { targetId: A.id, targetTitle: `after “${short(titleOf(A), 22)}”`, containment: 'none' } }]} />);
+    } else {
+      const L = prevSceneIdx !== undefined ? scenes[prevSceneIdx] : null;
+      const opts = gutterOptions(L, e);
+      if (opts.length) {
+        nodes.push(<Slat key={`g-${i}`} x={p.x - GAP_X / 2 - SEAM_W / 2} y={p.y} options={opts} />);
+      }
+    }
+    // Right seam when this scene ends the wall.
+    if (slot === lastSlot) {
+      const opts = gutterOptions(e, null);
+      if (opts.length) {
+        nodes.push(<Slat key="g-end" x={p.x + CELL_W + GAP_X / 2 - SEAM_W / 2} y={p.y} options={opts} />);
+      }
     }
   });
-  if (scenes.length && !inert) {
-    const last = scenes[scenes.length - 1];
-    const p = cellPos(scenes.length - 1);
-    const opts = gutterOptions(last, null);
-    // The wall continues into the empty-sequence cells, so this end seam is
-    // ALSO the seam before the first of them: offer that placement too.
-    if (emptySeqs.length) {
-      const A = emptySeqs[0];
-      opts.push({ label: `before “${short(titleOf(A), 20)}”`,
-        pick: { targetId: A.id, targetTitle: `before “${short(titleOf(A), 22)}”`, position: 'before', containment: 'none' } });
-    }
-    if (opts.length) {
-      nodes.push(<Slat key="g-end" x={p.x + CELL_W + GAP_X / 2 - SEAM_W / 2} y={p.y} options={opts} />);
-    }
-  }
   // Empty sequences: dashed cells continuing the wall.
   const EmptySeqCell = ({ e, x, y }: { e: ProjectEntity; x: number; y: number }) => {
     const [hov, setHov] = useState(false);
@@ -590,10 +799,14 @@ export function PlacementGrid({
     const lit = hov && !inert;
     return (
       <div
-        onClick={(ev) => { ev.stopPropagation(); if (inert) return; onPick({ targetId: e.id, targetTitle: `into “${short(titleOf(e), 22)}”` }); }}
+        onClick={(ev) => { ev.stopPropagation(); if (inert) return; onPick(sectionDrop
+          ? { targetId: e.id, targetTitle: `after “${short(titleOf(e), 22)}”` }
+          : { targetId: e.id, targetTitle: `into “${short(titleOf(e), 22)}”` }); }}
         onMouseEnter={() => setHov(true)}
         onMouseLeave={() => setHov(false)}
-        {...dropProps(() => ({ targetId: e.id, targetTitle: `into “${short(titleOf(e), 22)}”` }), setHov)}
+        {...dropProps(() => (sectionDrop
+          ? { targetId: e.id, targetTitle: `after “${short(titleOf(e), 22)}”` }
+          : { targetId: e.id, targetTitle: `into “${short(titleOf(e), 22)}”` }), setHov)}
         style={{
           position: 'absolute', left: x, top: y, width: CELL_W, height: CELL_H,
           background: `${GREEN}0.06)`,
@@ -601,34 +814,42 @@ export function PlacementGrid({
           border: `1.5px dashed ${isFocus || lit ? ORANGE : `${GREEN}0.5)`}`, padding: '10px 12px',
           opacity: settled && !closing ? 1 : 0,
           transition: `${trans}, border-color 120ms, background 120ms`,
-          boxShadow: isFocus ? '0 0 20px rgba(84,191,219,0.3)' : lit ? '0 0 14px rgba(255,140,66,0.2)' : 'none',
+          boxShadow: isFocus ? `0 0 0 2px ${ORANGE}, 0 0 22px rgba(255,140,66,0.35)` : lit ? '0 0 14px rgba(255,140,66,0.2)' : 'none',
         }}
       >
         <div style={{ font: '600 12px system-ui', color: '#7fdca6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{titleOf(e)}</div>
-        <div style={{ font: '400 10.5px system-ui', color: quiet, marginTop: 5 }}>{inert ? 'empty sequence' : 'empty sequence — place inside'}</div>
+        <div style={{ font: '400 10.5px system-ui', color: quiet, marginTop: 5 }}>{inert ? 'empty sequence' : sectionDrop ? 'empty sequence — chain after' : 'empty sequence — place inside'}</div>
       </div>
     );
   };
   emptySeqs.forEach((e, j) => {
-    const p = cellPos(scenes.length + j);
+    const slot = slotOfEmpty[j];
+    const p = cellPos(slot);
     nodes.push(<EmptySeqCell key={e.id} e={e} x={p.x} y={p.y} />);
     if (inert) return;
     // Seams between/around the empty-sequence cells (Ben 2026-08-23): a card
     // can sit BESIDE a sequence in the told-order chain (containment 'none'
-    // -> the backend writes cross PRECEDES, not CONTAINS).
-    if (j > 0) {
-      const A = emptySeqs[j - 1];
+    // -> the backend writes cross PRECEDES, not CONTAINS). Slot-neighbor
+    // aware since the interleave: the cell to the left may be another empty,
+    // a scene (that scene's own gutter covers the seam), or nothing.
+    const prevEmptyIdx = emptyAtSlot.get(slot - 1);
+    if (prevEmptyIdx !== undefined) {
+      const A = emptySeqs[prevEmptyIdx];
       nodes.push(<Slat key={`sq-g-${j}`} x={p.x - GAP_X / 2 - SEAM_W / 2} y={p.y} options={[dropping
         ? { label: `between “${short(titleOf(A), 16)}” and “${short(titleOf(e), 16)}” (replaces their link)`,
             pick: { targetId: A.id, targetTitle: `between “${short(titleOf(A), 14)}” and “${short(titleOf(e), 14)}”`, nextId: e.id, containment: 'none' } }
         : { label: `between “${short(titleOf(A), 16)}” and “${short(titleOf(e), 16)}”`,
             pick: { targetId: A.id, targetTitle: `after “${short(titleOf(A), 20)}”`, containment: 'none' } }]} />);
-    } else if (!scenes.length) {
-      nodes.push(<Slat key="sq-g-first" x={p.x - GAP_X / 2 - SEAM_W / 2} y={p.y} options={[
+    } else if (slot === 0) {
+      nodes.push(<Slat key={`sq-g-first-${j}`} x={p.x - GAP_X / 2 - SEAM_W / 2} y={p.y} options={[
         { label: 'at the very start', pick: { targetId: e.id, targetTitle: 'at the very start', position: 'before', containment: 'none' } }]} />);
+    } else if (sceneAtSlot.get(slot - 1) === undefined) {
+      nodes.push(<Slat key={`sq-g-before-${j}`} x={p.x - GAP_X / 2 - SEAM_W / 2} y={p.y} options={[
+        { label: `before “${short(titleOf(e), 20)}”`,
+          pick: { targetId: e.id, targetTitle: `before “${short(titleOf(e), 22)}”`, position: 'before', containment: 'none' } }]} />);
     }
-    if (j === emptySeqs.length - 1) {
-      nodes.push(<Slat key="sq-g-last" x={p.x + CELL_W + GAP_X / 2 - SEAM_W / 2} y={p.y} options={[
+    if (slot === lastSlot) {
+      nodes.push(<Slat key={`sq-g-last-${j}`} x={p.x + CELL_W + GAP_X / 2 - SEAM_W / 2} y={p.y} options={[
         { label: `after “${short(titleOf(e), 20)}”`, pick: { targetId: e.id, targetTitle: `after “${short(titleOf(e), 22)}”`, containment: 'none' } }]} />);
     }
   });
@@ -638,11 +859,11 @@ export function PlacementGrid({
   const focusPos = (() => {
     if (!focus) return null;
     const idx = scenes.findIndex((s) => s.id === focus.id);
-    if (idx >= 0) return cellPos(idx);
+    if (idx >= 0) return cellPos(slotOfScene[idx]);
     const reg = regions.find((r) => r.seq.id === focus.id);
     if (reg) return { x: reg.segs[0].x + REGION_END_PAD, y: reg.segs[0].y + REGION_PAD };
     const j = emptySeqs.findIndex((s) => s.id === focus.id);
-    if (j >= 0) return cellPos(scenes.length + j);
+    if (j >= 0) return cellPos(slotOfEmpty[j]);
     return null;
   })();
 
@@ -731,7 +952,9 @@ export function PlacementGrid({
         border: `1.5px solid ${ORANGE_DEEP}`, boxShadow: '0 6px 24px rgba(0,0,0,0.3)',
         fontSize: 12.5, color: ink, fontFamily: 'system-ui, sans-serif',
       }}>
-        {dropping && noMerge ? (
+        {sectionDrop ? (
+          <span>Placing the section <b style={{ color: ORANGE }}>“{short(dropCard!.title, 32)}”</b>: tap or drop on a <b style={{ color: ORANGE }}>gap</b> to chain it there, or a <b style={{ color: '#7fdca6' }}>sequence</b> to chain after it</span>
+        ) : dropping && noMerge ? (
           <span>Placing <b style={{ color: ORANGE }}>“{short(dropCard!.title, 32)}”</b>: tap or drop on a <b style={{ color: ORANGE }}>gap</b>, or a <b style={{ color: '#7fdca6' }}>sequence</b> to go inside</span>
         ) : dropping ? (
           <span>Placing <b style={{ color: ORANGE }}>“{short(dropCard!.title, 32)}”</b>: tap or drop on a <b style={{ color: ORANGE }}>gap</b>, a <b style={{ color: ORANGE }}>card</b> to merge into it, or a <b style={{ color: '#7fdca6' }}>sequence</b></span>

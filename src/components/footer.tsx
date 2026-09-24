@@ -5,6 +5,7 @@ import '@aws-amplify/ui-react/styles.css';
 import config from '../aws-exports';
 import { NavLink } from 'react-router-dom';
 import { EnvelopeClosedIcon } from '@radix-ui/react-icons';
+import { isDesktop } from '../lib/ipcClient';
 
 Amplify.configure(config);
 
@@ -16,6 +17,7 @@ export function Footer({ signOut, user }: WithAuthenticatorProps) {
         color: '#f3f3f3',
         position: 'relative',
         zIndex: 98,        // acima do sidebar fixo (z-index: 99)
+        paddingBottom: isDesktop() ? 40 : undefined, // a linha de texto fica acima da badge de sync (desktop)
       }}
     >
       <div

@@ -3,6 +3,7 @@ import React from 'react';
 import { type ArcKind, type EvokesTransition, type ListProjectEntitiesResponse } from '../../../lib/freeformApi';
 import { CardBox } from './cards';
 import { truncate } from './labels';
+import { toldOrderEvents } from './connectors';
 
 // =====================================================================
 // Card signals — derived counts/labels per card from the graph edges.
@@ -182,6 +183,28 @@ export function computeCardSignals(data: ListProjectEntitiesResponse | null): Re
   // D'-5 — derived arc status. Sort EVOKES sequence by PRECEDES order with
   // narrative_status tiebreaker (matches backend computeArcDerivedStatus /
   // topoSortEvokesByPrecedes in lib/peer-slice.mjs).
+  // TOLD ORDER FROM THE WHOLE SPINE (2026-09-01, third instance of the same
+  // bug class — see the arc sheet's rail and the character cascade): the topo
+  // sort below ran over the arc's own SUBSET of scenes, and two scenes on one
+  // thread are almost never adjacent in the event-level PRECEDES chain (a
+  // mixed spine routes through sequences), so the subset had no edges, every
+  // comparison tied, and the tiebreaker fell back to ARRAY ORDER — which is
+  // write order, which after the tagging morph is literally the order the
+  // writer clicked. The thread on the board and the 'active as of' status
+  // both followed it. Rank against the full spine instead; the subset topo
+  // stays as the fallback when the spine cannot place the entries.
+  const spineRank = (() => {
+    const spine = toldOrderEvents(
+      data.entities.filter((e) => !e.deleted_at && !(e.type === 'event' && e.narrative_status === 'backstory')),
+      data.edges.precedes ?? [],
+      data.edges.contains ?? [],
+      data.edges.sequence_precedes ?? [],
+      (data.edges as any).cross_precedes ?? [],
+    );
+    const m = new Map<string, number>();
+    spine.forEach((e, i) => m.set(e.id, i + 1));
+    return m;
+  })();
   const precedesMap = new Map<string, Set<string>>();
   for (const p of data.edges.precedes ?? []) {
     if (!precedesMap.has(p.from)) precedesMap.set(p.from, new Set());
@@ -194,7 +217,15 @@ export function computeCardSignals(data: ListProjectEntitiesResponse | null): Re
       sig.arcStatusLabel = 'not yet raised';
       continue;
     }
-    sig.evokesEntries = topoSortEvokesEntries(sig.evokesEntries, precedesMap);
+    const ranked = sig.evokesEntries.every((e) => e.narrative_status === 'backstory' || spineRank.has(e.event_id));
+    sig.evokesEntries = ranked
+      ? [...sig.evokesEntries].sort((a, b) => {
+          const ba = a.narrative_status === 'backstory' ? 0 : 1;
+          const bb = b.narrative_status === 'backstory' ? 0 : 1;
+          if (ba !== bb) return ba - bb;
+          return (spineRank.get(a.event_id) ?? 0) - (spineRank.get(b.event_id) ?? 0);
+        })
+      : topoSortEvokesEntries(sig.evokesEntries, precedesMap);
     const lastResolved = [...sig.evokesEntries].reverse()
       .find((e) => e.transition === 'resolves');
     if (lastResolved) {

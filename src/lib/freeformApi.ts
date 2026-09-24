@@ -223,6 +223,12 @@ export interface ExtractBraindumpJobFields {
   /** Dev-only: stream entities over WS as they extract (card-by-card reveal).
    *  Set by the dev FE; prod leaves it unset and runs the batch path. */
   streaming?: boolean;
+  /** JUST WRITE (script extraction only): answer this run's questions at
+   *  persist time the way the pages would (re-telling replaces, a confident
+   *  same-beat call merges, a tentative one keeps). Placement needs no
+   *  answer on this lane: the tail splice is the placement. Ignored for
+   *  prose braindumps. */
+  autoResolve?: boolean;
 }
 
 export interface EnqueueExtractionJobResponse {
@@ -531,8 +537,21 @@ export interface ProjectEntity {
 export interface ProjectEdges {
   /** Event/Relationship → Character. `streamed` marks a provisional edge the
    *  FE derived from a streamed card mid-extraction (never sent by the server;
-   *  the authoritative refetch replaces it). */
-  involves: Array<{ from: string; to: string; streamed?: boolean }>;
+   *  the authoritative refetch replaces it). `development` is the writer's
+   *  per-scene arc note ("her arc here"), `development_hash` the basis hash
+   *  it was written against (character-arc-from-scenes-v2); both absent on
+   *  the common untouched edge. */
+  involves: Array<{ from: string; to: string; streamed?: boolean; development?: string; development_hash?: string;
+    /** Observable grade the note was written against; absent on notes
+     *  predating grade capture (read as "no altitude known"). */
+    development_grade?: string;
+    /** 'writer' | 'peer'. Absent means the text predates authorship
+     *  tracking, which is treated as the writer's. */
+    development_author?: string;
+    /** Extraction's per-scene observable for this character. `observable_grade`
+     *  present alone = the extractor considered the pairing and nothing landed
+     *  (read-and-inert); both absent = never evaluated. */
+    observable?: string; observable_grade?: string }>;
   /** Event → Location */
   occurs_in: Array<{ from: string; to: string }>;
   /** Event → Event (forward only). `streamed` as on involves. */
@@ -574,7 +593,11 @@ export interface ProjectEdges {
     event_id: string;
     arc_id: string;
     state_at_event: string;
-    transition: EvokesTransition | '';
+    // The enum is a set of DEFAULTS the UI offers, not a closed vocabulary:
+    // a writer can type their own word for what a scene does to an arc, and
+    // the server accepts any string of 32 characters or fewer (backstory
+    // events still take 'touches' only).
+    transition: string;
     evidence_quote: string;
   }>;
   /** FIL-504 / D'-3 — Arc → Character (arc INVOLVES character). Distinct
@@ -592,6 +615,9 @@ export interface ProjectEdges {
     to: string;
     evidence_quote?: string;
   }>;
+  /** Braindump → card provenance (which dump minted which card). Present on
+   *  blob-served payloads since 2026-09-11; absent on older shapes. */
+  mentions?: Array<{ from: string; to: string }>;
   /** Sequence → Event containment (the granularity-fix container's member
    *  scenes). Membership is disjoint server-side: a scene is in at most one
    *  sequence. */
@@ -613,10 +639,28 @@ export interface ListProjectEntitiesRequest {
   projectId: string;
 }
 
+/** What the writer has said about the story AS A WHOLE ("a spec ad", "takes
+ *  place in Chicago", "somber, not funny"). Its own list, tied to no card.
+ *  `text` is the writer's own words; `label` is the only compression, three
+ *  words at most, for the chip on the board's title row. */
+export type StoryFactKind = 'format' | 'genre' | 'setting' | 'period' | 'tone' | 'world' | 'other';
+export interface StoryFact {
+  id: string;
+  kind: StoryFactKind;
+  text: string;
+  label: string;
+  source: 'braindump' | 'writer';
+  src_braindump?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface ListProjectEntitiesResponse {
   projectId: string;
   entities: ProjectEntity[];
   edges: ProjectEdges;
+  /** Absent from a backend that predates story facts. */
+  storyFacts?: StoryFact[];
   /** Information vertices — not rendered as cards, but used for Knowledge arcs on Character cards. */
   information: ProjectInformation[];
   latencyMs: number;
@@ -813,6 +857,13 @@ export interface CreateArcRequest {
   evidenceQuote?: string;
   openDimensions?: Array<{ tension: string; why_it_matters: string }>;
   position?: { x: number; y: number };
+  /** Character-primary arc: the owner. Its presence IS the primary marker —
+   *  the FE hides such arcs from the Arcs tab and board threads. */
+  characterId?: string;
+  arcFrom?: string;
+  arcSoFar?: string;
+  arcToward?: string;
+  arcWorking?: string;
 }
 
 export type CreateArcResponse =
@@ -839,7 +890,10 @@ export interface CreateArcFromEventsResponse {
     event_id: string;
     event_working_title: string;
     narrative_status: string;
-    transition?: EvokesTransition | null;
+    /** The writer's word for what this scene does to the arc. The enum is a
+     *  set of defaults, not a closed vocabulary; any string of 32 characters
+     *  or fewer is accepted (backstory events take 'touches' only). */
+    transition?: string | null;
     error?: string;
   }>;
 }
@@ -855,6 +909,11 @@ export interface UpdateArcRequest {
   /** Writer-chosen thread color (6-digit hex). '' clears back to the
    *  auto-assigned palette color. */
   color?: string;
+  /** Character-primary narrative fields; empty string clears. */
+  arcFrom?: string;
+  arcSoFar?: string;
+  arcToward?: string;
+  arcWorking?: string;
 }
 
 export interface UpdateArcResponse {
@@ -1887,9 +1946,20 @@ export interface TagEventEvokesRequest {
   /** Free-text. Omit / empty preserves any prior value (upsert semantics).
    *  To clear, untag + re-tag. */
   stateAtEvent?: string;
-  /** Optional. Empty / null preserves prior. */
-  transition?: EvokesTransition | '';
+  /** The writer's word for what this scene does to the arc. The enum is a
+   *  set of defaults the UI offers, not a closed vocabulary: any string of
+   *  32 characters or fewer is accepted, and backstory events take 'touches'
+   *  only. Empty / null preserves prior. */
+  transition?: string;
   evidenceQuote?: string;
+  /** 'writer' (default) or 'peer'. Metadata only: it exists so a later pass
+   *  does not overwrite a word a person chose. */
+  transitionAuthor?: 'writer' | 'peer';
+  /** Who wrote `stateAtEvent`, and the ground it was written against. The
+   *  arc's mirror of development_author / development_hash: the arc's ONE
+   *  TEXT for a scene is `state_at_event` on this same edge. */
+  stateAuthor?: 'writer' | 'peer';
+  stateHash?: string;
 }
 
 export interface TagEventEvokesResponse {
@@ -1947,6 +2017,150 @@ export interface UntagArcInvolvesCharacterResponse {
  * transition rule is enforced server-side; FE should gray out disallowed
  * transitions per EVOKES_TRANSITIONS_BY_NARRATIVE_STATUS before submit.
  */
+// ---------------------------------------------------------------------------
+// Character scene development (character-arc-from-scenes-v2)
+// ---------------------------------------------------------------------------
+
+export interface SetCharacterDevelopmentRequest {
+  projectId: string;
+  eventId: string;
+  characterId: string;
+  /** The writer's "her arc here" note. Non-empty; omitting preserves. */
+  development?: string;
+  /** Hash of the basis (scene summary+description today; the observable
+   *  later) the note was written against. Staleness detection. */
+  developmentHash?: string;
+  /** The scene's observable_grade at the moment the note was written
+   *  ('outline' | 'page', '' when the scene has no observable yet). A later
+   *  hash divergence is classified by this transition: outline -> page is
+   *  the ground getting richer (quiet), page -> page is a rewrite under a
+   *  standing note (amber). */
+  developmentGrade?: string;
+  /** Who wrote this text: 'writer' (a person typed it) or 'peer' (a pass
+   *  produced it). One text per stop; authorship is metadata, never a
+   *  visual register. It exists so a later pass will not overwrite a
+   *  person. Anything other than 'peer' is treated as the writer. */
+  author?: 'writer' | 'peer';
+}
+
+/** Writer's per-scene arc note onto the INVOLVES edge. Upsert-preserve:
+ *  extraction-owned fields on the same edge are never touched. */
+export async function setCharacterDevelopment(
+  req: SetCharacterDevelopmentRequest,
+  token: string,
+): Promise<{ set: true; eventId: string; characterId: string }> {
+  if (useMock) return Promise.resolve({ set: true, eventId: req.eventId, characterId: req.characterId });
+  const result = await freshApiCall(apiPath!, { event: 'set-character-development', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'set-character-development failed');
+  return (result.data?.body ?? result.data) as { set: true; eventId: string; characterId: string };
+}
+
+export interface BuildArcRead { event_id: string; text: string; flat: boolean }
+/** A turn is a MARKING on a stop, not a text: the verb and the line that
+ *  earns it. The scene's read carries the reasoning. `why` is only still
+ *  here so a pass cached before 2026-08-29 still parses. */
+export interface BuildArcTurn { event_id: string; transition: EvokesTransition; quote: string; why?: string }
+export interface BuildArcQuestion { event_id: string; text: string; quote: string }
+export interface BuildCharacterArcResponse {
+  characterId: string;
+  model: string;
+  generatedAt: string;
+  /** Per-scene hash of the basis the pass read, for the staleness banner. */
+  basisHashes: Record<string, string>;
+  reads: BuildArcRead[];
+  turns: BuildArcTurn[];
+  questions: BuildArcQuestion[];
+  conflicts?: StopConflict[];
+  /** Event ids whose text the pass WROTE onto the edge (non-flat reads on
+   *  stops no person owns). Refetch after a pass and the cascade renders
+   *  these from the graph, not from this response. */
+  persisted?: string[];
+  /** Event ids the pass left alone because a person authored their text. */
+  writerOwned?: string[];
+}
+
+/** A CONFLICT: the pass claims a scene as written contradicts a reading a
+ *  PERSON wrote. Never persisted, never overwrites: it is returned for the
+ *  writer to resolve, and it only fires against writer-authored text. */
+export interface StopConflict {
+  event_id: string;
+  /** What their reading says, and what the material says instead. */
+  why: string;
+  /** Why the two cannot both be true. The model has to state this, which is
+   *  what stops a difference of emphasis being reported as a contradiction. */
+  cannot_both_be_true: string;
+  /** OPTIONAL. A line that SHOWS the contradiction, never a re-quote of the
+   *  scene summary the writer is already looking at, and empty when the
+   *  contradiction is that the scene does NOT contain something. */
+  quote?: string;
+  /** When the line is from a DIFFERENT scene in the run, that scene's id, so
+   *  the client can name it the way the writer knows it. */
+  quote_event_id?: string | null;
+  /** What the reading would be if the material is right. */
+  proposed: string;
+  /** The writer's text exactly as the pass read it. Compare against what is
+   *  on the stop now: if it differs, the writer has already acted and the
+   *  conflict is stale. */
+  against?: string;
+}
+
+export interface BuildArcRunRead {
+  event_id: string;
+  text: string;
+  flat: boolean;
+  /** Only on the scenes that actually move the arc. Usually 0-3 in a run. */
+  verb: string;
+}
+export interface BuildArcRunResponse {
+  arcId: string;
+  model: string;
+  generatedAt: string;
+  basisHashes: Record<string, string>;
+  reads: BuildArcRunRead[];
+  conflicts?: StopConflict[];
+  /** Event ids whose reading the pass wrote onto the EVOKES edge. */
+  persisted?: string[];
+  /** Event ids left alone because a person authored their reading. */
+  writerOwned?: string[];
+}
+
+/** The arc's summoned pass: one model call over the scenes someone put on
+ *  this arc, in told order. The mirror of buildCharacterArc from the other
+ *  end of the edge, writing each reading into `state_at_event`. */
+export async function buildArcRun(
+  req: { projectId: string; arcId: string; orderedEventIds: string[]; userId?: string },
+  token: string,
+): Promise<BuildArcRunResponse> {
+  if (useMock) {
+    return Promise.resolve({
+      arcId: req.arcId, model: 'mock', generatedAt: new Date().toISOString(),
+      basisHashes: {}, reads: [], persisted: [], writerOwned: [],
+    });
+  }
+  const result = await freshApiCall(apiPath!, { event: 'build-arc-run', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'build-arc-run failed');
+  return (result.data?.body ?? result.data) as BuildArcRunResponse;
+}
+
+/** The summoned Build Arc pass: one model call over the character's whole
+ *  run in told order. The FE supplies the told order because told-order
+ *  composition lives client-side. Costs a model call — only ever fired by
+ *  the writer pressing the button. */
+export async function buildCharacterArc(
+  req: { projectId: string; characterId: string; orderedEventIds: string[]; userId: string },
+  token: string,
+): Promise<BuildCharacterArcResponse> {
+  if (useMock) {
+    return Promise.resolve({
+      characterId: req.characterId, model: 'mock', generatedAt: new Date().toISOString(),
+      basisHashes: {}, reads: [], turns: [], questions: [],
+    });
+  }
+  const result = await freshApiCall(apiPath!, { event: 'build-character-arc', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'build-character-arc failed');
+  return (result.data?.body ?? result.data) as BuildCharacterArcResponse;
+}
+
 export async function tagEventEvokes(
   req: TagEventEvokesRequest,
   token: string,
@@ -2641,15 +2855,23 @@ export async function dismissArcSuggestion(
 // Staged questions — Placement Control v1b (the staging strip)
 // ============================================
 
-export type StagedQuestionType = 'merge_suggestion' | 'compare' | 'unplaced' | 'altitude';
+export type StagedQuestionType = 'merge_suggestion' | 'compare' | 'unplaced' | 'altitude' | 'retelling'
+  // Character rows: a braindump said something new about a character already
+  // on the board. The card is live and unchanged until the writer answers.
+  | 'character_description' | 'character_rename'
+  // A braindump described the story's format, setting or period differently
+  // from the story's own list. `cardId` is the list entry.
+  | 'story_fact';
 export type StagedQuestionStatus = 'pending' | 'accepted' | 'dismissed' | 'retired';
 
 /** One strip row, straight off the StagedQuestions table (snake_case kept). */
 export interface StagedQuestion {
   projectId: string;
-  /** The staged card's vertex id. One open question per card. */
+  /** The staged card's vertex id. One open question per card. A character
+   *  RENAME row keys on `${characterId}#rename` (one dump can both rename a
+   *  character and describe them); the character is always `target_vid`. */
   cardId: string;
-  kind: 'scene' | 'section';
+  kind: 'scene' | 'section' | 'character' | 'story';
   question_type: StagedQuestionType;
   candidate_title: string;
   /** Suggested/compared existing card; '' when the question has no target. */
@@ -2657,16 +2879,35 @@ export interface StagedQuestion {
   target_title: string;
   reason: string;
   source_braindump_id: string;
+  /** Where the candidate came from. Pages pasted into an existing scene are
+   *  not a braindump, and the question should not call them one. */
+  source_format?: 'prose' | 'screenplay';
   status: StagedQuestionStatus;
   created_at: string;
   updated_at: string;
   answered_at?: string;
+  /** Retelling rows only (FIL-583): the braindump's proposed new telling,
+   *  applied to the card when the writer answers 'replace'. */
+  proposed_summary?: string;
+  /** Who settled the row: the writer, or the just-write mode at persist time. */
+  answered_by?: 'auto' | 'writer';
+  /** Retelling rows the mode replaced: the telling it overwrote, so the
+   *  board can restore it. */
+  prior_summary?: string;
+  /** character_rename rows: the name the braindump gave the character. */
+  proposed_name?: string;
 }
 
 export interface ListStagedQuestionsRequest {
   projectId: string;
-  /** Defaults to 'pending' server-side; 'all' returns full history. */
-  status?: StagedQuestionStatus | 'all';
+  /** Defaults to 'pending' server-side; 'all' returns full history; 'auto'
+   *  returns the rows the just-write mode answered. */
+  status?: StagedQuestionStatus | 'all' | 'auto';
+  /** Character rows are opt-in server-side, so a client that predates them
+   *  never renders one as a scene. This client knows them. */
+  includeCharacter?: boolean;
+  /** Same opt-in for story-fact rows. */
+  includeStory?: boolean;
 }
 export interface ListStagedQuestionsResponse {
   questions: StagedQuestion[];
@@ -2680,7 +2921,7 @@ export interface AnswerStagedQuestionRequest {
    *  and records not_same_as negative memory on both cards. On an 'altitude'
    *  row ("one scene, or a group of scenes?") 'keep' just dismisses and
    *  'convert' re-reads the card at the other altitude (new vertex). */
-  answer: 'merge' | 'keep' | 'convert';
+  answer: 'merge' | 'keep' | 'convert' | 'replace';
 }
 export interface ConvertCardAltitudeResult {
   converted: true;
@@ -2690,16 +2931,25 @@ export interface ConvertCardAltitudeResult {
   toLabel: 'Event' | 'Sequence';
   movedMentions?: number;
   retracted?: { ordering: number; containment: number; involves: number; occursIn: number; other: number };
+  /** Sequence→Event: member scenes folded into the new scene via merge-cards
+   *  (Ben 2026-08-31: members ARE the scene; never orphan them). */
+  mergedMembers?: string[];
   orphanedMembers?: string[];
   anchorsLeft?: number;
   retry?: boolean;
+  /** The card at the other altitude already existed, so nothing was minted:
+   *  provenance and ordering moved onto it and the source was retired. */
+  folded?: boolean;
 }
 export interface AnswerStagedQuestionResponse {
   answered: true;
   cardId: string;
-  answer: 'merge' | 'keep' | 'convert';
+  answer: 'merge' | 'keep' | 'convert' | 'replace';
   merge?: { merged: boolean; targetId: string; aliases: string[] };
   convert?: ConvertCardAltitudeResult;
+  /** THE FLIP (2026-09-01): keep settled the altitude but the section has no
+   *  known position, so it stays held and its row returns as 'unplaced'. */
+  heldForPlacement?: boolean;
 }
 
 /** The spine drop (Placement Control v1c): where a dragged staged card lands. */
@@ -2759,6 +3009,26 @@ export async function answerStagedQuestion(
   const result = await freshApiCall(apiPath!, { event: 'answer-staged-question', ...req }, token);
   if (!result.success) throw new Error(result.error || 'answer-staged-question failed');
   return (result.data?.body ?? result.data) as AnswerStagedQuestionResponse;
+}
+
+/** The writer's hand on the story's own list: add an entry (no id) or reword
+ *  one in place (with id). No model, no question. */
+export async function saveStoryFact(
+  req: { projectId: string; userId: string; id?: string; kind: StoryFactKind; text: string },
+  token: string,
+): Promise<{ saved: true; fact: StoryFact }> {
+  const result = await freshApiCall(apiPath!, { event: 'save-story-fact', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'save-story-fact failed');
+  return (result.data?.body ?? result.data) as { saved: true; fact: StoryFact };
+}
+
+export async function deleteStoryFact(
+  req: { projectId: string; userId: string; id: string },
+  token: string,
+): Promise<{ deleted: true; id: string }> {
+  const result = await freshApiCall(apiPath!, { event: 'delete-story-fact', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'delete-story-fact failed');
+  return (result.data?.body ?? result.data) as { deleted: true; id: string };
 }
 
 /** Place a staged card (the spine drop): unstage + write the declared edges.

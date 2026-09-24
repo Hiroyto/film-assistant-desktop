@@ -14,6 +14,7 @@ import React, { useState } from 'react';
 import { PEER_BLUE } from './tokens';
 import { getEntityColor, hexToRgba } from './entityColors';
 import InternIcon from './InternIcon';
+import { BraindumpIcon } from './corkboard/emptyState';
 import type { CascadeEvent, EntityType } from './types';
 
 interface CascadeSummaryPanelProps {
@@ -40,6 +41,8 @@ const CascadeSummaryPanel: React.FC<CascadeSummaryPanelProps> = ({
 }) => {
   const [showGraphDetails, setShowGraphDetails] = useState(false);
 
+  const dump = event.source === 'braindump';
+  const accent = dump ? '#ff8c42' : PEER_BLUE;
   const cardLabel = originatingCardLabel ?? event.originatingCardId;
   const emittedDate = new Date(event.emittedAt);
   const emittedAbsolute = emittedDate.toLocaleTimeString([], {
@@ -54,15 +57,17 @@ const CascadeSummaryPanel: React.FC<CascadeSummaryPanelProps> = ({
       className="fixed top-0 right-0 h-full w-[400px] z-50 overflow-y-auto"
       style={{
         background: 'linear-gradient(135deg, rgba(40,50,60,0.98) 0%, rgba(35,45,55,0.98) 100%)',
-        borderLeft: '1px solid rgba(84, 191, 219, 0.3)',
+        borderLeft: `1px solid ${dump ? 'rgba(255,140,66,0.3)' : 'rgba(84, 191, 219, 0.3)'}`,
         boxShadow: '-12px 0 40px rgba(0, 0, 0, 0.5)',
       }}
     >
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-glassBg">
-        <div className="flex items-center gap-2" style={{ color: PEER_BLUE }}>
-          <InternIcon size={16} />
-          <span className="text-sm font-medium">From your response</span>
+        <div className="flex items-center gap-2" style={{ color: accent }}>
+          {dump ? <BraindumpIcon size={16} /> : <InternIcon size={16} />}
+          <span className="text-sm font-medium">
+            {dump ? 'From your braindump' : 'From your response'}
+          </span>
         </div>
         <button
           type="button"
@@ -85,7 +90,8 @@ const CascadeSummaryPanel: React.FC<CascadeSummaryPanelProps> = ({
           </>
         )}
         <span>{emittedAbsolute}</span>
-        <div className="mt-1 text-fontWhite07">on {cardLabel}</div>
+        {/* A braindump has no originating card to name. */}
+        {!dump && <div className="mt-1 text-fontWhite07">on {cardLabel}</div>}
       </div>
 
       {/* Failures banner */}
@@ -134,6 +140,9 @@ const CascadeSummaryPanel: React.FC<CascadeSummaryPanelProps> = ({
                 </span>
                 <div className="min-w-0">
                   <div className="text-[14px] text-fontWhite07 truncate">{e.workingName}</div>
+                  {e.placement && (
+                    <div className="text-[11px] text-fontGray truncate">{e.placement}</div>
+                  )}
                   <div className="text-[11px] uppercase tracking-wider" style={{ color: hexToRgba(color, 0.7) }}>
                     {e.kind} · added to canvas
                   </div>

@@ -12,6 +12,29 @@ import { getEntityColor, hexToRgba } from '../entityColors';
 import { useThemeMode } from './theme';
 import type { CreateModalKind } from './modals';
 
+/** The braindump mark. Lives here and is imported by the toolbar's Braindump
+ *  button so the empty state's CTA and the toolbar action wear the same glyph
+ *  rather than two copies of the same path data drifting apart. */
+export function BraindumpIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg
+      width={size} height={size} viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
+      xmlns="http://www.w3.org/2000/svg" style={{ display: 'block', flexShrink: 0 }}
+    >
+      <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" />
+      <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" />
+      <path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4" />
+      <path d="M17.599 6.5a3 3 0 0 0 .399-1.375" />
+      <path d="M6.003 5.125A3 3 0 0 0 6.401 6.5" />
+      <path d="M3.477 10.896a4 4 0 0 1 .585-.396" />
+      <path d="M19.938 10.5a4 4 0 0 1 .585.396" />
+      <path d="M6 18a4 4 0 0 1-1.967-.516" />
+      <path d="M19.967 17.484A4 4 0 0 1 18 18" />
+    </svg>
+  );
+}
+
 /** The by-hand starters. Deliberately three, not the full New menu: the menu
  *  is the complete list, this is the "just pick one" shortlist. */
 const STARTERS: Array<{ kind: CreateModalKind; label: string; hint: string }> = [
@@ -24,13 +47,19 @@ export function BoardEmptyState({
   onBraindump,
   onCreate,
   onImport,
+  importLabel = 'Already have a screenplay? Import it.',
+  importTitle,
 }: {
   onBraindump: () => void;
   onCreate: (kind: CreateModalKind) => void;
   onImport: () => void;
+  /** Overrides the screenplay link's text (desktop: the .fdx cowork). */
+  importLabel?: string;
+  importTitle?: string;
 }) {
   const dark = useThemeMode() === 'dark';
   const [hoverDump, setHoverDump] = useState(false);
+  const [hoverImport, setHoverImport] = useState(false);
 
   return (
     <div
@@ -73,19 +102,8 @@ export function BoardEmptyState({
             color: dark ? '#e8e8ee' : '#2c3140',
           }}
         >
-          Nothing on the board yet
+          Get something on the board
         </h2>
-        <p
-          style={{
-            margin: '8px 0 22px',
-            fontSize: 13.5,
-            lineHeight: 1.6,
-            color: dark ? '#8f8f9a' : '#6b6f7d',
-          }}
-        >
-          Talk it out and let it become cards, or place the first one yourself.
-          Nothing here is permanent, and nothing needs to be in order.
-        </p>
 
         <button
           onClick={onBraindump}
@@ -106,8 +124,16 @@ export function BoardEmptyState({
               : 'linear-gradient(135deg, #ff6b35 0%, #ff8c42 100%)',
             boxShadow: '0 2px 14px rgba(255,107,53,0.34)',
             transition: 'background 130ms ease-out',
+            // The same mark the toolbar's Braindump button wears, so the two
+            // ways in are recognisably one action.
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 9,
+            marginTop: 20,
           }}
         >
+          <BraindumpIcon size={17} />
           Braindump your story
         </button>
         <div
@@ -117,7 +143,8 @@ export function BoardEmptyState({
             color: dark ? '#6e6e78' : '#9a9aa4',
           }}
         >
-          Write freely — characters, scenes, a vibe. It gets read into cards.
+          Paste an outline, a treatment, a few notes, or just write freely.
+          It comes back as cards you can move around.
         </div>
 
         <div
@@ -134,7 +161,7 @@ export function BoardEmptyState({
           }}
         >
           <span style={{ flex: 1, height: 1, background: dark ? '#26262b' : '#ece5d7' }} />
-          or start one by hand
+          or add a card yourself
           <span style={{ flex: 1, height: 1, background: dark ? '#26262b' : '#ece5d7' }} />
         </div>
 
@@ -151,22 +178,50 @@ export function BoardEmptyState({
           ))}
         </div>
 
+        {/* The third way in, and the one a writer arriving with a finished
+            script needs most. It used to be a grey underlined link under the
+            fold of the panel, which read as fine print rather than a door
+            (Ben, 2026-09-09). Now a real button: bordered, iconed, its own
+            row. Still quiet next to the orange CTA, because a writer WITH a
+            screenplay knows to look for it and one without should not be
+            pulled toward it. */}
         <button
           onClick={onImport}
+          title={importTitle}
+          onMouseEnter={() => setHoverImport(true)}
+          onMouseLeave={() => setHoverImport(false)}
           style={{
-            marginTop: 18,
-            background: 'transparent',
-            border: 'none',
-            padding: 0,
-            fontSize: 12,
+            marginTop: 20,
+            width: '100%',
+            height: 40,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 9,
+            borderRadius: 10,
+            border: `1px solid ${hoverImport ? (dark ? '#3f4550' : '#c9c3b4') : (dark ? '#2c2c33' : '#e3ddcd')}`,
+            background: hoverImport
+              ? (dark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.035)')
+              : (dark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.015)'),
+            fontSize: 12.5,
+            fontWeight: 600,
             fontFamily: 'inherit',
-            color: dark ? '#7a7a84' : '#8a8578',
+            color: hoverImport ? (dark ? '#d6d6de' : '#3d4150') : (dark ? '#9a9aa4' : '#6b6f7d'),
             cursor: 'pointer',
-            textDecoration: 'underline',
-            textUnderlineOffset: 3,
+            transition: 'background 120ms ease-out, border-color 120ms ease-out, color 120ms ease-out',
           }}
         >
-          Already have a screenplay? Import the PDF
+          <svg
+            width="14" height="14" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
+            style={{ display: 'block', flexShrink: 0 }}
+          >
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
+            <path d="M14 2v6h6" />
+            <path d="M12 18v-6" />
+            <path d="m9 15 3-3 3 3" />
+          </svg>
+          {importLabel}
         </button>
       </div>
     </div>

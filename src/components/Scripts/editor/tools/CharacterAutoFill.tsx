@@ -22,6 +22,7 @@
  */
 
 import React, { useState, useEffect, useRef } from "react";
+import { maybeAppendContd } from "../../editorUtils";
 import { Editor } from "@tiptap/react";
 
 // FD character extensions (voice styles). Order = rough frequency.
@@ -279,6 +280,7 @@ const CharacterAutoFill = ({ editor, getEditors, rosterNames }: CharacterAutoFil
           .run();
       }
       editor.chain().insertContent(name).focus().run();
+      maybeAppendContd(editor); // FD automatic character continueds
       setShowDropdown(false);
       setTimeout(() => {
         try {

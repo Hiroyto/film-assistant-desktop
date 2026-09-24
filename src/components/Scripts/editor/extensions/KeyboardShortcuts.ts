@@ -18,9 +18,14 @@
  * Shortcut reference (FD-style):
  *   Tab            → next element by context (see TAB_NEXT)
  *   Shift+Tab      → previous element by context (see TAB_PREV)
- *   Cmd/Ctrl+1..6  → set element directly (FD order):
+ *   Cmd/Ctrl+1..7  → set element directly (FD order):
  *                      1 scene · 2 action · 3 character
  *                      4 parenthetical · 5 dialogue · 6 transition
+ *                      7 title page: GOES to the title page (creates an empty
+ *                        one at the top when the script has none). FD keeps
+ *                        it as a separate document; here title lines are
+ *                        paragraphs typed `title` on their own sheet.
+ *                        Cmd+Alt+7 converts the current line in place.
  *   Enter          → split with contextual next-element (see ENTER_NEXT) plus
  *                      FD "double-Enter": an EMPTY action line promotes to
  *                      Character; an empty character/dialogue reverts to Action;
@@ -32,6 +37,9 @@
  *   Scene/Character/Transition text is force-UPPERCASED as stored (not just
  *                      displayed), so the parser, PDF export and extraction all
  *                      see canonical caps.
+ *   Cmd+Alt+R      → Reformat: re-type the selected paragraphs (nothing
+ *                      selected: the whole script) with the import classifier
+ *                      (FD Tools > Reformat, without the one-at-a-time walk)
  *   Cmd+A          → safe select-all
  *   Backspace      → empty-line deletion, keeps a minimum of one line
  *
@@ -46,10 +54,10 @@
 
 import { Extension, InputRule } from "@tiptap/core";
 import { Plugin, PluginKey, TextSelection } from "@tiptap/pm/state";
-import { updateParagraphAttribute } from "../../editorUtils";
+import { PARA_STYLE, applyElement, maybeAppendContd, openTitlePage, updateParagraphAttribute } from "../../editorUtils";
+import { reformatScreenplay } from "./PlainTextPaste";
 import { ScreenwritingLineType } from "../../types";
 
-const PARA_STYLE = "font-family: 'Courier New', monospace; font-size: 12pt;";
 
 // Elements whose STORED text is uppercased as typed (FD SmartType caps).
 const CAPS_LINES = new Set<ScreenwritingLineType>([
@@ -60,6 +68,7 @@ const CAPS_LINES = new Set<ScreenwritingLineType>([
 
 // Tab advances to the next element by context (FD/WriterDuet table).
 const TAB_NEXT: Record<string, ScreenwritingLineType> = {
+  title: "description",
   scene: "description",
   description: "character",
   character: "parenthetical",
@@ -70,6 +79,7 @@ const TAB_NEXT: Record<string, ScreenwritingLineType> = {
 
 // Shift+Tab steps back down the ladder toward action/scene.
 const TAB_PREV: Record<string, ScreenwritingLineType> = {
+  title: "description",
   scene: "transition",
   description: "scene",
   character: "description",
@@ -80,6 +90,7 @@ const TAB_PREV: Record<string, ScreenwritingLineType> = {
 
 // Enter on a NON-empty line splits and gives the new line this type.
 const ENTER_NEXT: Record<string, ScreenwritingLineType> = {
+  title: "title",
   scene: "description",
   description: "description",
   character: "dialogue",
@@ -94,6 +105,7 @@ const ENTER_NEXT: Record<string, ScreenwritingLineType> = {
 //   empty dialogue  → action
 //   empty parenthetical → dialogue
 const ENTER_EMPTY: Record<string, ScreenwritingLineType> = {
+  title: "description",
   description: "character",
   character: "description",
   dialogue: "description",
@@ -108,31 +120,29 @@ const NUMBER_ELEMENT: Record<string, ScreenwritingLineType> = {
   "4": "parenthetical",
   "5": "dialogue",
   "6": "transition",
+  "7": "title",
 };
 
 // Slugline prefixes that auto-convert an Action line to a Scene Heading.
 const SLUG_PREFIX = /^(int\.?\/ext\.?|int|ext|est|i\/e)([ .])$/i;
 
 /**
- * Set the current line's type in place (no split). For parenthetical, seed an
- * opening "(" the way Final Draft does.
+ * Reformat the current line in place (FD's Cmd+Option+number). The shared
+ * helper seeds "(" on a parenthetical and strips it on the way out.
  */
 const setLineTypeInPlace = (
   editor: any,
   type: ScreenwritingLineType
-): boolean => {
-  const ok = updateParagraphAttribute(editor, { lineType: type });
-  if (ok && type === "parenthetical") {
-    const { $from } = editor.view.state.selection;
-    const node = editor.view.state.doc.nodeAt($from.before());
-    if (node && !node.textContent.trim()) {
-      editor.commands.insertContent("(");
-    } else if (node && !node.textContent.startsWith("(")) {
-      editor.commands.insertContentAt($from.before() + 1, "(");
-    }
-  }
-  return ok;
-};
+): boolean => applyElement(editor, type, "reformat");
+
+/**
+ * Add a paragraph of the element (FD's Cmd+number, and Tab): converts a
+ * blank line in place, otherwise inserts the new paragraph after this one.
+ */
+const addLineOfType = (
+  editor: any,
+  type: ScreenwritingLineType
+): boolean => applyElement(editor, type, "add");
 
 /**
  * Cmd+1 (scene). Preserves the legacy "S1.2" scene-ID-from-text extraction
@@ -288,21 +298,42 @@ const KeyboardShortcuts = Extension.create({
         }
       },
 
-      // ── Cmd/Ctrl+1..6 → set element directly (FD order) ────────
+      // ── Cmd/Ctrl+1..6 → ADD a paragraph of the element (FD order; a blank
+      //    line converts in place). Cmd+Option+1..6 reformats in place, FD's
+      //    key for it. Verified against the FD10 manual (2026-09-12).
       "Mod-1": ({ editor }) => {
         try {
-          if (editor.view.state.selection.$from.depth === 0) return false;
-          return setSceneWithIdExtraction(editor);
+          const { $from } = editor.view.state.selection;
+          if ($from.depth === 0) return false;
+          if ($from.parent.textContent.trim() === "") return setSceneWithIdExtraction(editor);
+          return addLineOfType(editor, "scene");
         } catch (error) {
           console.warn("Error in Mod-1 handler:", error);
           return false;
         }
       },
-      "Mod-2": ({ editor }) => setLineTypeInPlace(editor, "description"),
-      "Mod-3": ({ editor }) => setLineTypeInPlace(editor, "character"),
-      "Mod-4": ({ editor }) => setLineTypeInPlace(editor, "parenthetical"),
-      "Mod-5": ({ editor }) => setLineTypeInPlace(editor, "dialogue"),
-      "Mod-6": ({ editor }) => setLineTypeInPlace(editor, "transition"),
+      "Mod-2": ({ editor }) => addLineOfType(editor, "description"),
+      "Mod-3": ({ editor }) => addLineOfType(editor, "character"),
+      "Mod-4": ({ editor }) => addLineOfType(editor, "parenthetical"),
+      "Mod-5": ({ editor }) => addLineOfType(editor, "dialogue"),
+      "Mod-6": ({ editor }) => addLineOfType(editor, "transition"),
+      "Mod-7": ({ editor }) => openTitlePage(editor as any),
+      "Mod-Alt-1": ({ editor }) => {
+        try {
+          if (editor.view.state.selection.$from.depth === 0) return false;
+          return setSceneWithIdExtraction(editor);
+        } catch (error) {
+          console.warn("Error in Mod-Alt-1 handler:", error);
+          return false;
+        }
+      },
+      "Mod-Alt-2": ({ editor }) => setLineTypeInPlace(editor, "description"),
+      "Mod-Alt-3": ({ editor }) => setLineTypeInPlace(editor, "character"),
+      "Mod-Alt-4": ({ editor }) => setLineTypeInPlace(editor, "parenthetical"),
+      "Mod-Alt-5": ({ editor }) => setLineTypeInPlace(editor, "dialogue"),
+      "Mod-Alt-6": ({ editor }) => setLineTypeInPlace(editor, "transition"),
+      "Mod-Alt-7": ({ editor }) => setLineTypeInPlace(editor, "title"),
+      "Mod-Alt-r": ({ editor }) => reformatScreenplay(editor as any),
 
       // ── Tab → next element by context ──────────────────────────
       // (Autofill dropdowns intercept Tab at the DOM capture phase while open;
@@ -313,7 +344,9 @@ const KeyboardShortcuts = Extension.create({
           if ($from.depth === 0) return false;
           const type = $from.parent.attrs.lineType as string;
           const next = TAB_NEXT[type] ?? "character";
-          return setLineTypeInPlace(editor, next);
+          // FD: Tab supplements Return. A blank line converts; a line with
+          // text gets the next element as a new paragraph beneath it.
+          return addLineOfType(editor, next);
         } catch (error) {
           console.warn("Error in Tab handler:", error);
           return false;
@@ -376,6 +409,8 @@ const KeyboardShortcuts = Extension.create({
             }
           }
 
+          // Leaving a character cue: automatic (CONT'D), FD default.
+          if (currentType === "character") maybeAppendContd(editor);
           const newType = ENTER_NEXT[currentType] ?? "description";
           return splitWithType(editor, newType);
         } catch (error) {

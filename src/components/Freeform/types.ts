@@ -109,10 +109,24 @@ export type PeerCardState =
 export interface CascadeEntity {
   workingName: string;
   kind: EntityType;
+  /** Where it landed, already phrased for the reader ("in Nell runs the
+   *  tide-gauge station"). The half of the receipt that answers the question
+   *  a writer actually has after a dump. Absent when nothing placed it. */
+  placement?: string;
 }
 
 export interface CascadeEvent {
   type: 'cascade_complete';
+  /** What produced this receipt. A braindump lands the same way a cascade
+   *  does (new cards appear while the writer is looking elsewhere), so it
+   *  reuses the toast, the tray and the details panel; only the mark, the
+   *  accent and the wording change. Absent means 'cascade' (the original,
+   *  card-response path). */
+  source?: 'cascade' | 'braindump';
+  /** Facts (Information cards) are counted, not listed. A dump routinely
+   *  establishes more facts than scenes, and spending the three visible
+   *  bullets on them buries the one thing the writer is looking for. */
+  factCount?: number;
   cardResponseId: string;
   originatingCardId: string;
   projectId: string;

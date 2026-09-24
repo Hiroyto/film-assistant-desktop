@@ -3,10 +3,41 @@
 // auto-sync do editor de roteiro: Auto-sync on/off, "Sync now", status. Com o
 // watch ativo, cada save do Final Draft vira save + extração por cena no board
 // real — o FdxBoard read-only deixa de ser necessário aqui.
-import React, { useCallback, useEffect, useRef } from 'react';
+//
+// A janela também é o DOCKET do cowork: as perguntas que as páginas levantaram
+// (o strip do Placement Control, "Things to confirm…") aparecem aqui com as
+// mesmas linhas e as mesmas lanes de resposta do painel direito, para o
+// roteirista que está no Final Draft responder sem abrir o painel.
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { flushPushNow } from '../../data/desktop-lifecycle';
 import { bindFdxSync, openFdxSync, resolveMissingScene, setFdxAuto, stopFdxSync, syncFdxNow } from '../../lib/fdxSync';
+import type { BraindumpLogEntry } from '../../lib/freeformApi';
+import { BD_ORANGE, StagedRow, type StagedStripRow } from '../Freeform/corkboard/panels';
 import { useFdxSync } from './useFdxSync';
+
+/** O strip do board, emprestado à janela do cowork: as MESMAS linhas (já
+ *  ordenadas) e as MESMAS lanes de resposta que o painel direito recebe. A
+ *  janela filtra sozinha o que é do cowork (ver `coworkRows`). */
+export interface CoworkStrip {
+  rows: StagedStripRow[];
+  /** Log de braindumps com a prose — o pin "In your words" de cada linha. */
+  braindumps: BraindumpLogEntry[] | null;
+  onAnswer: (cardId: string, answer: 'merge' | 'keep' | 'convert' | 'replace') => void;
+  /** Expandir uma linha foca o alvo dela no board (a wall); (null, null) solta. */
+  onSpotlight: (cardId: string | null, targetId: string | null) => void;
+  /** false enquanto o painel direito é dono do spotlight (ele cobre esta janela). */
+  spotlight: boolean;
+  /** Spine drop: arrastar uma linha "Where does it go?" abre a grade de
+   *  posicionamento no board; a janela some (montada) até o dragend. */
+  onPlaceDragStart?: (cardId: string) => void;
+  onPlaceDragEnd?: () => void;
+  /** Order ask: confirmar o slot em que a cena já aparece na sequência. */
+  onConfirmSlot?: (cardId: string) => void;
+  onOpenCard: (cardId: string) => void;
+  /** Montada mas invisível durante um spine drop (a origem do drag precisa
+   *  sobreviver para entregar o dragend). */
+  hidden?: boolean;
+}
 
 interface Props {
   storyId: string;
@@ -16,11 +47,41 @@ interface Props {
   /** O motor enfileirou um job de IA (braindump) — o board mostra o MESMO
    *  loading/meter de um braindump próprio (trackExternalBraindump). */
   onAiJob?: (braindumpId: string, proseLength: number) => void;
+  /** As perguntas do strip + lanes de resposta (o board é quem as tem). */
+  strip?: CoworkStrip;
+}
+
+/** Abre o seletor de .fdx e liga o cowork na story vinculada. Chamado pelo
+ *  link do empty state do board (no lugar do import de PDF); em board que já
+ *  tem cards, a entrada é o menu File → Open Screenplay (.fdx)…, que vai
+ *  direto ao openFdxSync (FdxCoworkPanel). */
+export async function startFdxCowork(): Promise<void> {
+  try {
+    await flushPushNow(); // o freeform nega escrita de story ainda não registrada no /works
+  } catch { /* best-effort */ }
+  await openFdxSync();
 }
 
 function hhmmss(iso?: string): string {
   if (!iso) return '';
   try { return new Date(iso).toLocaleTimeString(); } catch { return iso; }
+}
+
+/** Uma linha do strip é DO COWORK quando o braindump que a levantou foi um
+ *  job do motor (`fdx_…`) ou quando o card em questão é composto por alguma
+ *  cena do arquivo (perguntas da extração por cena sobre um card mapeado). */
+export function isCoworkStripRow(row: StagedStripRow, mappedEventIds: ReadonlySet<string>): boolean {
+  return String(row.sourceBraindumpId ?? '').startsWith('fdx_') || mappedEventIds.has(row.cardId);
+}
+
+/** O card que uma linha expandida foca no board — o mesmo cálculo do painel:
+ *  o alvo da comparação; senão, para altitude/ordem em card VIVO, o próprio
+ *  card (uma pergunta sobre a forma dele). Cards retidos não estão na wall. */
+function spotlightTargetOf(row: StagedStripRow | undefined): string | null {
+  if (!row) return null;
+  if (row.target?.id) return row.target.id;
+  const selfFocus = (row.questionType === 'altitude' || row.questionType === 'unplaced') && !row.held;
+  return selfFocus ? row.cardId : null;
 }
 
 const FONT = 'ui-sans-serif, system-ui, sans-serif';
@@ -33,7 +94,7 @@ const btnSmall: React.CSSProperties = {
   borderRadius: 6, padding: '5px 9px', cursor: 'pointer', fontSize: 12, fontWeight: 600,
 };
 
-export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob }: Props): JSX.Element {
+export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, strip }: Props): JSX.Element | null {
   const snap = useFdxSync();
   const lastSyncSeen = useRef<string | undefined>(undefined);
   const lastAiJobSeen = useRef<string | undefined>(undefined);
@@ -58,36 +119,61 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob }: Props): J
     }
   }, [snap.lastSyncAt, onSynced]);
 
-  const start = useCallback(async () => {
-    try {
-      await flushPushNow(); // o freeform nega escrita de story ainda não registrada no /works
-    } catch { /* best-effort */ }
-    await openFdxSync();
-  }, []);
-
-  // Os BOTÕES (inativo) ficam à direita, junto do zoom/import; a JANELA do
-  // cowork (ativo) vai para a ESQUERDA, para não disputar espaço com eles.
-  const wrapButtons: React.CSSProperties = {
-    position: 'fixed', right: 20, bottom: 66, zIndex: 129, display: 'flex', flexDirection: 'column',
-    alignItems: 'flex-end', gap: 6, fontFamily: FONT,
+  // ---- O docket do cowork -------------------------------------------------
+  // As linhas do strip que as páginas levantaram, na ordem do board. Chegam
+  // FECHADAS (uma linha por pergunta): a janela anuncia, o roteirista escolhe
+  // quando responder — a wall só toma o board quando ele expande uma linha
+  // (a regra do receipt, Ben 2026-09-09: nada abre sozinho sobre o board).
+  const stripRows = strip?.rows;
+  const coworkRows = useMemo(() => {
+    if (!stripRows || !snap.active) return [] as StagedStripRow[];
+    const mapped = new Set(snap.mappedEventIds);
+    return stripRows.filter((r) => isCoworkStripRow(r, mapped));
+  }, [stripRows, snap.mappedEventIds, snap.active]);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  // Linha respondida em outro lugar (o painel, um drop) some do docket: fecha.
+  useEffect(() => {
+    if (expandedId && !coworkRows.some((r) => r.cardId === expandedId)) setExpandedId(null);
+  }, [coworkRows, expandedId]);
+  // Responder avança para a próxima pergunta (a gramática do painel): o
+  // roteirista está engajado, a fila anda.
+  const answerAndAdvance = (cardId: string, answer: 'merge' | 'keep' | 'convert' | 'replace'): void => {
+    const i = coworkRows.findIndex((r) => r.cardId === cardId);
+    const next = coworkRows.find((r, j) => j > i && r.cardId !== cardId) ?? coworkRows.find((r) => r.cardId !== cardId) ?? null;
+    setExpandedId(next ? next.cardId : null);
+    strip?.onAnswer(cardId, answer);
   };
-  const wrapPanel: React.CSSProperties = { ...wrapButtons, right: undefined, left: 20, alignItems: 'flex-start' };
+  // Spotlight: a linha expandida foca o alvo dela no board, como no painel —
+  // e aqui o board está VISÍVEL ao lado da janela, então a comparação é real.
+  const expandedRow = expandedId ? coworkRows.find((r) => r.cardId === expandedId) : undefined;
+  const spotlightTargetId = spotlightTargetOf(expandedRow);
+  const spotlightOn = !!strip?.spotlight && !strip?.hidden;
+  const spotlightLive = spotlightOn && !!expandedId && !!spotlightTargetId;
+  const onSpotlight = strip?.onSpotlight;
+  useEffect(() => {
+    if (!onSpotlight) return;
+    onSpotlight(spotlightLive ? expandedId : null, spotlightLive ? spotlightTargetId : null);
+  }, [onSpotlight, spotlightLive, expandedId, spotlightTargetId]);
+  // Solta o spotlight ao desmontar (o cowork parou / o board saiu de cena).
+  // Ref-held para o cleanup rodar uma vez, não a cada identidade do callback.
+  const spotlightRef = useRef(onSpotlight);
+  useEffect(() => { spotlightRef.current = onSpotlight; }, [onSpotlight]);
+  useEffect(() => () => { spotlightRef.current?.(null, null); }, []);
 
-  // ---- Inativo: só o botão de abrir o cowork -------------------------------
-  if (!snap.active) {
-    return (
-      <div style={wrapButtons}>
-        <button
-          type="button"
-          onClick={() => void start()}
-          title="Watch a Final Draft (.fdx) screenplay: every save becomes a per-scene save + extraction on this board, like the script editor's auto-sync"
-          style={btnPrimary}
-        >
-          ⬇ Open .fdx (cowork)
-        </button>
-      </div>
-    );
-  }
+  // A JANELA do cowork (ativo) fica à ESQUERDA, para não disputar espaço com
+  // o zoom à direita. Com uma linha focada, a wall (z 130–150) toma o board:
+  // a janela sobe para ficar clicável em cima dela (abaixo do painel, z 180).
+  const wrapPanel: React.CSSProperties = {
+    position: 'fixed', left: 20, bottom: 66, zIndex: spotlightLive ? 160 : 129, display: 'flex', flexDirection: 'column',
+    alignItems: 'flex-start', gap: 6, fontFamily: FONT,
+    // Spine drop em andamento: invisível e intocável, mas montada (a origem
+    // do drag precisa sobreviver para entregar o dragend).
+    ...(strip?.hidden ? { visibility: 'hidden' as const, pointerEvents: 'none' as const } : {}),
+  };
+
+  // ---- Inativo: nada flutuando — o "Open .fdx" vive no empty state do board
+  // (startFdxCowork). Os effects acima continuam vinculando o motor à story.
+  if (!snap.active) return null;
 
   // ---- Ativo: painel de status + controles -------------------------------
   const dotColor = snap.status === 'syncing' || snap.pending ? '#5dd4c8' : snap.status === 'error' ? '#ef4444' : snap.dirty ? '#eab308' : '#4ecdc4';
@@ -103,13 +189,25 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob }: Props): J
             ? `Synced ${hhmmss(snap.lastSyncAt)}`
             : 'Waiting for the first sync';
   const run = snap.lastRun;
+  // A prose do braindump que mintou a linha (o pin "In your words"): o id da
+  // própria linha, senão a entrada de proveniência cujo id embute o card.
+  const proseFor = (row: StagedStripRow): string | undefined => (
+    strip?.braindumps?.find((b) => b.braindumpId === row.sourceBraindumpId)
+      ?? strip?.braindumps?.find((b) => b.braindumpId.includes(row.cardId))
+  )?.prose;
+  const placeDragStart = strip?.onPlaceDragStart;
+  const confirmSlot = strip?.onConfirmSlot;
 
   return (
     <div style={wrapPanel}>
       <div
         style={{
-          width: 320, background: '#1f1f22', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10,
+          // As linhas do strip foram desenhadas para a gaveta do painel (~384px
+          // úteis): a janela alarga enquanto houver perguntas.
+          width: coworkRows.length ? 380 : 320,
+          background: '#1f1f22', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10,
           padding: 12, color: 'rgba(255,255,255,0.9)', fontSize: 12, boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+          transition: 'width 160ms ease-out',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -131,6 +229,7 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob }: Props): J
           <strong>{snap.sceneCount}</strong> scenes in file · {snap.mappedCount} on board
           {snap.cardCount && snap.cardCount !== snap.mappedCount ? ` (${snap.cardCount} cards)` : ''}
           {snap.missing.length ? <> · <span style={{ color: '#eab308' }}>{snap.missing.length} missing</span></> : null}
+          {coworkRows.length ? <> · <span style={{ color: BD_ORANGE }}>{coworkRows.length} to confirm</span></> : null}
         </div>
         <div style={{ marginBottom: 8, color: snap.status === 'error' ? '#f87171' : 'rgba(255,255,255,0.8)' }}>{statusLine}</div>
         {snap.status !== 'error' && snap.lastError ? (
@@ -148,6 +247,43 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob }: Props): J
             {run.errors ? ` · ${run.errors} errors` : ''}
           </div>
         ) : null}
+
+        {strip && coworkRows.length ? (
+          // O strip do Placement Control, aqui: as perguntas que as páginas
+          // levantaram e que só o roteirista resolve. Mesma linha, mesmas
+          // respostas do painel direito; responder aqui É responder lá.
+          <details open style={{ marginBottom: 10 }} data-tour="cowork-staged">
+            <summary style={{ cursor: 'pointer' }}>
+              <span style={{ fontSize: 10, letterSpacing: 0.6, textTransform: 'uppercase', color: BD_ORANGE, fontWeight: 700 }}>
+                Things to confirm from your last sync
+              </span>
+              <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)', marginLeft: 8 }}>{coworkRows.length}</span>
+            </summary>
+            <div style={{ fontSize: 11, lineHeight: 1.5, color: 'rgba(255,255,255,0.5)', margin: '4px 0 2px' }}>
+              Questions your pages raised that only you can settle: a beat that looks like one already on the board,
+              a scene that might be a sequence, a card with no obvious place. Nothing changes until you answer.
+              There is no deadline.
+            </div>
+            <div style={{ maxHeight: '46vh', overflowY: 'auto', paddingRight: 2 }}>
+              {coworkRows.map((row) => (
+                <StagedRow
+                  key={row.cardId}
+                  row={row}
+                  expanded={expandedId === row.cardId}
+                  onToggle={() => setExpandedId((cur) => (cur === row.cardId ? null : row.cardId))}
+                  onAnswer={(answer) => answerAndAdvance(row.cardId, answer)}
+                  onOpenCard={strip.onOpenCard}
+                  onPlaceDragStart={placeDragStart ? () => placeDragStart(row.cardId) : undefined}
+                  onConfirmSlot={confirmSlot ? () => confirmSlot(row.cardId) : undefined}
+                  onPlaceDragEnd={strip.onPlaceDragEnd}
+                  sourceProse={proseFor(row)}
+                  dark
+                />
+              ))}
+            </div>
+          </details>
+        ) : null}
+
         {snap.missing.length ? (
           // O fluxo do editor para cena apagada: Keep (slot não-escrito) ou Trash
           // (soft-delete). Nada automático — o roteirista decide, cena a cena.

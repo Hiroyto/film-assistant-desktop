@@ -5,15 +5,14 @@
 import { app, Menu, MenuItemConstructorOptions, BrowserWindow } from 'electron';
 import { IPC, MenuEvent } from '../ipc/channels';
 import { openExternal } from '../platform/external';
+import { sendToRenderer } from '../ipc/bridge';
+import { appContentsOf } from '../window/appContents';
 
 type Emit = (event: MenuEvent) => void;
 
 export function buildAppMenu(getWindow: () => BrowserWindow | null, opts: { isDev: boolean }): void {
   const isMac = process.platform === 'darwin';
-  const emit: Emit = (event) => {
-    const win = getWindow();
-    if (win && !win.isDestroyed()) win.webContents.send(IPC.MENU, { event });
-  };
+  const emit: Emit = (event) => sendToRenderer(getWindow(), IPC.MENU, { event });
 
   const template: MenuItemConstructorOptions[] = [
     ...(isMac
@@ -51,7 +50,19 @@ export function buildAppMenu(getWindow: () => BrowserWindow | null, opts: { isDe
         { label: 'Command Palette', accelerator: 'CmdOrCtrl+K', click: () => emit('commands.cmdk.open') },
         { label: 'Show Tour', click: () => emit('tour.open') },
         ...(opts.isDev
-          ? ([{ type: 'separator' }, { role: 'toggleDevTools' }] as MenuItemConstructorOptions[])
+          ? ([
+              { type: 'separator' },
+              {
+                // Não o role: ele mira o webContents da janela, que com a moldura custom
+                // é a faixa de título — o DevTools útil é o do app.
+                label: 'Toggle Developer Tools',
+                accelerator: isMac ? 'Alt+Command+I' : 'Ctrl+Shift+I',
+                click: () => {
+                  const win = getWindow();
+                  if (win && !win.isDestroyed()) appContentsOf(win).toggleDevTools();
+                },
+              },
+            ] as MenuItemConstructorOptions[])
           : []),
       ],
     },

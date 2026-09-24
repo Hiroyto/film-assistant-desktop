@@ -43,6 +43,11 @@ export type StartTourOptions = {
     /** Lock body scroll while the tour runs. Default true (static-page tours).
      *  The corkboard wow passes false so the canvas stays pannable. */
     lockScroll?: boolean;
+    /** Blur and dim everything outside the spotlight. Default true. The sheet
+     *  walk passes false: the writer needs to read the card the guide is
+     *  explaining, and a full-screen backdrop blur re-drawn on every
+     *  re-measure was the sheet's lag under the tour (2026-09-13). */
+    blur?: boolean;
     /** When set, every tooltip shows an "I'll explore on my own" opt-out that
      *  ends the tour and calls this (the wow uses it to mark itself seen). */
     onSkip?: () => void;
@@ -80,6 +85,11 @@ export const TourProvider = ({
     const [arrowOffset, setArrowOffset] = useState(24);
     const [active, setActive] = useState(false);
     const [lockScroll, setLockScroll] = useState(true);
+    const [blur, setBlur] = useState(true);
+    // True once the current step's tooltip has a computed position. The
+    // tooltip stays mounted across steps (so it always has a size to measure)
+    // and is hidden until this flips, so it never shows at the default (0,0).
+    const [positioned, setPositioned] = useState(false);
     const [onSkip, setOnSkip] = useState<(() => void) | null>(null);
     // Bumped to re-run the position effect while waiting for a target element
     // that hasn't mounted yet (wow cards still animating in).
@@ -96,6 +106,7 @@ export const TourProvider = ({
         setCurrentStep(0);
         enteredStepRef.current = -1;
         setLockScroll(opts?.lockScroll !== false);
+        setBlur(opts?.blur !== false);
         setOnSkip(() => opts?.onSkip ?? null);
         setActive(true);
     };
@@ -196,6 +207,7 @@ export const TourProvider = ({
         if (enteredStepRef.current !== currentStep) {
             enteredStepRef.current = currentStep;
             setRect(null);
+            setPositioned(false);
             step.onEnter?.();
         }
 
@@ -206,10 +218,16 @@ export const TourProvider = ({
             // Target (element or custom-rect inputs) may still be mounting /
             // animating in (wow cards stream in after braindump_complete; the
             // panel opens via onEnter). Retry.
-            if (retryTick < 25) {
+            if (retryTick < 12) {
                 const t = window.setTimeout(() => setRetryTick((n) => n + 1), 120);
                 return () => window.clearTimeout(t);
             }
+            // Never mounted (a stale anchor after a surface was rebuilt, seen
+            // 2026-09-13 as coachmarks stranded in the corner). Skip forward
+            // without firing onExit, the orchestrator's commit hook; ending
+            // the tour is the orchestrator's call, so a last step just closes.
+            if (currentStep < steps.length - 1) setCurrentStep((prev) => prev + 1);
+            else closeTour();
             return;
         }
 
@@ -258,6 +276,7 @@ export const TourProvider = ({
                 setArrowOffset(arrowY);
                 setArrowDirection(dir);
                 setTooltipPos({ top: sideTop, left: sideLeft });
+                setPositioned(true);
                 return;
             }
 
@@ -295,14 +314,14 @@ export const TourProvider = ({
             setArrowOffset(arrowX);
             setArrowDirection(direction);
             setTooltipPos({ top, left });
+            setPositioned(true);
         };
 
         el?.scrollIntoView({ behavior: "auto", block: step.scrollBlock ?? "center" });
 
-        // 🔥 PRIMEIRO CÁLCULO
-        requestAnimationFrame(() => {
-            requestAnimationFrame(updatePosition);
-        });
+        // First placement right away: the tooltip is mounted and measurable,
+        // so there is nothing to wait a frame for. The timer below re-measures.
+        updatePosition();
 
         // =========================
         // 🔥 AUTO LAYOUT ENGINE
@@ -326,13 +345,14 @@ export const TourProvider = ({
         // Continuous tracking — keeps the spotlight glued to its target even when
         // the element MOVES without a scroll/resize event (corkboard cards glide
         // on peer-focus, grow on expand, balls stick, etc.).
-        let rafId = window.requestAnimationFrame(function tick() {
-            updatePosition();
-            rafId = window.requestAnimationFrame(tick);
-        });
+        // A timer, not a frame loop: frames stop entirely in a hidden or
+        // occluded tab, and the ring and tooltip then froze part-way to their
+        // target (seen 2026-09-13). Timers keep ticking (throttled), and the
+        // observers above cover the common cases without any polling.
+        const tickId = window.setInterval(updatePosition, 100);
 
         return () => {
-            window.cancelAnimationFrame(rafId);
+            window.clearInterval(tickId);
             resizeObserver.disconnect();
             window.removeEventListener("resize", handleResize);
             window.removeEventListener("scroll", handleScroll, true);
@@ -344,18 +364,18 @@ export const TourProvider = ({
             {children}
 
             <AnimatePresence>
-                {active && rect && (
+                {active && steps[currentStep] && (
                     <>
                         {/* Overlay com recorte */}
+                        {rect && (
                         <motion.div
                             className="fixed inset-0 z-[9990] pointer-events-none"
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
                             transition={{ duration: 0.2 }}
                             style={{
-                                backdropFilter: "blur(4px)",
-                                background: "rgba(0,0,0,0.5)",
+                                ...(blur ? { backdropFilter: "blur(4px)" } : {}),
+                                background: blur ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.18)",
                                 clipPath: `
                                 polygon(
                                     0% 0%,
@@ -373,40 +393,39 @@ export const TourProvider = ({
                                 `,
                             }}
                         />
+                        )}
 
                         {/* Spotlight */}
+                        {/* Placed by style, not animated: a spring from the previous
+                            step's spot read as the ring "jumping around", and in a
+                            hidden tab it froze part-way (2026-09-13). Only the fade
+                            animates. */}
+                        {rect && (
                         <motion.div
                             className="fixed z-[9995] pointer-events-none rounded-xl"
-                            animate={{
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            transition={{ duration: 0.15 }}
+                            style={{
                                 top: rect.top - 8,
                                 left: rect.left - 8,
                                 width: rect.width + 16,
-                                height: rect.height + 16
-                            }}
-                            transition={{
-                                type: "spring",
-                                stiffness: 500,
-                                damping: 40
-                            }}
-                            style={{
+                                height: rect.height + 16,
                                 border: "2px solid #ff6b35",
                                 boxShadow: "0 0 25px rgba(255,107,53,0.7)"
                             }}
                         />
+                        )}
 
                         {/* Tooltip */}
                         <motion.div
                             ref={tooltipRef}
+                            data-tour-ui
                             className="fixed z-[9998]"
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{
-                                opacity: 1,
-                                y: 0,
-                                top: tooltipPos.top,
-                                left: tooltipPos.left
-                            }}
-                            exit={{ opacity: 0 }}
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
                             transition={{ duration: 0.2 }}
+                            style={{ top: tooltipPos.top, left: tooltipPos.left, visibility: positioned ? 'visible' : 'hidden' }}
                         >
                             <div className="relative px-4 py-4 rounded-lg bg-[rgba(255,108,53,0.15)] border border-[#ff6b35]
                 text-[#ff8c42] text-sm font-medium shadow-[0_0_12px_rgba(255,108,53,0.6)]

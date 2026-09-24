@@ -3,6 +3,7 @@ import { ipcMain, BrowserWindow, autoUpdater } from 'electron';
 import { IPC } from './channels';
 import { openExternal } from '../platform/external';
 import { IS_TEST, recordInstallRequested } from '../test/testState';
+import { appContentsOf } from '../window/appContents';
 
 /** Registra os handlers de IPC que o BC-09 possui. */
 export function registerIpcHandlers(): void {
@@ -27,9 +28,10 @@ export function registerIpcHandlers(): void {
   // IPC.DB_QUERY/DB_BATCH são registrados em db/dbHandlers (Tarefa 07).
 }
 
-/** Envia um evento push para o renderer (no-op se a janela não existe). */
+/** Envia um evento push para o renderer do app (no-op se a janela não existe). */
 export function sendToRenderer(win: BrowserWindow | null, channel: string, payload: unknown): void {
   if (win && !win.isDestroyed()) {
-    win.webContents.send(channel, payload);
+    const wc = appContentsOf(win); // com moldura custom, a janela em si é só a faixa
+    if (!wc.isDestroyed()) wc.send(channel, payload);
   }
 }

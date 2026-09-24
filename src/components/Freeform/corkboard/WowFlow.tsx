@@ -18,7 +18,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useTour, type TourStep } from '../../Tour/TourProvider';
 import { ExploreOnOwn } from '../../Tour/ExploreOnOwn';
 import { WOW_SAMPLE } from './wowShared';
-import { setWowBentoPeerActive } from './peer';
+import { PEER_ASK_EVENT, setWowBentoPeerActive } from './peer';
+import { requestOrbitCategory } from './orbit';
 import type { ListProjectEntitiesResponse, ProjectEntity } from '../../../lib/freeformApi';
 
 export { WOW_SAMPLE };
@@ -43,7 +44,7 @@ type Phase =
   | 'revealing'
   | 'tour'
   | 'guide-expand'
-  | 'guide-ask'
+  | 'sheet-ask'
   | 'answer'
   | 'guide-fullcard'
   | 'bento-intro'
@@ -158,7 +159,7 @@ export default function WowFlow({
     const allow =
       phase === 'guide-expand' ? 'expand' :
       phase === 'guide-fullcard' ? 'fullcard' :
-      phase === 'guide-ask' ? 'ask' : null;
+      phase === 'sheet-ask' ? 'ask' : null;
     // 'review' edits the dock (no cards yet) and 'done' is over — don't gate.
     onTourGate({ active: phase !== 'review' && phase !== 'done', allow });
     // Belt-and-suspenders: whatever ends or leaves the walkthrough (skip,
@@ -288,12 +289,29 @@ export default function WowFlow({
     }
     const relPair = relA && relB && (relPillId || structTie) ? { a: relA, b: relB } : null;
 
-    // Deep-dive prefers an EVENT (a scene reads as the richest peer surface);
-    // graceful fallback to a character if the braindump produced no events.
-    const peerTarget = event?.id || character?.id;
+    // Deep-dive opens the MAIN CHARACTER's card first (Ben, 2026-09-13); a
+    // scene is the fallback when the braindump produced no characters.
+    const peerTarget = character?.id || event?.id;
     targetCardRef.current = peerTarget ?? null;
 
     const steps: TourStep[] = [];
+
+    // 0) The receipt (2026-09-13): every dump ends with one, and it is now the
+    // board's account of what landed and what is owed. Always a step: the
+    // receipt renders on the same data update this walkthrough is built on,
+    // so a DOM check here ran a tick too early and skipped it. The engine
+    // retries the anchor for 3s and skips only if it never mounts.
+    {
+      steps.push({
+        id: 'wow-receipt',
+        selector: '[data-tour="receipt"]',
+        placement: 'side',
+        content: stepBody(
+          'Your receipt.',
+          'Every braindump ends with this: what landed and where it went, grouped by sequence. Anything the engine could not place waits below the line as a question for you, never a guess. It stays until you dismiss it.',
+        ),
+      });
+    }
 
     // 1) Cast — the engine pulled the characters you wrote + the ties between them.
     if (character) {
@@ -393,7 +411,10 @@ export default function WowFlow({
       id: 'wow-panel-suggestions',
       selector: '[data-tour="panel-suggestions"]',
       placement: 'side',
-      onEnter: () => onSetPanel(true),
+      // Open the panel WITH the section expanded (Ben, 2026-09-13): the
+      // section collapses by default whenever questions are waiting, so the
+      // step used to point at a closed header.
+      onEnter: () => onOpenPanelSection('suggestions'),
       content: stepBody(
         "It's already thinking ahead.",
         'Threads and arcs it noticed across your prose surface here as suggestions. Accept the ones that fit, dismiss the rest. Nothing lands without your say.',
@@ -409,7 +430,7 @@ export default function WowFlow({
       nextLabel: peerTarget ? "Open one of your cards →" : 'Got it →',
       content: stepBody(
         'And it tracked the facts.',
-        'Every fact your prose established is recorded here in the panel, not as cards to open. The real work happens back on the board. Let\'s open one of your scene cards.',
+        'Every fact your prose established is recorded here in the panel, not as cards to open. The real work happens back on the board. Let\'s open one of your cards.',
       ),
       onExit: () => {
         onSetPanel(false);
@@ -453,37 +474,6 @@ export default function WowFlow({
     }
   }, [phase, expandedCardId, startTour, endTour, onComplete]);
 
-  // Guide-ask: spotlight the Ask-peer button itself, in the tour's orange. This
-  // runs AFTER the full-card / bento walk, so the card is stable (no peer-focus
-  // glide) and anchoring to the footer button is reliable here. Advances when the
-  // peer actually opens.
-  useEffect(() => {
-    if (phase !== 'guide-ask') return;
-    const target = targetCardRef.current;
-    if (!target) { setPhase('answer'); return; }
-    if (peerOpenCardId === target) {
-      wowEvent('peer_asked');
-      endTour();
-      setPhase('answer');
-      return;
-    }
-    if (!guideAskStartedRef.current) {
-      guideAskStartedRef.current = true;
-      startTour(
-        [
-          {
-            id: 'wow-ask',
-            selector: `[data-tour="ask-peer-${target}"]`,
-            placement: 'side',
-            hideNext: true,
-            content: stepBody('Now ask the peer.', 'Click Ask peer on your card. It reads the whole thing and pushes back like a real reader.'),
-          },
-        ],
-        { lockScroll: false, onSkip: onComplete },
-      );
-    }
-  }, [phase, peerOpenCardId, startTour, endTour, onComplete]);
-
   // Block the bento's own Ask-peer button while the tour walks the opened card
   // (bento-intro / bento-tour), so the peer only fires through the tour's
   // scripted "Now try the peer" step + the canvas footer button at guide-ask.
@@ -493,6 +483,42 @@ export default function WowFlow({
     setWowBentoPeerActive(inBento);
     return () => setWowBentoPeerActive(false);
   }, [phase]);
+
+  // Sheet-ask: the peer is asked INSIDE the full sheet (Ben, 2026-09-13: run
+  // the peer sample through the full sheet too). The Peer chip is up, the
+  // sheet's own Ask button is spotlighted, and the step advances when an ask
+  // actually fires for the target card (PEER_ASK_EVENT).
+  const sheetAskStartedRef = useRef(false);
+  useEffect(() => {
+    if (phase !== 'sheet-ask') return;
+    const target = bentoTargetRef.current ?? targetCardRef.current;
+    if (!target) { setPhase('answer'); return; }
+    const onAsk = (e: Event) => {
+      const id = (e as CustomEvent<{ cardId?: string }>).detail?.cardId;
+      if (id !== target) return;
+      wowEvent('peer_asked', { surface: 'sheet' });
+      endTour();
+      setPhase('answer');
+    };
+    window.addEventListener(PEER_ASK_EVENT, onAsk);
+    if (!sheetAskStartedRef.current) {
+      sheetAskStartedRef.current = true;
+      requestOrbitCategory('working');
+      startTour(
+        [
+          {
+            id: 'wow-sheet-ask',
+            selector: '[data-tour="orbit-ask-peer"]',
+            placement: 'side',
+            hideNext: true,
+            content: stepBody('Now ask the peer.', 'Click Ask the peer. It reads this card and everything around it, then pushes back like a real reader.'),
+          },
+        ],
+        { lockScroll: false, blur: false, onSkip: onComplete },
+      );
+    }
+    return () => window.removeEventListener(PEER_ASK_EVENT, onAsk);
+  }, [phase, startTour, endTour, onComplete]);
 
   // Keep the guide-fullcard banner anchored just below the target card so the
   // prompt sits near what it's pointing at. Light poll + scroll/resize; falls
@@ -574,62 +600,69 @@ export default function WowFlow({
     }
   }, [phase, sheetOpenId, startTour, endTour, onComplete]);
 
-  // Bento-tour: fly through the opened card's sections — what each covers, what
-  // it tracks, and that it's a LIVING link the writer grows incrementally. Steps
-  // adapt to the opened card's type (the sheet is already open).
+  // Sheet walk (rebuilt 2026-09-13 for the orbit sheet, FIL-588): the focal
+  // card first, then each category chip in turn, selected for the writer as
+  // the step lands, ending on the Peer chip where the peer is asked in place.
+  // Steps adapt to the opened card's type; a chip the sheet lacks is skipped
+  // by the tour engine.
   useEffect(() => {
     if (phase !== 'bento-tour' || bentoTourStartedRef.current) return;
     bentoTourStartedRef.current = true;
     const card = (data?.entities ?? []).find((e) => e.id === bentoTargetRef.current);
     wowEvent('bento_tour_shown', { type: card?.type });
-    const bento = (id: string, headline: string, body: string): TourStep => ({
-      id: `wow-bento-${id}`,
-      selector: `[data-tour="bento-${id}"]`,
-      placement: 'side', // beside the tile, not over it
+    const chip = (id: string, headline: string, body: string): TourStep => ({
+      id: `wow-orbit-${id}`,
+      selector: `[data-tour="orbit-chip-${id}"]`,
+      placement: 'side',
+      onEnter: () => requestOrbitCategory(id),
       content: stepBody(headline, body),
     });
-    const living = (id: string): TourStep => ({
-      ...bento(
-        id,
+    const peerChip = (): TourStep => ({
+      ...chip(
+        'working',
         'A living link to your work.',
-        'The peer keeps its open questions here. Every answer you give updates this card and ripples through your beats, a living link to your development, not a static form. It grows as you do.',
+        'The peer keeps its open questions here. Every answer you give updates this card and ripples through your beats. It grows as you do.',
       ),
-      nextLabel: 'Now try the peer →',
-      onExit: () => { onOpenSheet(null); setPhase('guide-ask'); },
+      nextLabel: 'Now try the peer \u2192',
+      onExit: () => setPhase('sheet-ask'),
     });
     const steps: TourStep[] =
       card?.type === 'event'
         ? [
-            bento('summary', 'The summary.', 'The line of what happens in the scene. Everything around it is what the engine tracks about it.'),
-            bento('throughline', 'Where it sits.', 'Its place in your story order: what leads in, what follows, kept in sync as you build.'),
-            bento('knowledge', 'Who knows what, here.', 'The dramatic-irony layer, per scene: what the audience knows and what each character does not.'),
-            bento('established', 'What it establishes.', 'The facts this scene puts on the table, pulled from your prose, editable anytime.'),
-            bento('causality', 'What it sets in motion.', 'Causal links the engine inferred, layered on top of story order.'),
-            living('working'),
+            chip('cast', 'Who is in it.', 'The characters this scene involves, and what each one observably does in it.'),
+            chip('knowledge', 'Who knows what, here.', 'The dramatic-irony layer, per scene: what the audience knows and what each character does not.'),
+            chip('location', 'Where it happens.', 'The place this scene is set, pulled from your prose.'),
+            chip('arcs', 'Threads through it.', 'The arcs this scene moves, and where each one stands after it.'),
+            peerChip(),
           ]
         : card?.type === 'sequence'
         ? [
-            bento('summary', 'The summary.', 'The broad movement of this section up top. Everything around it is what the engine tracks about it.'),
-            bento('scenes', 'The scenes inside.', 'As you develop it, the individual scenes nest here and the sequence becomes a container on the board.'),
-            bento('throughline', 'Where it sits.', 'Its place in the story order, relative to the other sequences.'),
-            bento('arcs', 'Threads running through.', 'The arcs that thread across this stretch of the story.'),
-            living('questions'),
+            chip('scenes', 'The scenes inside.', 'The individual scenes nested in this sequence, in told order. As you develop it, the sequence becomes a container on the board.'),
+            peerChip(),
           ]
         : [
-            bento('identity', 'The summary.', 'Who they are, up top. Everything around it is what the engine tracks about them.'),
-            bento('knowledge', 'What they know.', 'Per scene: what they know, suspect, or are in the dark about. The dramatic-irony layer.'),
-            bento('arcs', 'Their arcs.', 'The threads they move through across the story.'),
-            bento('relationships', 'Their bonds.', 'Who they are to everyone else, tracked as the story develops.'),
-            bento('appears-in', 'Where they show up.', 'Every scene they touch, in story order.'),
-            living('working'),
+            chip('appears-in', 'Where they show up.', 'Every scene they touch, in story order, with what each one does to them.'),
+            chip('relationships', 'Their bonds.', 'Who they are to everyone else, tracked as the story develops.'),
+            chip('knowledge', 'What they know.', 'Per scene: what they know, suspect, or are in the dark about. The dramatic-irony layer.'),
+            chip('arcs', 'Their arcs.', 'The threads they move through across the story.'),
+            peerChip(),
           ];
-    startTour(steps, { lockScroll: false, onSkip: onComplete });
-  }, [phase, data, onOpenSheet, startTour, onComplete]);
+    // The sheet is open when this builds, so drop chip steps for chips this
+    // card does not have (a character with no knowledge yet): a missing
+    // anchor otherwise costs the engine's retry budget before it skips,
+    // which read as latency on Next (Ben, 2026-09-13).
+    const present = steps.filter((st) => {
+      const m = /orbit-chip-([a-z-]+)/.exec(st.selector ?? '');
+      return !m || !!document.querySelector(`[data-tour="orbit-chip-${m[1]}"]`);
+    });
+    startTour(present, { lockScroll: false, blur: false, onSkip: onComplete });
+  }, [phase, data, startTour, onComplete]);
 
   // Toolbar-tour: the remaining levers — build by hand, switch views, import.
   useEffect(() => {
     if (phase !== 'toolbar-tour' || toolbarTourStartedRef.current) return;
     toolbarTourStartedRef.current = true;
+    onOpenSheet(null); // the sheet covers the toolbar
     wowEvent('toolbar_tour_shown');
     startTour(
       [
@@ -658,7 +691,7 @@ export default function WowFlow({
       ],
       { lockScroll: false, onSkip: onComplete },
     );
-  }, [phase, startTour, onComplete]);
+  }, [phase, startTour, onComplete, onOpenSheet]);
 
   if (!active || phase === 'done') return null;
 

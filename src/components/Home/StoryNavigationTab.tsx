@@ -686,7 +686,8 @@ const StoryNavigationSidebar: React.FC<StoryNavigationProps> = ({
                         style={{
                             position: "fixed", left: 0, top: "75px", bottom: 0,
                             width: sidebarWidthPx,
-                            paddingTop: 50, paddingLeft: 6, paddingRight: 6, paddingBottom: 10,
+                            // paddingBottom: the last row scrolls clear of the desktop sync badge (bottom-left).
+                            paddingTop: 50, paddingLeft: 6, paddingRight: 6, paddingBottom: 50,
                             minWidth: collapsed ? `${collapsedWidth}px` : `${expandedWidth}px`,
                             borderRight: collapsed ? "none" : "1px solid rgba(255,255,255,0.06)",
                             boxShadow: collapsed ? "none" : "0 8px 24px rgba(0,0,0,0.4)",

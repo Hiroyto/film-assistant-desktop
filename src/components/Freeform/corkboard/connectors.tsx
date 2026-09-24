@@ -1,5 +1,5 @@
 // components/Freeform/corkboard/connectors.tsx — split out of freeform-corkboard.tsx (FIL-496).
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { getEntityColor } from '../../../components/Freeform/entityColors';
 import { type ProjectEdges, type ProjectEntity } from '../../../lib/freeformApi';
 import { CANVAS_PAD, CHAR_PILL_H, CHAR_PILL_W, COLLAPSED_H, COLLAPSED_W, COL_GAP, EVENT_CARD_W, EXPANDED_W, PEER_GAP, REL_COLLAPSED_H, REL_COLLAPSED_W, ROW_GAP, collapsedSizeOf, type Pos } from './constants';
@@ -175,6 +175,40 @@ export function ConnectorLayer({
   const labelById = new Map(
     entities.map((e) => [e.id, e.working_name ?? e.working_title ?? e.id]),
   );
+
+  // ONE LINE PER PAIR (2026-08-30). Two characters routinely accumulate more
+  // than one structural tie, and every one of them computed the same two
+  // endpoints, so the lines drew on top of each other and their labels landed
+  // in the same place. Observed live: Nell and the survey boat skipper carried
+  // three (`watches`, `offers_job_to`, and a chained `observes the boat
+  // associated with` that the write guard now rejects outright).
+  //
+  // Fanning them apart was the wrong answer. A pair is ONE relationship; extra
+  // predicates are the extraction describing it again, not a second bond. So
+  // the board draws the pair once, labelled with its most relationship-shaped
+  // predicate, and says how many other wordings are stacked behind it. The
+  // full list stays on the character sheet, which lists every tie.
+  //
+  // Primary = the most bond-shaped wording: relational suffixes first
+  // (`married_to`, `mentor_of`, `lives_with`), bare episode verbs last
+  // (`watches`, `paid`), earliest index breaking a tie.
+  const structuralPairs = useMemo(() => {
+    const score = (pred?: string) => {
+      const p = (pred ?? '').toLowerCase();
+      if (/(_of|_to|_with)$/.test(p)) return 0;
+      if (/_/.test(p)) return 1;
+      return 2;
+    };
+    const m = new Map<string, number[]>();
+    edges.structural.forEach((e, i) => {
+      const k = [e.from, e.to].slice().sort().join('|');
+      const arr = m.get(k);
+      if (arr) arr.push(i); else m.set(k, [i]);
+    });
+    m.forEach((arr) => arr.sort((a, b) =>
+      score(edges.structural[a].predicate) - score(edges.structural[b].predicate) || a - b));
+    return m;
+  }, [edges.structural]);
 
   return (
     <svg
@@ -565,8 +599,15 @@ export function ConnectorLayer({
         );
       })()}
 
-      {/* Structural — Character↔Character dashed lines with predicate label. */}
+      {/* Structural — Character↔Character dashed lines with predicate label.
+          One line per pair; see structuralPairs for why the extra ties on a
+          pair fold into a count instead of drawing. */}
       {edges.structural.map((e, i) => {
+        const pairKey = [e.from, e.to].slice().sort().join('|');
+        const siblings = structuralPairs.get(pairKey) ?? [i];
+        // Only the pair's primary tie draws; the rest are counted on its label.
+        if (siblings[0] !== i) return null;
+        const alsoCount = siblings.length - 1;
         // Suppress the dashed tie when a reified Relationship represents this
         // pair — the relationship card on the edge stands in for it.
         if (reifiedPairs?.has(`${e.from}|${e.to}`)) return null;
@@ -605,7 +646,10 @@ export function ConnectorLayer({
           : expandedCardId === e.from || expandedCardId === e.to ? expandedCardId
           : null;
         const rawPred = perspectiveId === e.to ? (e.inverse_predicate || e.predicate) : e.predicate;
-        const pred = (rawPred ?? '').replace(/_/g, ' ').toLowerCase();
+        // The pair's other wordings are counted, not drawn — see structuralPairs.
+        const predWords = (rawPred ?? '').replace(/_/g, ' ').toLowerCase();
+        const alsoTag = alsoCount > 0 ? ` +${alsoCount}` : '';
+        const pred = predWords + alsoTag;
         const edgeKey = `s|${e.from}|${e.to}`;
         const isHovered = !linkDrag && hoveredEdgeKey === edgeKey;
         const editable = !!onEditStructural && !linkDrag;
@@ -673,7 +717,12 @@ export function ConnectorLayer({
                     textAnchor="middle"
                     style={{ letterSpacing: 0.3 }}
                   >
-                    {pred}
+                    {predWords}
+                    {alsoTag && (
+                      // Dimmed so the count reads as a count, not as more of
+                      // the predicate.
+                      <tspan opacity={0.6}>{alsoTag}</tspan>
+                    )}
                   </text>
                 </g>
               );

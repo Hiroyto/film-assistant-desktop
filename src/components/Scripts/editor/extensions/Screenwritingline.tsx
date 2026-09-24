@@ -1,6 +1,7 @@
 import { Node, mergeAttributes } from "@tiptap/core";
 //screenwriting line type each line can only be one of these types
 export type ScreenwritingLineType =
+  | "title"
   | "scene"
   | "description"
   | "character"
@@ -17,6 +18,13 @@ declare module "@tiptap/core" {
     };
   }
 }
+
+// Title-page line roles (mirror the classifier's TITLE_MARKER vocabulary).
+const TITLE_CREDIT = /^(written|screenplay|teleplay|story|created|original screenplay|an original screenplay|adapted|directed|based)\b/i;
+// Contact block: email, phone, URL, rights, draft / revision / registration
+// lines, and a draft date. Every such line is contact so the block's push
+// (freeform-script.tsx) lands once, on the first of them.
+const TITLE_CONTACT = /@|\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b|\brights reserved\b|copyright|©|\bwga\b|\bdraft\b|\brevision\b|\bregistered\b|\b[a-z0-9-]+\.(com|net|org|io|co|uk|me|tv|film)\b|^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.? \d{1,2},? \d{4}$|^\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}$/i;
 
 // Create the custom paragraph node for screenwriting
 export const ScreenwritingParagraph = Node.create({
@@ -107,7 +115,17 @@ export const ScreenwritingParagraph = Node.create({
     }
   },
 
-  renderHTML({ HTMLAttributes }) {
+  renderHTML({ node, HTMLAttributes }) {
+    // TITLE PAGE ROLES (2026-09-15): a title line's role rides as a class so
+    // the stylesheet can lay the page out the Final Draft way (title a third
+    // of the way down, a gap before each credit line, contact block
+    // bottom-left) without a second data model. Derived from the text, never
+    // stored.
+    if (node.attrs.lineType === "title") {
+      const t = node.textContent.trim();
+      const role = TITLE_CONTACT.test(t) ? "ff-title-contact" : TITLE_CREDIT.test(t) ? "ff-title-credit" : "";
+      if (role) return ["p", mergeAttributes(HTMLAttributes, { class: role }), 0];
+    }
     return ["p", mergeAttributes(HTMLAttributes), 0];
   },
 

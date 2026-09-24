@@ -140,24 +140,37 @@ export function exportScreenplayToPdf(
         if (y + needed > MARGIN_TOP + CONTENT_H) addPage();
     };
 
-    // ── Title block ──────────────────────────────────────────────────────────
+    // ── Title page ───────────────────────────────────────────────────────────
+    // The document's own `title` lines (import detection, or a whole-script
+    // paste) render centred, one per line, a third of the way down; a script
+    // without them gets the stock title block.
     const cleanTitle = title.trim() || "Screenplay";
-    const titleY = PAGE_H / 2 - 10;
-
-    doc.setFont("courier", "bold");
-    doc.setFontSize(14);
-    doc.text(cleanTitle.toUpperCase(), PAGE_W / 2, titleY, { align: "center" });
-
-    doc.setFont("courier", "normal");
-    doc.setFontSize(FONT_SIZE);
-    doc.text("Written with filmassistant.io", PAGE_W / 2, titleY + 12, { align: "center" });
+    const titleLines = lines.filter(l => l.lineType === "title");
+    if (titleLines.length) {
+        let ty = PAGE_H / 3;
+        doc.setFont("courier", "normal");
+        doc.setFontSize(FONT_SIZE);
+        for (const l of titleLines) {
+            doc.text(l.text, PAGE_W / 2, ty, { align: "center" });
+            ty += LINE_HEIGHT;
+        }
+    } else {
+        const titleY = PAGE_H / 2 - 10;
+        doc.setFont("courier", "bold");
+        doc.setFontSize(14);
+        doc.text(cleanTitle.toUpperCase(), PAGE_W / 2, titleY, { align: "center" });
+        doc.setFont("courier", "normal");
+        doc.setFontSize(FONT_SIZE);
+        doc.text("Written with filmassistant.io", PAGE_W / 2, titleY + 12, { align: "center" });
+    }
 
     // Start screenplay content on page 2
     addPage();
 
     // ── Render each line ─────────────────────────────────────────────────────
-    for (let i = 0; i < lines.length; i++) {
-        const { lineType, text } = lines[i];
+    const body = lines.filter(l => l.lineType !== "title");
+    for (let i = 0; i < body.length; i++) {
+        const { lineType, text } = body[i];
 
         const indent = INDENT[lineType] ?? INDENT.description;
         const spaceBefore = SPACE_BEFORE[lineType] ?? 0;

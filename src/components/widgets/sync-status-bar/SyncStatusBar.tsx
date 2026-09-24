@@ -1,7 +1,8 @@
 // SCR-0028 shell.sync-status-bar (modernizado / BC-08). Peça CENTRAL da UX local-first:
-// footer permanente refletindo online | syncing | offline | conflict, com ícones lucide
-// e tokens semânticos (DEV-002 textos agent-proposed). Conflict tem prioridade máxima e,
-// no click, abre a conflict-resolution-modal. Só renderiza no desktop (AD-07).
+// badge flutuante permanente (posicionada pelo DesktopShell) refletindo online | syncing |
+// offline | conflict, com ícones lucide e tokens semânticos (DEV-002 textos agent-proposed).
+// Conflict tem prioridade máxima e, no click, abre a conflict-resolution-modal. Só
+// renderiza no desktop (AD-07).
 import React, { useEffect, useState } from 'react';
 import { WifiHigh, RefreshCw, WifiOff, AlertTriangle, LucideIcon } from 'lucide-react';
 import { on, SyncState } from '../../../data/sync-agent/events';
@@ -71,21 +72,23 @@ export function SyncStatusBar({ onRetry, onViewConflicts }: SyncStatusBarProps):
 
   return (
     <div
-      className="flex h-7 items-center gap-2 border-t border-glassBg bg-bgdark2 px-3 text-xs text-fontWhite07"
+      // Pill sólida (bg + borda + sombra): flutua sobre conteúdo com blur, como a
+      // sidebar da Home. Os textos ficam inteiros — a paridade (spec 12) os exige.
+      className="inline-flex h-[26px] items-center gap-2 whitespace-nowrap rounded-full border border-glassBg bg-bgdark2 px-3 text-xs text-fontWhite07 shadow-[0_4px_14px_rgba(0,0,0,0.35)]"
       role="status"
       aria-live="polite"
       title={view.tooltip}
     >
-      <Icon size={14} className={`${view.color} ${view.spin ? 'animate-slow-spin' : ''}`} />
+      <Icon size={13} className={`${view.color} ${view.spin ? 'animate-slow-spin' : ''}`} />
       <span className={view.color}>{view.label(depth)}</span>
 
       {state === 'conflict' && (
-        <button type="button" onClick={onViewConflicts} className="ml-auto text-semanticError underline">
+        <button type="button" onClick={onViewConflicts} className="ml-1 text-semanticError underline">
           Resolve
         </button>
       )}
       {(state === 'offline' || state === 'syncing') && onRetry && (
-        <button type="button" onClick={onRetry} className="ml-auto text-orange hover:text-hoverOrangeBorder">
+        <button type="button" onClick={onRetry} className="ml-1 text-orange hover:text-hoverOrangeBorder">
           Retry sync
         </button>
       )}

@@ -335,9 +335,10 @@ export function ArcEvokesRow({
 }) {
   const dark = useThemeMode() === 'dark';
   const ns = row.narrative_status || 'on_screen';
-  const allowedTransitions =
-    EVOKES_TRANSITIONS_BY_NARRATIVE_STATUS[ns] ?? EVOKES_TRANSITIONS;
-  const allowedSet = useMemo(() => new Set(allowedTransitions), [allowedTransitions]);
+  const allowedSet = useMemo(
+    () => new Set(EVOKES_TRANSITIONS_BY_NARRATIVE_STATUS[ns] ?? EVOKES_TRANSITIONS),
+    [ns],
+  );
 
   return (
     <div
@@ -1290,6 +1291,79 @@ export function EstablishedHereEditor({
 // buckets (KNOWS / SUSPECTS / IN THE DARK), each an EdgeChips of knowers.
 // Adding a knower to a bucket auto-moves them out of any other (set-knowledge
 // drops the prior edge first). ✕ clears their knowledge of that fact.
+/** The three knowledge buckets for ONE fact: who knows it, who suspects, who
+ *  is in the dark, each an add/remove chip row writing straight through to
+ *  set-knowledge. Extracted from KnowledgeEditor (FIL-588) so the orbit's
+ *  expanded knowledge card and the panel's fact list are the same control —
+ *  two copies of this would drift the moment either grew a state. */
+export const KNOWLEDGE_BUCKETS: Array<{
+  state: 'knows' | 'suspects' | 'doesnt_know';
+  label: string;
+  color: string;
+  match: (s: string) => boolean;
+}> = [
+  { state: 'knows', label: 'KNOWS', color: '#059669', match: (s) => s === 'knows' },
+  { state: 'suspects', label: 'SUSPECTS', color: '#d97706', match: (s) => s === 'suspects' },
+  { state: 'doesnt_know', label: 'IN THE DARK', color: '#dc2626', match: (s) => s !== 'knows' && s !== 'suspects' },
+];
+
+export function KnowledgeFactBuckets({
+  edgesFor,
+  knowerCandidates,
+  resolveName,
+  onSet,
+  compact,
+}: {
+  edgesFor: Array<{ knower_id: string; state: string }>;
+  knowerCandidates: Array<{ id: string; label: string }>;
+  resolveName: (id: string) => string;
+  onSet: (knowerId: string, state: 'knows' | 'suspects' | 'doesnt_know' | 'none') => Promise<void> | void;
+  /** Stacks the label above its chips — for the narrow orbit card, where a
+   *  74px label gutter would leave nothing for the names. */
+  compact?: boolean;
+}) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: compact ? 8 : 6 }}>
+      {KNOWLEDGE_BUCKETS.map((b) => {
+        const inBucket = new Set(edgesFor.filter((k) => b.match(k.state)).map((k) => k.knower_id));
+        return (
+          <div
+            key={b.state}
+            style={{
+              display: 'flex',
+              flexDirection: compact ? 'column' : 'row',
+              alignItems: compact ? 'stretch' : 'flex-start',
+              gap: compact ? 4 : 8,
+            }}
+          >
+            <span
+              style={{
+                fontSize: 9, fontWeight: 700, letterSpacing: 0.5, color: b.color,
+                minWidth: compact ? undefined : 74,
+                marginTop: compact ? 0 : 5,
+                flexShrink: 0,
+              }}
+            >
+              {b.label}
+            </span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <EdgeChips
+                accent={b.color}
+                addLabel="who"
+                emptyHint="—"
+                items={[...inBucket].map((id) => ({ id, label: resolveName(id) }))}
+                candidates={knowerCandidates.filter((c) => !inBucket.has(c.id))}
+                onAdd={async (id) => { await onSet(id, b.state); }}
+                onRemove={async (id) => { await onSet(id, 'none'); }}
+              />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function KnowledgeEditor({
   eventId,
   facts,
@@ -1314,11 +1388,6 @@ export function KnowledgeEditor({
   onChanged: () => void;
 }) {
   const dark = useThemeMode() === 'dark';
-  const BUCKETS: Array<{ state: 'knows' | 'suspects' | 'doesnt_know'; label: string; color: string; match: (s: string) => boolean }> = [
-    { state: 'knows', label: 'KNOWS', color: '#059669', match: (s) => s === 'knows' },
-    { state: 'suspects', label: 'SUSPECTS', color: '#d97706', match: (s) => s === 'suspects' },
-    { state: 'doesnt_know', label: 'IN THE DARK', color: '#dc2626', match: (s) => s !== 'knows' && s !== 'suspects' },
-  ];
   const set = (knowerId: string, infoId: string, state: 'knows' | 'suspects' | 'doesnt_know' | 'none') =>
     setKnowledge({ projectId, knowerId, infoId, state, eventId }, auth.token).then(() => onChanged());
   const setIrony = (infoId: string, hidden: boolean) =>
@@ -1384,29 +1453,12 @@ export function KnowledgeEditor({
                 hide
               </button>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {BUCKETS.map((b) => {
-                const inBucket = new Set(ks.filter((k) => b.match(k.state)).map((k) => k.knower_id));
-                return (
-                  <div key={b.state} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                    <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.5, color: b.color, minWidth: 74, marginTop: 5, flexShrink: 0 }}>
-                      {b.label}
-                    </span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <EdgeChips
-                        accent={b.color}
-                        addLabel="who"
-                        emptyHint="—"
-                        items={[...inBucket].map((id) => ({ id, label: resolveName(id) }))}
-                        candidates={knowerCandidates.filter((c) => !inBucket.has(c.id))}
-                        onAdd={(id) => set(id, f.id, b.state)}
-                        onRemove={(id) => set(id, f.id, 'none')}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            <KnowledgeFactBuckets
+              edgesFor={ks}
+              knowerCandidates={knowerCandidates}
+              resolveName={resolveName}
+              onSet={(knowerId, state) => set(knowerId, f.id, state)}
+            />
           </div>
         );
       })}
@@ -1757,6 +1809,51 @@ export function EventThroughlineEditor({
   );
 }
 
+/** The editable half of one EVOKES row: what the arc is doing at this scene
+ *  (transition) and where it stands (state). Extracted from EventEvokesEditor
+ *  (FIL-588) so the orbit's arc card and the panel drive the same writes —
+ *  the transition vocabulary is gated by narrative status, and two copies of
+ *  that rule would drift. */
+export function EvokesArcControls({
+  transition,
+  stateAtEvent,
+  eventNarrativeStatus,
+  disabled,
+  onUpdate,
+}: {
+  transition: EvokesTransition | '';
+  stateAtEvent: string;
+  eventNarrativeStatus: string;
+  disabled?: boolean;
+  onUpdate: (fields: { stateAtEvent?: string; transition?: EvokesTransition | '' }) => void;
+}) {
+  const dark = useThemeMode() === 'dark';
+  const arcColor = getEntityColor('arc');
+  const allowed = useMemo(
+    () => new Set(EVOKES_TRANSITIONS_BY_NARRATIVE_STATUS[eventNarrativeStatus] ?? EVOKES_TRANSITIONS),
+    [eventNarrativeStatus],
+  );
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <TransitionSelect
+        value={transition || ''}
+        allowed={allowed}
+        disabled={!!disabled}
+        accent={arcColor}
+        dark={dark}
+        backstory={eventNarrativeStatus === 'backstory'}
+        onChange={(v) => onUpdate({ transition: v })}
+      />
+      <InlineStateAtEvent
+        value={stateAtEvent}
+        disabled={!!disabled}
+        accentColor={arcColor}
+        onSave={(next) => onUpdate({ stateAtEvent: next })}
+      />
+    </div>
+  );
+}
+
 export function EventEvokesEditor({
   eventId,
   eventNarrativeStatus,
@@ -1795,10 +1892,6 @@ export function EventEvokesEditor({
         ),
     [arcsAvailable, taggedIds],
   );
-
-  const allowedTransitions =
-    EVOKES_TRANSITIONS_BY_NARRATIVE_STATUS[eventNarrativeStatus] ?? EVOKES_TRANSITIONS;
-  const allowedSet = useMemo(() => new Set(allowedTransitions), [allowedTransitions]);
 
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -1930,22 +2023,12 @@ export function EventEvokesEditor({
               ✕
             </button>
           </div>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
-            <TransitionSelect
-              value={row.transition || ''}
-              allowed={allowedSet}
-              disabled={busy}
-              accent={arcColor}
-              dark={dark}
-              backstory={eventNarrativeStatus === 'backstory'}
-              onChange={(v) => updateRow(row.arc_id, { transition: v })}
-            />
-          </div>
-          <InlineStateAtEvent
-            value={row.state_at_event}
+          <EvokesArcControls
+            transition={row.transition || ''}
+            stateAtEvent={row.state_at_event}
+            eventNarrativeStatus={eventNarrativeStatus}
             disabled={busy}
-            accentColor={arcColor}
-            onSave={(next) => updateRow(row.arc_id, { stateAtEvent: next })}
+            onUpdate={(fields) => updateRow(row.arc_id, fields)}
           />
         </div>
       ))}

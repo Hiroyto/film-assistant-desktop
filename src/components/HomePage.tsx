@@ -862,11 +862,10 @@ export function HomePage(props: HomePageProps) {
         <div className="hero-banner">
           <div className="hero-content">
             <h1 className="hero-title">
-              Every Great Story Starts<br />
-              with a <span className="gradient-text">Single Spark</span>
+              Start with <span className="gradient-text">anything you've got</span>
             </h1>
             <p className="hero-subtitle">
-              Turn a spark into your next project.
+              A line, a treatment, a finished draft. It all becomes your living outline.
             </p>
 
             {/* Brainstorm input field with auto-typing */}

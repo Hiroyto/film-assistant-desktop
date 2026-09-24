@@ -10,8 +10,11 @@
 
 import React, { useEffect } from 'react';
 import InternIcon from './InternIcon';
+import { BraindumpIcon } from './corkboard/emptyState';
 import { PEER_BLUE, TOAST_WIDTH, TOAST_DWELL_MS } from './tokens';
 import type { CascadeEntity } from './types';
+
+const ORANGE = '#ff8c42';
 
 interface CascadeToastProps {
   newEntities: CascadeEntity[];
@@ -21,6 +24,12 @@ interface CascadeToastProps {
   onViewDetails?: () => void;
   /** Disable auto-dwell timer (e.g., during tests). */
   noAutoDismiss?: boolean;
+  /** Which lane landed these cards. Braindumps and cascades both drop new
+   *  cards on the board while the writer is looking elsewhere, so they get
+   *  the same receipt; only the mark, the accent and one line differ. */
+  source?: 'cascade' | 'braindump';
+  /** Facts established by the same run, counted rather than listed. */
+  factCount?: number;
 }
 
 const CascadeToast: React.FC<CascadeToastProps> = ({
@@ -28,7 +37,11 @@ const CascadeToast: React.FC<CascadeToastProps> = ({
   onCollapseToTray,
   onViewDetails,
   noAutoDismiss = false,
+  source = 'cascade',
+  factCount = 0,
 }) => {
+  const dump = source === 'braindump';
+  const accent = dump ? ORANGE : PEER_BLUE;
   useEffect(() => {
     if (noAutoDismiss) return;
     const t = setTimeout(onCollapseToTray, TOAST_DWELL_MS);
@@ -46,17 +59,21 @@ const CascadeToast: React.FC<CascadeToastProps> = ({
       style={{
         width: TOAST_WIDTH,
         background: 'linear-gradient(135deg, rgba(40,50,60,0.95) 0%, rgba(35,45,55,0.95) 100%)',
-        border: '1px solid rgba(84, 191, 219, 0.3)',
-        borderLeft: `3px solid ${PEER_BLUE}`,
+        border: `1px solid ${dump ? 'rgba(255,140,66,0.3)' : 'rgba(84, 191, 219, 0.3)'}`,
+        borderLeft: `3px solid ${accent}`,
         boxShadow: '0 12px 40px rgba(0, 0, 0, 0.5)',
       }}
     >
       {/* Header */}
       <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2" style={{ color: PEER_BLUE }}>
-          <InternIcon size={16} />
+        <div className="flex items-center gap-2" style={{ color: accent }}>
+          {dump ? <BraindumpIcon size={16} /> : <InternIcon size={16} />}
+          {/* "Cards", not "entities". The writer-facing word for the things on
+              the board, and the one Paul reached for unprompted. */}
           <span className="text-sm font-medium">
-            {newEntities.length} new entit{newEntities.length === 1 ? 'y' : 'ies'}
+            {newEntities.length === 0
+              ? `${factCount} new fact${factCount === 1 ? '' : 's'}`
+              : `${newEntities.length} new card${newEntities.length === 1 ? '' : 's'}`}
           </span>
         </div>
         <button
@@ -70,16 +87,26 @@ const CascadeToast: React.FC<CascadeToastProps> = ({
       </div>
 
       {/* Body */}
-      <p className="text-[13px] text-fontWhite07 mb-1">Your response added:</p>
+      <p className="text-[13px] text-fontWhite07 mb-1">
+        {dump ? 'Your braindump added:' : 'Your response added:'}
+      </p>
       <ul className="text-[13px] text-fontWhite07 mb-3 ml-1">
         {inlineEntities.map((e, i) => (
           <li key={`${e.kind}:${e.workingName}:${i}`} className="leading-snug">
             • {e.workingName}{' '}
             <span className="text-fontGray">({e.kind})</span>
+            {e.placement && (
+              <span className="block ml-3 text-fontGray">{e.placement}</span>
+            )}
           </li>
         ))}
         {overflowCount > 0 && (
           <li className="text-fontGray italic leading-snug">+ {overflowCount} more</li>
+        )}
+        {factCount > 0 && (
+          <li className="text-fontGray leading-snug">
+            and {factCount} fact{factCount === 1 ? '' : 's'}
+          </li>
         )}
       </ul>
 

@@ -162,9 +162,13 @@ export function Shell({
   onRename,
   onOpenScript,
   onPrefetchScript,
+  headerExtra,
   children,
 }: {
   storyId?: string;
+  /** Rendered on the title row, right of the title and left of "Script →".
+   *  The story-facts strip lives here so it costs the board no height. */
+  headerExtra?: React.ReactNode;
   /** The story's title from the user's works record; falls back to "Corkboard". */
   title?: string;
   /** Real freeform stories can be renamed inline; demo/wow can't. */
@@ -229,6 +233,25 @@ export function Shell({
           50%      { opacity: 0.3; }
         }
         @keyframes cb-spin { to { transform: rotate(360deg); } }
+        /* The receipt (corkboard/receipt.tsx). Rows are board jumps, so they
+           need to read as clickable before you click them. */
+        @keyframes ffcardin { from { opacity: 0; transform: translateX(8px) scale(0.98); } to { opacity: 1; transform: none; } }
+        .ff-receipt-head:hover { background: rgba(34,197,94,0.09); }
+        /* Jump target. The receipt scrolls the board to a card, and without a
+           mark the writer has to work out which of the cards now in view they
+           asked for. Outline rather than box-shadow: the card sets its shadow
+           inline, and inline wins. */
+        .ff-jump-hit { outline: 2px solid rgba(255,140,66,0); outline-offset: 3px; animation: ffjumphit 1.8s ease-out forwards; }
+        @keyframes ffjumphit {
+          0%   { outline-color: rgba(255,140,66,0); }
+          10%  { outline-color: rgba(255,140,66,0.95); }
+          65%  { outline-color: rgba(255,140,66,0.95); }
+          100% { outline-color: rgba(255,140,66,0); }
+        }
+        .ff-receipt-ref .ff-receipt-go { opacity: 0; color: #6b6b74; }
+        .ff-receipt-ref:hover { background: rgba(255,255,255,0.045); border-left-color: #3b82f6 !important; }
+        .ff-receipt-ref:hover .ff-receipt-sc { color: #ff8c42 !important; }
+        .ff-receipt-ref:hover .ff-receipt-go { opacity: 1; color: #3b82f6; }
         @keyframes cb-glow-pulse {
           0%, 100% { opacity: 0.35; transform: scale(0.92); }
           50%      { opacity: 0.7;  transform: scale(1.06); }
@@ -349,6 +372,7 @@ export function Shell({
             )}
           </h1>
         )}
+        {headerExtra}
         <div style={{ flex: 1 }} />
         {onOpenScript && (
           <button

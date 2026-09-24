@@ -244,7 +244,20 @@ const CARD_TYPES = new Set(['character', 'event', 'location', 'relationship', 's
 export function mergeGraphDelta(
   prev: ListProjectEntitiesResponse,
   delta: GraphDelta,
+  opts?: {
+    /** RE-APPLYING an old delta over a NEWER server payload (the 60s
+     *  anti-clobber window in applyPendingDeltas): the delta may only ADD
+     *  what the payload lacks, never overwrite an entity the server already
+     *  returned. Without this, the mint delta's `staged: '1'` kept
+     *  re-flagging cards the server had since released — a kept card
+     *  vanished behind the master lens and the strip synthesized a phantom
+     *  'Where does it go?' for a full minute after every dump (observed
+     *  live three times before it was caught, 2026-08-31). A delta arriving
+     *  FRESH still overwrites: at that moment it is newer than the payload. */
+    additiveOnly?: boolean;
+  },
 ): ListProjectEntitiesResponse {
+  const additiveOnly = opts?.additiveOnly === true;
   const entities = [...prev.entities];
   const entIdx = new Map(entities.map((e, i) => [e.id, i] as const));
   for (const ent of delta.entities ?? []) {
@@ -253,7 +266,7 @@ export function mergeGraphDelta(
     if (i === undefined) {
       entIdx.set(ent.id, entities.length);
       entities.push(ent);
-    } else {
+    } else if (!additiveOnly) {
       entities[i] = { ...entities[i], ...ent, deleted_at: entities[i].deleted_at };
     }
   }

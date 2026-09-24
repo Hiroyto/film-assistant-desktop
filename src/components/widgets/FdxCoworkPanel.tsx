@@ -73,7 +73,7 @@ export function FdxCoworkPanel(): JSX.Element | null {
   };
 
   const box: React.CSSProperties = {
-    position: 'fixed', left: 12, bottom: 40, zIndex: 45, width: 300, // esquerda: não disputa com os botões de import
+    position: 'fixed', left: 12, bottom: 48, zIndex: 45, width: 300, // acima da badge de sync (bottom 12 + 26 + folga)
     background: '#1f1f22', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10,
     padding: 12, color: 'rgba(255,255,255,0.9)', fontSize: 12,
     boxShadow: '0 8px 24px rgba(0,0,0,0.4)', fontFamily: 'ui-sans-serif, system-ui, sans-serif',

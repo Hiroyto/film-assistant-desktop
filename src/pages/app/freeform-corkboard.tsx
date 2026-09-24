@@ -22,13 +22,16 @@ import 'react-grid-layout/css/styles.css';
 import 'react-resizable/css/styles.css';
 import CascadeSummaryPanel from '../../components/Freeform/CascadeSummaryPanel';
 import CascadeToast from '../../components/Freeform/CascadeToast';
+import { Receipt, type AppliedRow, type ReceiptGroup } from '../../components/Freeform/corkboard/receipt';
 import RecentUpdatesTray from '../../components/Freeform/RecentUpdatesTray';
 import { getEntityColor, hexToRgba } from '../../components/Freeform/entityColors';
 import { PEER_BLUE } from '../../components/Freeform/tokens';
-import { FdxCoworkControl } from '../../components/widgets/FdxCoworkControl';
+import { FdxCoworkControl, startFdxCowork } from '../../components/widgets/FdxCoworkControl';
+import { remapFdxSyncCard } from '../../lib/fdxSync';
 import { isDesktop } from '../../lib/ipcClient';
 import { flushPushNow } from '../../data/desktop-lifecycle';
-import { SupersessionRequiredError, acceptArcSuggestion, answerStagedQuestion, createArc, createArcFromEvents, createCard, createInformation, createSequence, deleteArc, deleteCard, dismissArcSuggestion, enqueueCardExtraction, enqueueExtractionJob, getCardLayouts, isMockMode, listArcSuggestions, listCardQuestions, listProjectEntities, listStagedQuestions, placeStagedCard, promoteStructuralToRelationship, resolveNarrativeStatusFlip, restoreArc, restoreCard, slugForCard, tagSequenceContains, updateArc, updateCardDescription, updateCardName, updateCardNarrativeStatus, updateCardPosition, type ArcKind, type ArcSuggestion, type CardLayout, type EvokesTransition, type ListProjectEntitiesResponse, type NarrativeStatus, type PersistedQuestion, type ProjectEntity, type StagedQuestion, type SupersessionRequiredResponse } from '../../lib/freeformApi';
+import { SupersessionRequiredError, acceptArcSuggestion, answerStagedQuestion, saveStoryFact, deleteStoryFact, type StoryFactKind, createArc, createArcFromEvents, createCard, createInformation, createSequence, deleteArc, deleteCard, dismissArcSuggestion, enqueueCardExtraction, enqueueExtractionJob, getCardLayouts, isMockMode, listArcSuggestions, listCardQuestions, listProjectEntities, listBraindumps, listStagedQuestions, placeStagedCard, promoteStructuralToRelationship, resolveNarrativeStatusFlip, restoreArc, restoreCard, slugForCard, tagSequenceContains, updateArc, updateCardDescription, updateCardName, updateCardNarrativeStatus, updateCardPosition, type ArcKind, type ArcSuggestion, type BraindumpLogEntry, type CardLayout, type EvokesTransition, type ListProjectEntitiesResponse, type NarrativeStatus, type PersistedQuestion, type ProjectEntity, type StagedQuestion, type SupersessionRequiredResponse, tagEventEvokes
+} from '../../lib/freeformApi';
 import { prefetchScriptData } from '../../lib/scriptPrefetch';
 import { playPageWipe } from '../../lib/pageWipe';
 import { useCascadeEvents } from '../../lib/useCascadeEvents';
@@ -42,11 +45,12 @@ import { CardBox, EditableDescription, EditableName } from '../../components/Fre
 import { ARC_THREAD_PALETTE, ConnectorLayer, buildArcThread, computeAutoLayout, computePeerPosition, toldOrderEvents, type ThreadRect } from '../../components/Freeform/corkboard/connectors';
 import { ARC_BALL_H, ARC_BALL_W, ARC_DOT, BALL_DISPLACE_GAP, BALL_H, BALL_ID_ARCS, BALL_ID_BACKSTORY, BALL_ID_CHARACTERS, BALL_RAIL_PAD, BALL_ROW_GAP, BALL_STACK_GAP, BALL_TRANSITION_MS, BALL_W, CANVAS_PAD, CHAR_PILL_H, CHAR_PILL_W, CLUSTER_META, CLUSTER_ORDER, COL_GAP, COLLAPSED_H, COLLAPSED_W, DRAG_THRESHOLD_PX, EXPANDED_W, PEER_CARD_W, PEER_GAP, EVENT_CARD_W, REL_COLLAPSED_H, REL_COLLAPSED_W, ROW_GAP, collapsedSizeOf, type Pos } from '../../components/Freeform/corkboard/constants';
 import { CreateArcFromEventsModal, CreateCardModal, ResetProjectButton, SupersessionModal, type CreateModalKind } from '../../components/Freeform/corkboard/modals';
-import { BoardEmptyState } from '../../components/Freeform/corkboard/emptyState';
+import { BoardEmptyState, BraindumpIcon } from '../../components/Freeform/corkboard/emptyState';
 import { INFO_ACCENT, RightPanel, TrashOverlay } from '../../components/Freeform/corkboard/panels';
 import { FloatingPeerCard, QuestionComposer, notifyResponseExtracted, setPeerWriteActive } from '../../components/Freeform/corkboard/peer';
 import { ArcSheet, CharacterSheet, EventSheet, LocationSheet, RelationshipSheet, SequenceSheet } from '../../components/Freeform/corkboard/sheets';
 import { BraindumpMeter, CorkboardLoading, Shell } from '../../components/Freeform/corkboard/shell';
+import { StoryFactsStrip } from '../../components/Freeform/corkboard/storyFacts';
 import type { WinPhase } from '../../components/Freeform/corkboard/shell';
 import { computeCardSignals } from '../../components/Freeform/corkboard/signals';
 import { MoonIcon, SunIcon, THEME_STORE_KEY, ThemeCtx, type ThemeMode } from '../../components/Freeform/corkboard/theme';
@@ -80,6 +84,20 @@ function gridRegionPath(spans: Array<{ x0: number; y0: number; x1: number; y1: n
     p.push(`L ${spans[i].x0} ${spans[i].y0}`, `L ${spans[i - 1].x0} ${spans[i - 1].y1}`);
   }
   return `${p.join(' ')} Z`;
+}
+
+
+// ONE CARD PER ID (2026-09-13, seen live as an arc card "showing up twice"
+// during the first-run tour). An optimistic append after a create/accept
+// raced the socket delta carrying the same entity, so the array held the id
+// twice and React drew two cards on one key. Every optimistic insert goes
+// through here: an id already present is replaced in place, never appended.
+function withEntity(list: ProjectEntity[], ent: ProjectEntity): ProjectEntity[] {
+  const i = list.findIndex((e) => e.id === ent.id);
+  if (i < 0) return [...list, ent];
+  const next = list.slice();
+  next[i] = { ...list[i], ...ent };
+  return next;
 }
 
 export default function FreeformCorkboard() {
@@ -250,7 +268,10 @@ export default function FreeformCorkboard() {
     const now = Date.now();
     pendingDeltasRef.current = pendingDeltasRef.current.filter((p) => now - p.at < 60000);
     let out = payload;
-    for (const p of pendingDeltasRef.current) out = mergeGraphDelta(out, p.delta);
+    // Additive only: these deltas are OLDER than the payload under them —
+    // they exist to protect not-yet-persisted cards/edges from a mid-write
+    // refetch, never to overwrite props the server has since changed.
+    for (const p of pendingDeltasRef.current) out = mergeGraphDelta(out, p.delta, { additiveOnly: true });
     return out;
   }, []);
   // Alive-card count at submit — the meter shows THIS braindump's delta, not the
@@ -283,6 +304,72 @@ export default function FreeformCorkboard() {
   // wrap stale member spots instead of stacking. Consumed by the relayout effect.
   const relayoutWindowedRef = useRef(false);
   const dataRef = useRef<ListProjectEntitiesResponse | null>(null);
+  // Armed at braindump_complete, consumed by the first refetch that lands
+  // after it. See the receipt effect below.
+  const dumpReceiptRef = useRef<{
+    beforeIds: Set<string>; beforeInfoIds: Set<string>; beforeChars: Map<string, { traits: string[]; aliases: string[] }>; staged: number; at: string;
+  } | null>(null);
+  // Taken at SUBMIT, promoted to dumpReceiptRef when the run completes.
+  const dumpSnapshotRef = useRef<{
+    beforeIds: Set<string>; beforeInfoIds: Set<string>; beforeChars: Map<string, { traits: string[]; aliases: string[] }>;
+  } | null>(null);
+  const jumpHitTimerRef = useRef<number | null>(null);
+  // Where the writer parked the receipt. Null = the default berth under the
+  // toolbar's right edge. Viewport coordinates, because the card is fixed: it
+  // stays exactly where it was left as the board scrolls beneath it.
+  const [receiptPos, setReceiptPos] = useState<{ x: number; y: number } | null>(null);
+  const [receiptDragging, setReceiptDragging] = useState(false);
+  const receiptDragRef = useRef<{ dx: number; dy: number } | null>(null);
+  // RECEIPT ON RETURN (Ben, 2026-09-11). The live receipt above exists in one
+  // tab for one dump. Everything else (a dump finished after the tab closed,
+  // the carves the script lane ran while the writer wrote) has to be
+  // reconstructed on arrival: every dump newer than the SEEN CURSOR, the cards
+  // stamped with those dump ids, the questions they left, the answers the
+  // just-write mode applied. One receipt per return, never one per carve.
+  // The cursor is a timestamp in this browser, advanced when a receipt is
+  // dismissed; a missing cursor starts at now, so a story with a long history
+  // gets no wall of old news the first time this code runs.
+  const [braindumps, setBraindumps] = useState<BraindumpLogEntry[] | null>(null);
+  const [autoQuestions, setAutoQuestions] = useState<StagedQuestion[]>([]);
+  const [stagedLoaded, setStagedLoaded] = useState(false);
+  const receiptCursorKey = `ff-receipt-seen-${storyId ?? ''}`;
+  const [receiptCursor, setReceiptCursor] = useState<string>(() => {
+    try {
+      const v = localStorage.getItem(`ff-receipt-seen-${storyId ?? ''}`);
+      if (v) return v;
+      const now = new Date().toISOString();
+      localStorage.setItem(`ff-receipt-seen-${storyId ?? ''}`, now);
+      return now;
+    } catch { return new Date().toISOString(); }
+  });
+  const markSeen = useCallback((...ats: string[]) => {
+    setReceiptCursor((cur) => {
+      const v = ats.reduce((m, a) => (a && a > m ? a : m), cur);
+      try { localStorage.setItem(receiptCursorKey, v); } catch { /* ignore */ }
+      return v;
+    });
+  }, [receiptCursorKey]);
+  const arrivalDoneRef = useRef(false);
+  // The board hydrates from a local copy first (FIL-516) and the network
+  // payload lands after. The arrival receipt reads provenance the local copy
+  // may predate, so it waits for the first payload that came over the wire.
+  const [dataFresh, setDataFresh] = useState(false);
+  // The live receipt. Held in state rather than pushed at the toast stack
+  // because it outlives a toast: with questions outstanding it stays until the
+  // writer answers or defers, and it re-reads `pending` from stagedRows on
+  // every render so answering updates it in place.
+  const [receipt, setReceipt] = useState<{
+    at: string;
+    /** "From your braindump" | "From your pages" | "Since you were here". */
+    eyebrow: string;
+    ledeEmpty: string;
+    /** Sequences the dump(s) minted, for the lede. */
+    mintedSequences: number;
+    groups: ReceiptGroup[];
+    tail: { characters: number; locations: number; facts: number };
+    bars: Array<{ color: string; weight: number }>;
+    cardIds: Set<string>;
+  } | null>(null);
   // One-shot flag: arm the FIL-515 dock auto-collapse only on a real extraction
   // completion, so manually re-opening the empty dock later doesn't auto-close.
   const dockAutoCloseRef = useRef(false);
@@ -524,6 +611,8 @@ export default function FreeformCorkboard() {
     disabled: !auth || !storyId,
   });
 
+
+
   // D'-9 — bootstrap fetch of pending arc suggestions so suggestions
   // emitted while the writer was offline still surface as toasts/tray
   // entries when they come back.
@@ -571,23 +660,54 @@ export default function FreeformCorkboard() {
   useEffect(() => {
     if (!auth || !storyId) return;
     let cancelled = false;
-    listStagedQuestions({ projectId: storyId }, auth.token)
-      .then((res) => {
+    Promise.all([
+      listStagedQuestions({ projectId: storyId, includeCharacter: true, includeStory: true }, auth.token),
+      listStagedQuestions({ projectId: storyId, status: 'auto' }, auth.token).catch(() => ({ questions: [] })),
+    ])
+      .then(([res, autoRes]) => {
         if (cancelled) return;
         setStagedQuestions(res.questions ?? []);
+        setAutoQuestions(autoRes.questions ?? []);
+        setStagedLoaded(true);
       })
       .catch((err) => {
         console.warn('[corkboard] list-staged-questions failed:', err);
+        if (!cancelled) setStagedLoaded(true);
       });
     return () => {
       cancelled = true;
     };
   }, [auth, storyId]);
-  const refreshStagedQuestions = useCallback(async () => {
+  // The braindump log: dump ids with timestamps, the spine of the arrival
+  // receipt. Refreshed at braindump_complete so a dismiss can advance the
+  // cursor past the dump that just landed.
+  const refreshBraindumps = useCallback(async () => {
     if (!auth || !storyId) return;
     try {
-      const res = await listStagedQuestions({ projectId: storyId }, auth.token);
+      const res = await listBraindumps({ projectId: storyId }, auth.token);
+      setBraindumps(res.braindumps ?? []);
+    } catch (err) {
+      console.warn('[corkboard] list-braindumps failed:', err);
+      setBraindumps((cur) => cur ?? []);
+    }
+  }, [auth, storyId]);
+  const refreshBraindumpsRef = useRef(refreshBraindumps);
+  useEffect(() => { refreshBraindumpsRef.current = refreshBraindumps; }, [refreshBraindumps]);
+  useEffect(() => { void refreshBraindumps(); }, [refreshBraindumps]);
+  // Same out-of-order guard as refreshEntities: a stale rows response landing
+  // last can resurrect an answered row.
+  const stagedSeqRef = useRef(0);
+  const refreshStagedQuestions = useCallback(async () => {
+    if (!auth || !storyId) return;
+    const ticket = ++stagedSeqRef.current;
+    try {
+      const [res, autoRes] = await Promise.all([
+        listStagedQuestions({ projectId: storyId, includeCharacter: true, includeStory: true }, auth.token),
+        listStagedQuestions({ projectId: storyId, status: 'auto' }, auth.token).catch(() => ({ questions: [] })),
+      ]);
+      if (ticket !== stagedSeqRef.current) return;
       setStagedQuestions(res.questions ?? []);
+      setAutoQuestions(autoRes.questions ?? []);
     } catch (err) {
       console.warn('[corkboard] refresh-staged-questions failed:', err);
     }
@@ -602,12 +722,22 @@ export default function FreeformCorkboard() {
   // the manual refresh button. Re-fetches the auth token via fetchAuthSession
   // so a stale captured token (Cognito IDs expire after ~1hr) doesn't silently
   // 401 the request.
+  // OUT-OF-ORDER GUARD (2026-08-31). Two refetches can be in flight at once
+  // (a braindump_complete refetch plus an answer's refetch), and the OLDER
+  // response can land LAST — observed live as a kept section snapping back to
+  // held: the stale payload re-flagged it staged, the master lens hid it, and
+  // the strip's defensive union then synthesized a phantom 'Where does it
+  // go?' for a card the server had already released. Each call takes a
+  // ticket; only the newest response may write.
+  const refreshSeqRef = useRef(0);
   const refreshEntities = useCallback(async () => {
     if (!auth || !storyId) return;
+    const ticket = ++refreshSeqRef.current;
     try {
       const session = await fetchAuthSession();
       const freshToken = session.tokens?.idToken?.toString() ?? auth.token;
       const entitiesRes = await listProjectEntities({ projectId: storyId }, freshToken);
+      if (ticket !== refreshSeqRef.current) return; // a newer refetch owns the board
       setData((prev) => {
         // While a braindump is mid-flight, a poll can race the Neptune write —
         // and under NCU contention that write can take 45s+, so a fallback poll
@@ -636,6 +766,7 @@ export default function FreeformCorkboard() {
       console.info('[corkboard] refreshed entities — count:', entitiesRes.entities.length);
       // FIL-518 stage 2a — keep the local shelf current (payload only;
       // layouts are cached at load time and mutated locally by drags).
+      setDataFresh(true);
       void saveStoredGraph(storyId, { payload: entitiesRes });
     } catch (e) {
       console.warn('[corkboard] refresh failed:', e);
@@ -734,6 +865,7 @@ export default function FreeformCorkboard() {
         const layoutMap: Record<string, CardLayout> = {};
         for (const l of layoutsRes.layouts) layoutMap[l.cardId] = l;
         setData(overlayPending(storyId, entitiesRes));
+        setDataFresh(true);
         setLayouts(layoutMap);
         // Re-stock the shelf with the authoritative read.
         void saveStoredGraph(storyId, { payload: entitiesRes, layouts: layoutMap });
@@ -780,7 +912,19 @@ export default function FreeformCorkboard() {
   // are material the writer hasn't accepted into the story — they live in the
   // strip, never on the canvas, never in the trash.
   const aliveEntities = useMemo(
-    () => data?.entities.filter((e) => !e.deleted_at && e.staged !== '1') ?? [],
+    // Character-primary arcs (character_id set) never render on the board:
+    // no card, no thread, no ball. They live on the character sheet's band.
+    // Sheets still see them — they receive data.entities unfiltered.
+    () => {
+      const seen = new Set<string>();
+      return (data?.entities ?? []).filter((e) => {
+        if (e.deleted_at || e.staged === '1') return false;
+        if (e.type === 'arc' && String((e as any).character_id ?? '') !== '') return false;
+        if (seen.has(e.id)) return false; // belt: one card per id (see withEntity)
+        seen.add(e.id);
+        return true;
+      });
+    },
     [data],
   );
   // The same lens applied to EDGES: a held (staged) card mints with its
@@ -842,33 +986,82 @@ export default function FreeformCorkboard() {
     const rows = stagedQuestions
       .filter((q) => q.status === 'pending')
       .map((q) => {
-        const ent = entityById.get(q.cardId);
-        const target = q.target_vid ? entityById.get(q.target_vid) : undefined;
+        // CHARACTER rows (a braindump said something new about someone
+        // already on the board). The card is live; the row is about it, not
+        // beside it, so it has no `target` and never offers a merge. A rename
+        // row's own id is `${vid}#rename`, so the character is target_vid.
+        const isCharacterRow = q.kind === 'character';
+        // STORY rows are about an entry on the story's own list, not a card:
+        // the row carries everything it shows (kind, current words, proposed).
+        const isStoryRow = q.kind === 'story';
+        const ent = isStoryRow ? undefined : entityById.get(isCharacterRow ? (q.target_vid || q.cardId) : q.cardId);
+        const target = !isCharacterRow && !isStoryRow && q.target_vid ? entityById.get(q.target_vid) : undefined;
         return {
           cardId: q.cardId,
           kind: q.kind,
-          questionType: q.question_type as 'merge_suggestion' | 'compare' | 'unplaced' | 'altitude',
-          title: titleOf(ent) || q.candidate_title,
-          summary: summaryOf(ent),
+          questionType: q.question_type,
+          characterId: isCharacterRow ? (q.target_vid || q.cardId) : undefined,
+          proposedName: String(q.proposed_name ?? ''),
+          title: isStoryRow
+            ? String(q.candidate_title ?? '').replace(/^./, (c) => c.toUpperCase())
+            : titleOf(ent) || q.candidate_title,
+          summary: isStoryRow ? String(q.target_title ?? '') : summaryOf(ent),
           reason: q.reason,
           createdAt: q.created_at,
           sourceBraindumpId: q.source_braindump_id,
+          fromScript: q.source_format === 'screenplay',
           evidenceQuote: String(ent?.evidence_quote ?? ''),
           held: ent?.staged === '1',
+          proposedSummary: String(q.proposed_summary ?? ''),
+          // Order ask on a live member scene: confirmable when the card has a
+          // live section parent with at least one live sibling (the slot it
+          // renders in is then a real, declarable position).
+          confirmable: (() => {
+            if (q.question_type !== 'unplaced' || !ent || ent.staged === '1') return false;
+            const aliveIn = (id: string) => { const e = entityById.get(id); return !!e && !e.deleted_at; };
+            const parent = (data?.edges?.contains ?? []).find(
+              (c) => c.to === q.cardId && aliveIn(c.from) && entityById.get(c.from)?.type === 'sequence',
+            )?.from;
+            if (!parent) return false;
+            return (data?.edges?.contains ?? []).some((c) => c.from === parent && c.to !== q.cardId && aliveIn(c.to));
+          })(),
           target: target
             ? { id: target.id, title: titleOf(target), summary: summaryOf(target) }
-            : q.target_vid
+            : q.target_vid && !isCharacterRow && !isStoryRow
               ? { id: q.target_vid, title: q.target_title, summary: '' }
+              // THE FLIP (2026-09-01): held means "position unknown", so a
+              // held row honestly has nowhere to focus — no fabricated
+              // landing spot. Altitude questions on POSITIONED sections now
+              // ride the live card, and those rows focus themselves via the
+              // existing spotlight machinery.
               : null,
         };
       });
     const covered = new Set(rows.map((r) => r.cardId));
+    // THE FLIP: a held CLUSTER shows ONE row, its head. Held member scenes
+    // ride their held container; held sections chained behind another held
+    // section ride the head. Placing/keeping the head releases them, so a
+    // synthesized row each would ask questions that are not theirs to answer.
+    const ridesAHeldCard = (e: ProjectEntity): boolean => {
+      const heldHere = (id: string) => entityById.get(id)?.staged === '1';
+      if (e.type !== 'sequence') {
+        return (data?.edges?.contains ?? []).some((c) => c.to === e.id && heldHere(c.from));
+      }
+      // Immediate predecessor only: a held predecessor makes this a rider;
+      // a live (or absent) one makes this card its own head.
+      return (data?.edges?.sequence_precedes ?? []).some((x) => x.to === e.id && heldHere(x.from));
+    };
     for (const e of stagedEntities) {
-      if (covered.has(e.id) || answeringIds.has(e.id)) continue;
+      if (covered.has(e.id) || answeringIds.has(e.id) || ridesAHeldCard(e)) continue;
       rows.push({
         cardId: e.id,
         kind: e.type === 'sequence' ? 'section' : 'scene',
         questionType: 'unplaced',
+        characterId: undefined,
+        proposedName: '',
+        // Synthesised from a held card with no persisted row, so there is no
+        // source to attribute; these rows never render source-specific copy.
+        fromScript: false,
         title: titleOf(e),
         summary: summaryOf(e),
         reason: '',
@@ -876,6 +1069,8 @@ export default function FreeformCorkboard() {
         sourceBraindumpId: String(e.src_braindump ?? ''),
         evidenceQuote: String(e.evidence_quote ?? ''),
         held: true,
+        proposedSummary: '',
+        confirmable: false,
         target: null,
       });
     }
@@ -910,6 +1105,28 @@ export default function FreeformCorkboard() {
   // PICKER. Container-less scenes toggle into the new sequence; "create
   // empty" is always allowed. Mounted through the same grid as placement.
   const [wrapSeq, setWrapSeq] = useState<{ selected: Set<string>; name: string; busy: boolean } | null>(null);
+  // ARC TAGGING MORPH (Ben 2026-09-01): the arc sheet's empty timeline opens
+  // the wall in a select mode where ANY scene is pickable; Accept writes the
+  // EVOKES tags and returns to the sheet with the timeline populated.
+  const [arcTag, setArcTag] = useState<{ arcId: string; selected: Set<string>; busy: boolean } | null>(null);
+  const toggleArcTag = useCallback((id: string) => {
+    setArcTag((a) => {
+      if (!a || a.busy) return a;
+      const next = new Set(a.selected);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return { ...a, selected: next };
+    });
+  }, []);
+  const openArcTagging = useCallback((arcId: string) => {
+    const pre = new Set(
+      (dataRef.current?.edges?.evokes ?? [])
+        .filter((e) => e.arc_id === arcId)
+        .map((e) => e.event_id),
+    );
+    setSheetCardId(null); // the wall takes the screen; the sheet returns on accept
+    setArcTag({ arcId, selected: pre, busy: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const toggleWrapSelect = useCallback((id: string) => {
     setWrapSeq((w) => {
       if (!w) return w;
@@ -1205,6 +1422,284 @@ export default function FreeformCorkboard() {
     return m;
   }, [aliveEntities, data?.edges?.precedes]);
 
+  // BRAINDUMP RECEIPT. Shared builder: given the ids of the cards to account
+  // for, group them by destination in the board's own order. Cards HELD for
+  // a question are left out of the groups on purpose. They are not on the
+  // board, they are the count below the rule, and listing them in both places
+  // made the card fight itself (Ben, 2026-09-09). Used by the live path (the
+  // diff against the submit-time snapshot) and by the arrival path (cards
+  // stamped with an unseen dump id).
+  const buildReceipt = useCallback((
+    cardIds: Set<string>, factCount: number, applied: AppliedRow[] = [],
+    changedChars: Array<{ id: string; detail: string }> = [],
+  ) => {
+    if (!data) return null;
+    const added = (data.entities ?? []).filter(
+      (e) => !e.deleted_at && e.staged !== '1' && cardIds.has(e.id),
+    );
+    const chars = added.filter((e) => e.type === 'character').length;
+    const locs = added.filter((e) => e.type === 'location').length;
+    const seqs = added.filter((e) => e.type === 'sequence');
+    const scenes = added.filter((e) => e.type === 'event');
+    // Existing cards the auto-merge mode changed ride the same list, tagged
+    // (Ben, 2026-09-11: a separate "applied" block read as a second thing).
+    // A re-telling updates its card; a merge folds the duplicate into its
+    // target; a keep minted a card that is already in `scenes` as new.
+    const changed = applied
+      .filter((r) => r.answer === 'replace' || (r.answer === 'merge' && r.target))
+      .map((r) => ({
+        id: r.answer === 'replace' ? r.cardId : r.target!.id,
+        kind: (r.answer === 'replace' ? 'updated' : 'folded') as 'updated' | 'folded',
+        folded: r.answer === 'merge' ? r.title : undefined,
+      }))
+      .filter((c) => !cardIds.has(c.id));
+    if (added.length === 0 && factCount === 0 && changed.length === 0 && changedChars.length === 0) return null;
+
+    const titleOf = (id: string) => {
+      const v = (data.entities ?? []).find((x) => x.id === id);
+      return v ? String(v.working_title ?? v.working_name ?? '') : '';
+    };
+    const parentOf = new Map<string, string>();
+    for (const c of data.edges?.contains ?? []) parentOf.set(c.to, c.from);
+
+    // A destination is any sequence that received a new scene, plus every
+    // sequence this dump minted (on a first dump the new sequences ARE the
+    // destinations, which is why the grouping does not need a second layout
+    // at scale). Order follows the board's own spine sort.
+    const order = new Map<string, number>();
+    seqs.forEach((sq) => order.set(sq.id, 1e6 + (sceneNoById.get(sq.id) ?? 0)));
+    const byDest = new Map<string, ReceiptGroup>();
+    const ensure = (destId: string | null) => {
+      const key = destId ?? '~loose';
+      let g = byDest.get(key);
+      if (!g) {
+        const ent = destId ? (data.entities ?? []).find((x) => x.id === destId) : null;
+        g = {
+          destId,
+          destTitle: destId ? titleOf(destId) : 'Not in a sequence',
+          color: ((ent as any)?.color ?? '').trim() || getEntityColor('sequence'),
+          scenes: [],
+        };
+        byDest.set(key, g);
+      }
+      return g;
+    };
+    for (const sq of seqs) ensure(sq.id);
+    for (const sc of scenes) {
+      ensure(parentOf.get(sc.id) ?? null).scenes.push({
+        id: sc.id,
+        title: String(sc.working_title ?? sc.working_name ?? ''),
+        scNo: sceneNoById.get(sc.id),
+      });
+    }
+    for (const c of changed) {
+      const ent = (data.entities ?? []).find((x) => x.id === c.id);
+      if (!ent || ent.deleted_at) continue;
+      ensure(parentOf.get(c.id) ?? null).scenes.push({
+        id: c.id,
+        title: String(ent.working_title ?? ent.working_name ?? ''),
+        scNo: sceneNoById.get(c.id),
+        kind: c.kind,
+        folded: c.folded,
+      });
+    }
+    for (const g of byDest.values()) {
+      g.scenes.sort((a, b) => (a.scNo ?? 1e9) - (b.scNo ?? 1e9));
+    }
+    const groups = [...byDest.values()].sort((a, b) => {
+      const av = a.destId ? (sceneNoById.get(a.scenes[0]?.id ?? '') ?? order.get(a.destId) ?? 1e9) : 1e9;
+      const bv = b.destId ? (sceneNoById.get(b.scenes[0]?.id ?? '') ?? order.get(b.destId) ?? 1e9) : 1e9;
+      return av - bv;
+    });
+    // Characters this dump ADDED TO without minting: rows, not a tail count,
+    // because a changed card is the writer's to check and a number cannot be
+    // clicked. Last, after the story order, since they sit outside it.
+    const charRows = changedChars
+      .map((c) => {
+        const ent = (data.entities ?? []).find((x) => x.id === c.id);
+        return ent && !ent.deleted_at
+          ? { id: c.id, title: String(ent.working_name ?? ''), kind: 'updated' as const, detail: c.detail }
+          : null;
+      })
+      .filter((r): r is { id: string; title: string; kind: 'updated'; detail: string } => r !== null);
+    if (charRows.length) {
+      groups.push({ key: '~characters', destId: null, destTitle: 'Characters', color: getEntityColor('character'), scenes: charRows });
+    }
+    return {
+      groups,
+      tail: { characters: chars, locations: locs, facts: factCount },
+      bars: [
+        { color: getEntityColor('sequence'), weight: seqs.length * 2 },
+        { color: getEntityColor('event'), weight: scenes.length * 2 },
+        { color: getEntityColor('character'), weight: chars + changedChars.length },
+        { color: getEntityColor('location'), weight: locs },
+        { color: getEntityColor('information'), weight: factCount },
+      ],
+      cardIds: new Set(added.map((e) => e.id)),
+      counts: { scenes: scenes.length, sequences: seqs.length, characters: chars, locations: locs, changed: changed.length },
+    };
+  }, [data, sceneNoById]);
+
+  // LIVE PATH. The first board state to land after braindump_complete is the
+  // authoritative refetch, so diff it against the snapshot taken at submit.
+  useEffect(() => {
+    const armed = dumpReceiptRef.current;
+    if (!armed || !data) return;
+    dumpReceiptRef.current = null;
+    const ids = new Set(
+      (data.entities ?? []).filter((e) => !armed.beforeIds.has(e.id)).map((e) => e.id),
+    );
+    const factCount = (data.information ?? []).filter(
+      (f: any) => !armed.beforeInfoIds.has(String(f.id ?? f.information_id ?? '')),
+    ).length;
+    const changedChars: Array<{ id: string; detail: string }> = [];
+    for (const e of data.entities ?? []) {
+      if (e.type !== 'character' || e.deleted_at) continue;
+      const was = armed.beforeChars?.get(e.id);
+      if (!was) continue; // new this dump: already counted as a minted card
+      const traits = (Array.isArray(e.established_traits) ? e.established_traits.map(String) : []).filter((t) => !was.traits.includes(t));
+      const aliases = (Array.isArray((e as any).aliases) ? (e as any).aliases.map(String) : []).filter((a: string) => !was.aliases.includes(a));
+      if (traits.length === 0 && aliases.length === 0) continue;
+      changedChars.push({
+        id: e.id,
+        detail: [
+          aliases.length ? `also known as ${aliases.join(', ')}` : '',
+          traits.length ? `added: ${traits.join('; ')}` : '',
+        ].filter(Boolean).join(' \u00b7 '),
+      });
+    }
+    const built = buildReceipt(ids, factCount, [], changedChars);
+    if (!built) return;
+    console.info('[corkboard] braindump receipt', { groups: built.groups.length, ...built.counts, facts: factCount });
+    const { counts, ...rest } = built;
+    setReceipt({ at: armed.at, eyebrow: 'From your braindump', ledeEmpty: 'Your braindump landed', mintedSequences: counts.sequences, ...rest });
+  }, [data, buildReceipt]);
+
+  // JUST WRITE: the answers the mode applied since the cursor, joined to
+  // titles, newest first. The panel lists them with their reverse.
+  const appliedRows = useMemo<AppliedRow[]>(() => {
+    const byId = new Map((data?.entities ?? []).map((e) => [e.id, e]));
+    const titleOf = (id: string) => {
+      const e = byId.get(id);
+      return e ? String(e.working_title ?? e.working_name ?? '') : '';
+    };
+    return autoQuestions
+      .filter((q) => q.answered_by === 'auto' && String(q.answered_at ?? '') > receiptCursor)
+      // The just-write mode never answers a character row.
+      .filter((q) => q.kind !== 'character')
+      .map((q): AppliedRow => ({
+        cardId: q.cardId,
+        questionType: q.question_type as AppliedRow['questionType'],
+        answer: q.question_type === 'retelling' ? 'replace' : q.status === 'accepted' ? 'merge' : 'keep',
+        title: titleOf(q.cardId) || q.candidate_title,
+        target: q.target_vid ? { id: q.target_vid, title: titleOf(q.target_vid) || q.target_title } : null,
+        priorSummary: String(q.prior_summary ?? ''),
+        answeredAt: String(q.answered_at ?? q.updated_at ?? ''),
+      }))
+      .sort((a, b) => b.answeredAt.localeCompare(a.answeredAt));
+  }, [autoQuestions, data?.entities, receiptCursor]);
+
+  // ARRIVAL PATH. Once the board, the dump log and the question rows are all
+  // in, account for every dump newer than the cursor in ONE receipt. Runs
+  // once per mount; a dump finishing in this tab has the live path.
+  useEffect(() => {
+    if (arrivalDoneRef.current || !data || !dataFresh || !braindumps || !stagedLoaded || receipt) return;
+    if (inflightBraindumpRef.current) return;
+    arrivalDoneRef.current = true;
+    const isDump = (id: string) => id.startsWith('scratch_')
+      || (id.startsWith('bd_') && !id.startsWith('bd_manual') && !id.startsWith('bd_seed'));
+    const unseen = braindumps.filter((b) => isDump(b.braindumpId) && String(b.createdAt ?? '') > receiptCursor);
+    if (unseen.length === 0) return;
+    const ids = new Set(unseen.map((b) => b.braindumpId));
+    // Which cards those dumps minted: the MENTIONS provenance edges (every
+    // dump writes Braindump -> entity; the edge starts at the dump's VERTEX
+    // id, which the log carries as `id`), plus the span stamp screenplay
+    // lanes put on the vertex itself.
+    // Mentioned is not minted: a dump that re-tells or compares against an
+    // existing card writes MENTIONS to it too, so the card must also have
+    // been created after the cursor to count as news.
+    const vids = new Set(unseen.map((b) => b.id));
+    const createdAfter = new Set(
+      (data.entities ?? []).filter((e) => String(e.created_at ?? '') > receiptCursor).map((e) => e.id),
+    );
+    // The dump's own rows name the cards it touched but did not mint: a
+    // re-telling's card, a compare or merge suggestion's target. The write
+    // re-stamps created_at on a re-mentioned card, so the rows are the
+    // reliable signal here.
+    const touchedExisting = new Set<string>();
+    for (const q of [...stagedQuestions, ...autoQuestions]) {
+      if (!ids.has(q.source_braindump_id)) continue;
+      if (q.question_type === 'retelling') touchedExisting.add(q.cardId);
+      else if (q.target_vid) touchedExisting.add(q.target_vid);
+    }
+    const cards = new Set<string>();
+    for (const m of data.edges?.mentions ?? []) {
+      if ((vids.has(m.from) || ids.has(m.from)) && createdAfter.has(m.to) && !touchedExisting.has(m.to)) cards.add(m.to);
+    }
+    for (const e of data.entities ?? []) {
+      if (ids.has(String(e.src_braindump ?? '')) && createdAfter.has(e.id) && !touchedExisting.has(e.id)) cards.add(e.id);
+    }
+    const built = buildReceipt(cards, 0, appliedRows);
+    const appliedN = appliedRows.length;
+    const pendingFrom = stagedQuestions.filter((q) => q.status === 'pending' && ids.has(q.source_braindump_id)).length;
+    if (!built && appliedN === 0 && pendingFrom === 0) return;
+    const anyPages = unseen.some((b) => b.braindumpId.startsWith('scratch_'));
+    const anyDump = unseen.some((b) => !b.braindumpId.startsWith('scratch_'));
+    const eyebrow = anyPages && anyDump ? 'Since you were here' : anyPages ? 'From your pages' : 'From your braindump';
+    const ledeEmpty = anyPages && anyDump ? 'While you were away' : anyPages ? 'Your pages landed' : 'Your braindump landed';
+    const at = unseen.reduce((m, b) => (String(b.createdAt ?? '') > m ? String(b.createdAt) : m), '');
+    console.info('[corkboard] arrival receipt', {
+      dumps: unseen.length, cards: cards.size, applied: appliedN, pending: pendingFrom, eyebrow,
+      mentions: (data.edges?.mentions ?? []).length,
+    });
+    const { counts, ...rest } = built ?? {
+      groups: [], tail: { characters: 0, locations: 0, facts: 0 }, bars: [], cardIds: new Set<string>(), counts: null,
+    };
+    setReceipt({ at, eyebrow, ledeEmpty, mintedSequences: counts?.sequences ?? 0, ...rest });
+  }, [data, dataFresh, braindumps, stagedLoaded, receipt, buildReceipt, appliedRows, stagedQuestions, receiptCursor]);
+
+  // Dismissing a receipt is the seen mark: the cursor moves past the newest
+  // dump the log knows about (server time), falling back to now.
+  const dismissReceipt = useCallback(() => {
+    const newest = (braindumps ?? []).reduce((m, b) => (String(b.createdAt ?? '') > m ? String(b.createdAt) : m), '');
+    markSeen(new Date().toISOString(), newest, receipt?.at ?? '');
+    setReceipt(null);
+  }, [braindumps, markSeen, receipt?.at]);
+
+  // QUESTIONS IN STORY ORDER (Ben, 2026-09-11). Rows stack across dumps and
+  // carves; the server hands them back newest first, and rows from one dump
+  // share a timestamp, so their order was whatever the table returned. Sort
+  // by where the question sits in the story: a row about a live card takes
+  // that card's number, a row with a live target takes the target's, a
+  // section takes its first numbered member, and held cards with no position
+  // go last in the order they were written.
+  const stagedRowsOrdered = useMemo(() => {
+    const contains = data?.edges?.contains ?? [];
+    const posOf = (id: string): number => {
+      const n = sceneNoById.get(id);
+      if (n !== undefined) return n;
+      let best = Infinity;
+      for (const c of contains) {
+        if (c.from !== id) continue;
+        const m = sceneNoById.get(c.to);
+        if (m !== undefined && m < best) best = m;
+      }
+      return best;
+    };
+    const keyOf = (r: (typeof stagedRows)[number]) => {
+      const own = posOf(r.cardId);
+      if (own !== Infinity) return own;
+      return r.target ? posOf(r.target.id) : Infinity;
+    };
+    return [...stagedRows].sort((a, b) => {
+      const ka = keyOf(a);
+      const kb = keyOf(b);
+      if (ka !== kb) return ka - kb;
+      return String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? ''));
+    });
+  }, [stagedRows, sceneNoById, data?.edges?.contains]);
+
+
   // Re-tidy the board into the clean chronological layout: events stacked in
   // PRECEDES (story) order, the other types in their columns. Overrides any
   // dragged/stored positions and persists the result so it survives reload.
@@ -1343,6 +1838,36 @@ export default function FreeformCorkboard() {
     for (const id of ids) if (!out.includes(id)) out.push(id);
     return out;
   }, [aliveEntities, data]);
+
+  // WALL ORDER (Ben 2026-09-02): eventOrder regrouped so a section's members
+  // are contiguous - a member with no chain edge yet would otherwise topo-sort
+  // away from its siblings and the wall's drape would trace the section as two
+  // separate runs across the row gap. Unordered members sit at the END of
+  // their section's run, which is also the slot "Keep it where it sits"
+  // confirms (onConfirmSlot writes the chain edge the display implies).
+  const wallEventOrder = useMemo(() => {
+    const entById = new Map(aliveEntities.map((e) => [e.id, e]));
+    const containerOf = new Map<string, string>();
+    for (const c of data?.edges?.contains ?? []) {
+      if (entById.get(c.from)?.type === 'sequence' && entById.get(c.to)?.type === 'event') {
+        containerOf.set(c.to, c.from);
+      }
+    }
+    const chained = new Set<string>();
+    for (const p of data?.edges?.precedes ?? []) { chained.add(p.from); chained.add(p.to); }
+    const emitted = new Set<string>();
+    const out: string[] = [];
+    for (const id of eventOrder) {
+      if (emitted.has(id)) continue;
+      const seq = containerOf.get(id);
+      if (!seq) { out.push(id); emitted.add(id); continue; }
+      const members = eventOrder.filter((m) => containerOf.get(m) === seq && !emitted.has(m));
+      const ordered = members.filter((m) => chained.has(m));
+      const loose = members.filter((m) => !chained.has(m));
+      for (const m of [...ordered, ...loose]) { out.push(m); emitted.add(m); }
+    }
+    return out;
+  }, [eventOrder, aliveEntities, data]);
 
   // Character centrality for the Characters view — who anchors the web. Reified
   // relationships weigh most, then structural ties, then sheer event presence.
@@ -1493,7 +2018,14 @@ export default function FreeformCorkboard() {
       // unthreaded arcs leave the stage; threaded arc balls keep riding.
       for (const e of aliveEntities) {
         if (e.type === 'character' || e.type === 'relationship') out.hiddenIds.add(e.id);
-        if (e.type === 'arc' && !threadedArcIds.has(e.id)) out.hiddenIds.add(e.id);
+        // An UNTHREADED arc leaves the stage only in the grid layout, which is
+        // strictly a wall of scene notecards. In the column layout it stays,
+        // as a free-floating card in its own lane (positioned below). Hiding
+        // it there meant a writer who made an arc watched it disappear: Paul,
+        // call 2, "didn't know what happens after that or where that goes"
+        // (FIL-590). An arc with no scenes evoking it yet is not nothing, it
+        // is an intention waiting to be threaded.
+        if (e.type === 'arc' && !threadedArcIds.has(e.id) && throughlineLayout === 'grid') out.hiddenIds.add(e.id);
         // Sequences are controlled by the show/hide toggle here too (member
         // scenes always stay in eventOrder → the spine). Hidden by default reads
         // as a clean event throughline; shown, they sit in a right lane (below).
@@ -1734,6 +2266,23 @@ export default function FreeformCorkboard() {
           pos: webDrag[id] ?? { x: isSeq ? seqColX : colX, y: spineTop + i * (COLLAPSED_H + 110) },
         });
       });
+      // UNTHREADED ARC LANE. Right of the spine, stacked, draggable like
+      // anything else here (webDrag). They sit apart from the spine on
+      // purpose: they are not beats and do not belong in story order. Once
+      // enough scenes evoke one it becomes a thread and rides that instead,
+      // so this lane empties itself as the writer works.
+      const looseArcs = aliveEntities.filter(
+        (e) => e.type === 'arc' && !threadedArcIds.has(e.id),
+      );
+      if (looseArcs.length > 0) {
+        const arcLaneX = colX + EVENT_CARD_W + 90;
+        looseArcs.forEach((a, i) => {
+          out.overrides.set(a.id, {
+            pos: webDrag[a.id] ?? { x: arcLaneX, y: spineTop + i * (COLLAPSED_H + 26) },
+          });
+        });
+      }
+
       // Shown sequences WRAP their member scenes in a container box (like master),
       // built from the members' spine positions so a sequence reads as a chapter
       // around its run of events. (Member-less sequences don't appear here.)
@@ -2513,6 +3062,18 @@ export default function FreeformCorkboard() {
   // collapses it up front; script-side extractions finish with it closed too)
   // — an armed flag surviving to the writer's NEXT open slammed the dock shut
   // the moment they opened it.
+  // OPENING DISARMS (2026-09-01). The disarm below only runs when one of the
+  // effect's deps changes at completion time — but several completion paths
+  // arm the flag by REF MUTATION alone (no dep change in that render), so the
+  // stale flag survived until the writer's next manual open... which is the
+  // dep change that finally ran the effect, and the dock slammed shut 700ms
+  // after opening. A manual open now consumes any stale flag first. The
+  // legitimate FIL-515 close (dock open through extraction, collapses on
+  // done) is untouched: its arming happens AFTER the dock is already open,
+  // so this effect has already run and cleared nothing.
+  useEffect(() => {
+    if (braindumpOpen) dockAutoCloseRef.current = false;
+  }, [braindumpOpen]);
   useEffect(() => {
     if (dockAutoCloseRef.current && braindumpPhase === 'done' && braindumpText.trim() === '') {
       dockAutoCloseRef.current = false;
@@ -2822,8 +3383,52 @@ export default function FreeformCorkboard() {
   // On-demand right-side panel (Information facts + arc suggestions). Opened
   // from the permanent toolbar button.
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  // COMPOSER FOCUS (2026-08-30). The panel is a 420px right drawer at z 180;
+  // the dock's placement chips live at the dock's bottom-right, at z 139.
+  // With both open, the drawer physically covers the chips, and that is how a
+  // live keep-aside was lost: a staged question auto-opens the panel, the
+  // panel stays open, and the writer's next dump composes with its intent
+  // chips hidden (or their clicks eaten by the scrim, pre-fix) behind the
+  // drawer. Same rule as Process collapsing the dock, mirrored: opening the
+  // composer closes the panel. It reopens on its own when the dump stages
+  // something.
+  useEffect(() => {
+    if (braindumpOpen) setRightPanelOpen(false);
+  }, [braindumpOpen]);
   // Section the wow tour wants force-expanded in the right panel (e.g. Information).
   const [panelForceSection, setPanelForceSection] = useState<string | null>(null);
+  // THE DOOR FROM THE SCRIPT (2026-09-11): the script header's question count
+  // navigates here with state, and the panel opens on the section it names.
+  // The state is cleared so a reload does not reopen it.
+  useEffect(() => {
+    const st = (routerLocation.state ?? null) as { openPanel?: string } | null;
+    if (!st?.openPanel) return;
+    setPanelForceSection(st.openPanel);
+    panelAutoRef.current = false;
+    setRightPanelOpen(true);
+    routerNavigate(routerLocation.pathname, { replace: true, state: null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // THE DOCKET RULE (Ben 2026-09-01: "if there are no questions or anything
+  // to confirm then we should not have the panel open"). A panel the
+  // QUESTIONS opened belongs to the docket: it closes itself when nothing is
+  // left to confirm, and returns if a follow-up ask lands (a kept unanchored
+  // section coming back as a placement row). A panel the WRITER opened is the
+  // writer's and never auto-closes; a manual close hands it back to the
+  // writer too. The flag lives in a ref so flipping ownership never re-renders.
+  const panelAutoRef = useRef(false);
+  useEffect(() => {
+    if (!panelAutoRef.current || braindumpOpen) return;
+    const pending = stagedRows.length + arcSuggestions.length;
+    if (pending === 0 && rightPanelOpen) {
+      setRightPanelOpen(false);
+    } else if (pending > 0 && !rightPanelOpen) {
+      // The composer-focus rule above closed it, or the docket refilled
+      // (heldForPlacement) right after the last visible row was answered.
+      setRightPanelOpen(true);
+      setPanelForceSection('staged');
+    }
+  }, [stagedRows, arcSuggestions, rightPanelOpen, braindumpOpen]);
   // Card-action gate driven by the wow tour: while a coachmark is up, cards are
   // locked except for the single action the step is coaching.
   const [tourGate, setTourGate] = useState<{ active: boolean; allow: 'expand' | 'fullcard' | 'ask' | null }>({ active: false, allow: null });
@@ -3828,7 +4433,7 @@ export default function FreeformCorkboard() {
   // The wall stays MOUNTED through its exit: any close path (cancel, pick,
   // drop, row collapse, answer) flips gridOpen false, the cells fly back to
   // their board positions while the backdrop fades, then onExited unmounts.
-  const gridOpen = dockIntent.mode === 'picking' || placingStaged !== null || stagedSpotlight !== null || wrapSeq !== null;
+  const gridOpen = dockIntent.mode === 'picking' || placingStaged !== null || stagedSpotlight !== null || wrapSeq !== null || arcTag !== null;
   const [gridMounted, setGridMounted] = useState(false);
   useEffect(() => { if (gridOpen) setGridMounted(true); }, [gridOpen]);
 
@@ -3840,6 +4445,26 @@ export default function FreeformCorkboard() {
   const beginBraindumpRun = useCallback((braindumpId: string, proseLength: number, windowed: boolean) => {
     void proseLength; // reserved: the meter may scale its copy by size later
     inflightBraindumpRef.current = braindumpId;
+    // RECEIPT SNAPSHOT, taken HERE and not at braindump_complete. Streamed
+    // cards fold into `data` as they arrive, so by the time the run completes
+    // the board already holds most of what the dump produced and a "before"
+    // taken then diffs to nothing (live, 2026-09-09: the receipt never fired).
+    dumpSnapshotRef.current = {
+      beforeIds: new Set((dataRef.current?.entities ?? []).filter((e) => !e.deleted_at).map((e) => e.id)),
+      beforeInfoIds: new Set((dataRef.current?.information ?? []).map((f: any) => String(f.id ?? f.information_id ?? ''))),
+      // What each character card said before this dump. A follow-up dump can
+      // add to a character who is already on the board (traits and aliases
+      // merge without asking); their id does not change, so without this the
+      // receipt had no way to notice and said nothing.
+      beforeChars: new Map(
+        (dataRef.current?.entities ?? [])
+          .filter((e) => e.type === 'character' && !e.deleted_at)
+          .map((e) => [e.id, {
+            traits: Array.isArray(e.established_traits) ? e.established_traits.map(String) : [],
+            aliases: Array.isArray((e as any).aliases) ? (e as any).aliases.map(String) : [],
+          }] as [string, { traits: string[]; aliases: string[] }]),
+      ),
+    };
     // Large screenplay imports (> ~25pp) run the windowed backend path — multi-
     // minute, window-by-window. Mark it so the fast give-up timers + edge belt
     // don't resolve it early; it resolves on braindump_complete (or a long backstop).
@@ -4294,7 +4919,7 @@ export default function FreeformCorkboard() {
         }));
         return {
           ...prev,
-          entities: [...prev.entities, result.entity],
+          entities: withEntity(prev.entities, result.entity),
           edges: {
             ...prev.edges,
             evokes: [...prev.edges.evokes, ...newEvokesEdges],
@@ -4388,7 +5013,7 @@ export default function FreeformCorkboard() {
         );
         if (res.entity) {
           setData((prev) =>
-            prev ? { ...prev, entities: [...prev.entities, res.entity!] } : prev,
+            prev ? { ...prev, entities: withEntity(prev.entities, res.entity!) } : prev,
           );
           setPositions((p) => ({ ...p, [res.entity!.id]: pos }));
           setLayouts((l) => ({
@@ -4449,7 +5074,7 @@ export default function FreeformCorkboard() {
   // We flip the staged flag locally so the card appears instantly, then let
   // the refetch confirm.
   const onAnswerStaged = useCallback(
-    async (cardId: string, answer: 'merge' | 'keep' | 'convert') => {
+    async (cardId: string, answer: 'merge' | 'keep' | 'convert' | 'replace') => {
       if (!auth || !storyId) return;
       const row = stagedQuestions.find((q) => q.cardId === cardId);
       setStagedQuestions((cur) => cur.filter((q) => q.cardId !== cardId));
@@ -4458,7 +5083,9 @@ export default function FreeformCorkboard() {
       // un-stages it in place (the ordinary keep path), 'convert' re-mints it
       // at the other altitude (new vertex, un-staged; the refetch swaps it
       // in, the old one lands in the trash).
-      if (answer === 'keep') {
+      // A character row is a question ABOUT a live card: nothing is staged,
+      // nothing needs a slot. The refetch below shows the answer.
+      if (answer === 'keep' && row?.kind !== 'character' && row?.kind !== 'story') {
         setData((prev) =>
           prev
             ? {
@@ -4488,6 +5115,14 @@ export default function FreeformCorkboard() {
           { projectId: storyId, userId: auth.userId, cardId, answer },
           auth.token,
         );
+        // Cowork .fdx: an answer that moves the card (merge into the target,
+        // re-mint at the other altitude) must carry the file's scene records
+        // with it, or the next sync sees a dead card and re-sends the scene
+        // to the AI. No-op when the card holds no .fdx scene.
+        if (res.merge?.targetId) remapFdxSyncCard(cardId, res.merge.targetId);
+        if (answer === 'convert' && res.convert?.toId) {
+          remapFdxSyncCard([cardId, ...(res.convert.mergedMembers ?? [])], res.convert.toId);
+        }
         if (answer === 'convert' && res.convert) {
           const c = res.convert;
           const entName = (id: string) => {
@@ -4503,35 +5138,49 @@ export default function FreeformCorkboard() {
           });
           const r = c.retracted ?? { ordering: 0, containment: 0, involves: 0, occursIn: 0, other: 0 };
           const dropped = r.ordering + r.containment + r.involves + r.occursIn + r.other;
+          const merged = c.mergedMembers?.length ?? 0;
           const orphans = c.orphanedMembers?.length ?? 0;
+          const word = c.toLabel === 'Sequence' ? 'section' : 'scene';
           setLinkNotice(
-            `“${entName(cardId)}” is now a ${c.toLabel === 'Sequence' ? 'section' : 'scene'}.`
+            // A FOLD means the card at the other altitude was already on the
+            // board (extraction can mint the same beat twice, once per
+            // altitude), so nothing new was created and saying "is now a
+            // scene" would misdescribe it.
+            (c.folded
+              ? `Kept the ${word} already on the board; the duplicate ${c.fromLabel === 'Sequence' ? 'section' : 'scene'} is in the trash.`
+              : `“${entName(cardId)}” is now a ${word}.`)
+            + (merged ? ` ${merged} scene${merged === 1 ? '' : 's'} merged into it.` : '')
             + (dropped ? ` ${dropped} link${dropped === 1 ? '' : 's'} retracted.` : '')
             + (orphans ? ` ${orphans} scene${orphans === 1 ? '' : 's'} left without a section.` : ''),
           );
+        }
+        if (answer === 'keep' && res.heldForPlacement) {
+          // THE FLIP: keep settled the ALTITUDE, not the position. Nothing
+          // on the board anchors this section, so the server kept it held
+          // and its row returns as a placement ask. Refetch so the strip
+          // shows that instead of optimistically dropping the row.
+          refreshStagedQuestionsRef.current();
+          setLinkNotice('Kept as a sequence. Nothing on the board anchors it yet, so place it when you’re ready.');
         }
         if (boardIsAutoManaged()) relayoutFirstDumpRef.current = true; else relayoutSpineRef.current = true;
         refreshEntitiesRef.current().catch(() => {}).finally(() => clearAnswering(cardId));
       } catch (err) {
         clearAnswering(cardId);
-        // Revert: re-stage locally and re-add the question row.
-        if (answer === 'keep') {
-          setData((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  entities: prev.entities.map((e) =>
-                    e.id === cardId ? { ...e, staged: '1' } : e,
-                  ),
-                }
-              : prev,
-          );
-        }
-        if (row) {
-          setStagedQuestions((cur) =>
-            cur.some((q) => q.cardId === cardId) ? cur : [row, ...cur],
-          );
-        }
+        // REFETCH THE TRUTH, never guess (2026-08-31). This catch used to
+        // blindly revert: re-add the row and re-stage the card locally. But a
+        // request can FAIL CLIENT-SIDE while succeeding on the server (a
+        // sleep, a dropped connection) — then the revert resurrects an
+        // already-answered row AND locally re-flags a card the server just
+        // unstaged, which the master lens then HIDES. Observed live: a kept
+        // sequence vanished from the board while its undead row 409'd
+        // ('question already answered') on every retry, and each 409 ran this
+        // same wrong revert again. The server knows what happened; ask it.
+        refreshStagedQuestionsRef.current();
+        refreshEntitiesRef.current().catch(() => {});
+        const why = String((err as any)?.message ?? err ?? '').trim();
+        setLinkNotice(
+          `Couldn't ${answer === 'merge' ? 'merge' : answer === 'convert' ? 'convert' : answer === 'replace' ? 'update' : 'keep'} that card${why ? `: ${why}` : '. Please try again.'}`,
+        );
         console.warn('[corkboard] answer-staged-question failed:', err);
       }
     },
@@ -4592,6 +5241,9 @@ export default function FreeformCorkboard() {
           },
           auth.token,
         );
+        // Cowork .fdx: a drop ON a card folds it — the file's scene records
+        // follow the survivor (see onAnswerStaged).
+        if (pick.action === 'merge') remapFdxSyncCard(cardId, res.merge?.targetId ?? pick.targetId);
         setLinkNotice(
           pick.action === 'merge'
             ? `Merged “${cardTitle}” into “${entName(pick.targetId)}”.`
@@ -4603,29 +5255,67 @@ export default function FreeformCorkboard() {
         refreshEntitiesRef.current().catch(() => {}).finally(() => clearAnswering(cardId));
       } catch (err) {
         clearAnswering(cardId);
-        // Revert: re-stage locally and re-surface the question row.
-        if (pick.action !== 'merge') {
-          setData((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  entities: prev.entities.map((e) =>
-                    e.id === cardId ? { ...e, staged: '1' } : e,
-                  ),
-                }
-              : prev,
-          );
-        }
-        if (row) {
-          setStagedQuestions((cur) =>
-            cur.some((q) => q.cardId === cardId) ? cur : [row, ...cur],
-          );
-        }
-        setLinkError('Placing the card failed. It stays in the strip.');
+        // Refetch the truth, never guess — same rule as onAnswerStaged's
+        // catch (2026-08-31): a client-side failure can mask a server-side
+        // success, and a blind revert then resurrects the row and locally
+        // hides the placed card behind a stale staged flag.
+        refreshStagedQuestionsRef.current();
+        refreshEntitiesRef.current().catch(() => {});
+        setLinkError('Placing the card failed. If it left the strip, it landed; otherwise it stays there.');
         console.warn('[corkboard] place-staged-card failed:', err);
       }
     },
     [auth, storyId, placingStaged, stagedQuestions, markAnswering, clearAnswering],
+  );
+
+  // Order ask, the "keep it where it sits" answer (Ben 2026-09-02): the live
+  // member scene renders at a definite slot in its section (wallEventOrder
+  // puts unordered members at the end of the run), so confirming writes the
+  // chain edge that slot implies - chain after the member shown above it, or
+  // before the first when it happens to render first. Same lane as a morph
+  // tap: place-staged-card, so the row settles and supersession rules hold.
+  const onConfirmSlot = useCallback(
+    async (cardId: string) => {
+      if (!auth || !storyId) return;
+      const d = dataRef.current;
+      const entById = new Map((d?.entities ?? []).map((e) => [e.id, e]));
+      const aliveIn = (id: string) => { const e = entById.get(id); return !!e && !e.deleted_at; };
+      const contains = (d?.edges?.contains ?? []).filter((c) => aliveIn(c.from) && aliveIn(c.to));
+      const parent = contains.find((c) => c.to === cardId && entById.get(c.from)?.type === 'sequence')?.from;
+      if (!parent) return;
+      const memberSet = new Set(contains.filter((c) => c.from === parent).map((c) => c.to));
+      const group = wallEventOrder.filter((id) => memberSet.has(id));
+      const idx = group.indexOf(cardId);
+      const pick = idx > 0
+        ? { targetId: group[idx - 1] }
+        : group.length > 1
+          ? { targetId: group[1], position: 'before' as const }
+          : null;
+      if (!pick) return;
+      const entName = (id: string) => {
+        const e = entById.get(id);
+        return e ? String(e.working_title ?? e.working_name ?? id) : id;
+      };
+      setStagedSpotlight(null);
+      setStagedQuestions((cur) => cur.filter((q) => q.cardId !== cardId));
+      markAnswering(cardId);
+      try {
+        await placeStagedCard(
+          { projectId: storyId, userId: auth.userId, cardId, placement: pick },
+          auth.token,
+        );
+        setLinkNotice(`Kept “${entName(cardId)}” where it sits in “${entName(parent)}”.`);
+        refreshEntitiesRef.current().catch(() => {}).finally(() => clearAnswering(cardId));
+      } catch (err) {
+        clearAnswering(cardId);
+        // Refetch the truth, never guess (same rule as the other answer paths).
+        refreshStagedQuestionsRef.current();
+        refreshEntitiesRef.current().catch(() => {});
+        setLinkError('Confirming the spot failed. If the row is gone, it landed; otherwise it stays there.');
+        console.warn('[corkboard] confirm-slot failed:', err);
+      }
+    },
+    [auth, storyId, wallEventOrder, markAnswering, clearAnswering],
   );
 
   // New → Sequence: create (optionally with the picked scenes as members).
@@ -4649,7 +5339,7 @@ export default function FreeformCorkboard() {
       // Optimistic: the card + its CONTAINS edges on this frame.
       setData((prev) => prev ? {
         ...prev,
-        entities: [...prev.entities, ent],
+        entities: withEntity(prev.entities, ent),
         edges: { ...prev.edges, contains: [...(prev.edges.contains ?? []), ...members.map((m) => ({ from: ent.id, to: m }))] },
       } : prev);
       setWrapSeq(null);
@@ -4805,7 +5495,7 @@ export default function FreeformCorkboard() {
         kickExtractionRef.current(newEntity.id, createDesc.trim());
       }
       setData((prev) =>
-        prev ? { ...prev, entities: [...prev.entities, newEntity] } : prev,
+        prev ? { ...prev, entities: withEntity(prev.entities, newEntity) } : prev,
       );
       setPositions((p) => ({ ...p, [newEntity.id]: pos }));
       setLayouts((l) => ({
@@ -5374,7 +6064,7 @@ export default function FreeformCorkboard() {
             description: e.description ?? e.summary ?? '',
             int_ext: e.int_ext,
           } as ProjectEntity;
-          return mergeStreamedEdges({ ...prev, entities: [...prev.entities, ent] });
+          return mergeStreamedEdges({ ...prev, entities: withEntity(prev.entities, ent) });
         });
         return;
       }
@@ -5458,7 +6148,12 @@ export default function FreeformCorkboard() {
         dockAutoCloseRef.current = true;
         // Questions raised by this dump open the panel on their own (Ben
         // 2026-08-22): the writer should not have to notice a badge.
-        if (stagedN > 0) { setRightPanelOpen(true); setPanelForceSection('staged'); }
+        // The panel no longer opens itself (Ben, 2026-09-09). It is a
+        // full-screen scrim, so it opened over the board at exactly the moment
+        // the receipt had something to say and buried it. The receipt now
+        // carries the count and opens the panel on request: one surface
+        // announces a dump, and the writer chooses when to answer.
+        void stagedN;
         if (windowedRunRef.current) relayoutWindowedRef.current = true; // snap into the clean layout
         else if (noSavedLayoutAtSubmitRef.current) relayoutFirstDumpRef.current = true; // first-dump rule
         noSavedLayoutAtSubmitRef.current = false;
@@ -5467,6 +6162,7 @@ export default function FreeformCorkboard() {
         resetWinMeter();
         refreshArcSuggestionsRef.current(); // arcs were written just before this WS
         refreshStagedQuestionsRef.current(); // strip rows persisted just before this WS
+        void refreshBraindumpsRef.current(); // the log now carries this dump's timestamp
         if (windowedPollRef.current) { window.clearInterval(windowedPollRef.current); windowedPollRef.current = null; }
         // Streamed cards were positioned in ARRIVAL order (PRECEDES didn't exist
         // yet). Stash them so the effect below re-stacks them in PRECEDES (story)
@@ -5478,6 +6174,19 @@ export default function FreeformCorkboard() {
         streamedIdsRef.current.clear();
         streamedEdgesRef.current = [];
         setWeaving(null);
+        // RECEIPT (Ben, 2026-09-09). A braindump lands cards while the writer
+        // is looking somewhere else, and until now the only account of what it
+        // did was a counts string in the dock that closes itself. Snapshot the
+        // board here, then the effect below diffs it against the refetch and
+        // raises the same toast a cascade raises. Armed before the refetch so
+        // the "before" is genuinely before.
+        // Promote the submit-time snapshot; the effect consumes it on the
+        // first board state that lands after the authoritative refetch.
+        const snap = dumpSnapshotRef.current;
+        dumpSnapshotRef.current = null;
+        dumpReceiptRef.current = snap
+          ? { ...snap, staged: stagedN, at: new Date().toISOString() }
+          : null;
         refreshEntitiesRef.current();
         return;
       }
@@ -5801,6 +6510,32 @@ export default function FreeformCorkboard() {
     ...(peerPos ? [peerPos.x + PEER_CARD_W + CANVAS_PAD] : []),
   );
 
+  // ABOUT THIS STORY: the story's own list of facts, on the title row. The
+  // writer's add / reword / remove go straight to the list (their hand is a
+  // declaration, no question); the refetch is the confirmation.
+  const storyFacts = data?.storyFacts ?? [];
+  const pendingStoryQuestions = stagedRows.filter((r) => r.kind === 'story').length;
+  const onSaveStoryFact = async (f: { id?: string; kind: StoryFactKind; text: string }) => {
+    if (!auth || !storyId) return;
+    try {
+      await saveStoryFact({ projectId: storyId, userId: auth.userId, ...f }, auth.token);
+      await refreshEntitiesRef.current();
+    } catch (err) {
+      console.warn('[corkboard] save-story-fact failed:', err);
+      setLinkNotice('Couldn\u2019t save that. Please try again.');
+    }
+  };
+  const onDeleteStoryFact = async (id: string) => {
+    if (!auth || !storyId) return;
+    try {
+      await deleteStoryFact({ projectId: storyId, userId: auth.userId, id }, auth.token);
+      await refreshEntitiesRef.current();
+    } catch (err) {
+      console.warn('[corkboard] delete-story-fact failed:', err);
+      setLinkNotice('Couldn\u2019t remove that. Please try again.');
+    }
+  };
+
   return (
     <ThemeCtx.Provider value={theme}>
     <Shell
@@ -5808,6 +6543,16 @@ export default function FreeformCorkboard() {
       title={workTitle}
       canRename={canRename}
       onRename={renameStory}
+      headerExtra={storyId ? (
+        <StoryFactsStrip
+          facts={storyFacts}
+          pending={pendingStoryQuestions}
+          canEdit={canRename}
+          onSave={onSaveStoryFact}
+          onDelete={onDeleteStoryFact}
+          onOpenQuestions={() => { panelAutoRef.current = false; setRightPanelOpen(true); }}
+        />
+      ) : undefined}
       onOpenScript={storyId ? () => playPageWipe('right', () => routerNavigate(`/freeform/${storyId}/script`)) : undefined}
       onPrefetchScript={storyId && auth ? () => prefetchScriptData(storyId, auth.token) : undefined}
     >
@@ -5815,8 +6560,27 @@ export default function FreeformCorkboard() {
         <FdxCoworkControl
           storyId={storyId}
           auth={auth}
-          onSynced={() => void refreshEntities()}
+          // A round that adopted the AI's cards (the engine's own landing
+          // detection, which works even when the braindump_complete WS was
+          // lost) also means the strip rows it persisted are readable now.
+          onSynced={() => { void refreshEntities(); void refreshStagedQuestions(); }}
           onAiJob={trackExternalBraindump}
+          // The cowork's own docket: the same strip rows and answer lanes the
+          // right panel uses, filtered inside to the questions the .fdx raised.
+          strip={{
+            rows: stagedRowsOrdered,
+            braindumps,
+            onAnswer: (cardId, answer) => { setStagedSpotlight(null); onAnswerStaged(cardId, answer); },
+            onSpotlight: onStagedSpotlight,
+            // The right panel owns the spotlight while it is open (it scrims
+            // the cowork window anyway).
+            spotlight: !rightPanelOpen,
+            onPlaceDragStart: (cardId) => { setStagedSpotlight(null); setPlacingStaged({ cardId }); },
+            onPlaceDragEnd: () => setPlacingStaged(null),
+            onConfirmSlot,
+            onOpenCard: (cardId) => setSheetCardId(cardId),
+            hidden: placingStaged !== null,
+          }}
         />
       ) : null}
       {/* Toolbar — one cohesive control strip: stats on the left, controls on
@@ -5831,6 +6595,10 @@ export default function FreeformCorkboard() {
       {!(toolbarStuck && toolbarHidden) && (
       <div
         ref={toolbarRef}
+        // The right panel's scrim covers the viewport; this marks the strip it
+        // must not swallow clicks from, so the toolbar keeps working while the
+        // panel is open (see RightPanel's outside-click listener).
+        data-corkboard-toolbar
         style={{
           ...(toolbarStuck
             ? {
@@ -6014,28 +6782,7 @@ export default function FreeformCorkboard() {
                 }}
               />
             ) : (
-              <svg
-                width="15"
-                height="15"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                xmlns="http://www.w3.org/2000/svg"
-                style={{ display: 'block' }}
-              >
-                <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" />
-                <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" />
-                <path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4" />
-                <path d="M17.599 6.5a3 3 0 0 0 .399-1.375" />
-                <path d="M6.003 5.125A3 3 0 0 0 6.401 6.5" />
-                <path d="M3.477 10.896a4 4 0 0 1 .585-.396" />
-                <path d="M19.938 10.5a4 4 0 0 1 .585.396" />
-                <path d="M6 18a4 4 0 0 1-1.967-.516" />
-                <path d="M19.967 17.484A4 4 0 0 1 18 18" />
-              </svg>
+<BraindumpIcon size={15} />
             )
           }
           onClick={() => setBraindumpOpen((v) => !v)}
@@ -6245,7 +6992,7 @@ export default function FreeformCorkboard() {
             return n > 0 ? `Arcs · ${n}` : 'Panel';
           })()}
           icon="ⓘ"
-          onClick={() => setRightPanelOpen(true)}
+          onClick={() => { panelAutoRef.current = false; setRightPanelOpen(true); }}
           accent={
             stagedRows.length > 0
               ? '#ff8c42'
@@ -6499,8 +7246,8 @@ export default function FreeformCorkboard() {
           setBraindumpText(text);
           setBraindumpOpen(true);
         }}
-        onSetPanel={(open) => setRightPanelOpen(open)}
-        onOpenPanelSection={(id) => { setRightPanelOpen(true); setPanelForceSection(id); }}
+        onSetPanel={(open) => { panelAutoRef.current = false; setRightPanelOpen(open); }}
+        onOpenPanelSection={(id) => { panelAutoRef.current = false; setRightPanelOpen(true); setPanelForceSection(id); }}
         onTourGate={setTourGate}
         onHighlightTie={setWowTie}
         onOpenSheet={(id) => setSheetCardId(id)}
@@ -6566,10 +7313,19 @@ export default function FreeformCorkboard() {
           braindumpPhase !== 'submitting' &&
           braindumpPhase !== 'extracting' &&
           !braindumpOpen && (
+            // Desktop: the .fdx cowork takes the screenplay link (same gate
+            // that mounts FdxCoworkControl, which binds the engine). PDF
+            // import stays on the toolbar's Import and on drop.
             <BoardEmptyState
               onBraindump={() => setBraindumpOpen(true)}
               onCreate={openCreateModal}
-              onImport={() => scriptInputRef.current?.click()}
+              {...(isDesktop() && auth && storyId
+                ? {
+                    onImport: () => void startFdxCowork(),
+                    importLabel: 'Already have a screenplay? Open the .fdx',
+                    importTitle: "Watch a Final Draft (.fdx) screenplay: every save becomes a per-scene save + extraction on this board, like the script editor's auto-sync",
+                  }
+                : { onImport: () => scriptInputRef.current?.click() })}
             />
           )}
         {/* SVG overlay — PRECEDES + structural connectors. Sits behind cards
@@ -7122,7 +7878,12 @@ export default function FreeformCorkboard() {
           const focusInfo = !placingStaged && stagedSpotlight
             ? {
                 id: stagedSpotlight.targetId,
-                ghostTitle: stagedRows.find((r) => r.cardId === stagedSpotlight.cardId)?.title,
+                // SELF-focus (an altitude row looking at its own card): no
+                // ghost pill — there is no incoming card, the card on the
+                // wall IS the subject.
+                ghostTitle: stagedSpotlight.targetId === stagedSpotlight.cardId
+                  ? undefined
+                  : stagedRows.find((r) => r.cardId === stagedSpotlight.cardId)?.title,
               }
             : null;
           const effViewW = focusInfo ? Math.max(0, viewW - 420 / z) : viewW;
@@ -7130,9 +7891,18 @@ export default function FreeformCorkboard() {
           <PlacementGrid
             open={gridOpen}
             onExited={() => setGridMounted(false)}
-            select={wrapSeq ? { selectedIds: wrapSeq.selected, onToggle: toggleWrapSelect } : null}
+            select={wrapSeq
+              ? { selectedIds: wrapSeq.selected, onToggle: toggleWrapSelect }
+              : arcTag
+                ? { selectedIds: arcTag.selected, onToggle: toggleArcTag, anyScene: true, accent: getEntityColor('arc') }
+                : null}
             dropCard={placingStaged
-              ? { title: placingStagedRow?.title ?? String((data.entities.find((e) => e.id === placingStaged.cardId) ?? {}).working_title ?? '') }
+              ? {
+                  title: placingStagedRow?.title ?? String((data.entities.find((e) => e.id === placingStaged.cardId) ?? {}).working_title ?? ''),
+                  // Sections get chain semantics on the wall (no nest, no merge).
+                  kind: (placingStagedRow?.kind
+                    ?? ((data.entities.find((e) => e.id === placingStaged.cardId) ?? {}).type === 'sequence' ? 'section' : 'scene')) as 'scene' | 'section',
+                }
               : null}
             onDrop={onPlaceStagedDrop}
             noMerge={!!placingStaged?.fresh}
@@ -7144,11 +7914,40 @@ export default function FreeformCorkboard() {
             focus={focusInfo}
             entities={placingStaged ? aliveEntities.filter((e) => e.id !== placingStaged.cardId) : aliveEntities}
             contains={data.edges?.contains ?? []}
+            seqChain={[
+              ...(data.edges?.sequence_precedes ?? []),
+              ...(data.edges?.precedes ?? []),
+              ...(data.edges?.cross_precedes ?? []),
+            ]}
             eventOrder={(() => {
               const scenes = aliveEntities.filter((e) => e.type === 'event');
-              return scenes
+              const base = scenes
                 .map((e) => e.id)
                 .sort((a, b) => (sceneNoById.get(a) ?? 1e9) - (sceneNoById.get(b) ?? 1e9) || eventOrder.indexOf(a) - eventOrder.indexOf(b));
+              // Regroup members with their section (Ben 2026-09-02): an
+              // unordered member has no SC number, sorts to the tail, and the
+              // drape then traces its section as two separate runs. Pulling
+              // members contiguous keeps one drape; unordered members land at
+              // the END of their run - the slot "Keep it where it sits"
+              // confirms.
+              const entById = new Map(aliveEntities.map((e) => [e.id, e]));
+              const containerOf = new Map<string, string>();
+              for (const c of data.edges?.contains ?? []) {
+                if (entById.get(c.from)?.type === 'sequence' && entById.get(c.to)?.type === 'event') {
+                  containerOf.set(c.to, c.from);
+                }
+              }
+              const emitted = new Set<string>();
+              const out: string[] = [];
+              for (const id of base) {
+                if (emitted.has(id)) continue;
+                const seq = containerOf.get(id);
+                if (!seq) { out.push(id); emitted.add(id); continue; }
+                for (const m of base.filter((x) => containerOf.get(x) === seq && !emitted.has(x))) {
+                  out.push(m); emitted.add(m);
+                }
+              }
+              return out;
             })()}
             positions={positions}
             canvasWidth={effViewW}
@@ -7162,6 +7961,7 @@ export default function FreeformCorkboard() {
               setPlacingStaged(null);
               setStagedSpotlight(null);
               setWrapSeq(null);
+              setArcTag((a) => { if (a) setSheetCardId(a.arcId); return null; }); // back to the sheet untouched
               setDockIntent((cur) => (cur.mode === 'picking' ? { mode: 'auto' } : cur));
             }}
             dark={dark}
@@ -7214,6 +8014,63 @@ export default function FreeformCorkboard() {
       </div>
 
       {/* New → Sequence form over the wall picker. */}
+      {arcTag && (
+        <div
+          style={{
+            position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+            zIndex: 160, display: 'flex', alignItems: 'center', gap: 10,
+            padding: '10px 14px', borderRadius: 12,
+            background: theme === 'dark' ? 'rgba(20,22,28,0.97)' : 'rgba(255,255,255,0.98)',
+            border: `1.5px solid ${getEntityColor('arc')}`, boxShadow: '0 8px 28px rgba(0,0,0,0.3)',
+            fontFamily: 'system-ui, sans-serif', fontSize: 12.5, color: theme === 'dark' ? '#e8e8ec' : '#222',
+          }}
+        >
+          <span style={{ color: theme === 'dark' ? '#8b8b96' : '#777', whiteSpace: 'nowrap' }}>
+            {arcTag.busy
+              ? 'Tagging…'
+              : arcTag.selected.size > 0
+                ? `${arcTag.selected.size} scene${arcTag.selected.size === 1 ? '' : 's'} on this arc`
+                : 'Tap the scenes this arc runs through'}
+          </span>
+          <button
+            onClick={async () => {
+              if (!auth || !storyId || arcTag.busy) return;
+              const a = arcTag;
+              setArcTag({ ...a, busy: true });
+              const already = new Set(
+                (dataRef.current?.edges?.evokes ?? []).filter((e) => e.arc_id === a.arcId).map((e) => e.event_id),
+              );
+              try {
+                for (const id of a.selected) {
+                  if (already.has(id)) continue;
+                  await tagEventEvokes({ eventId: id, arcId: a.arcId, projectId: storyId }, auth.token);
+                }
+                await refreshEntities();
+              } catch (err) {
+                setLinkError('Some tags failed to save; the timeline shows what landed.');
+                console.warn('[corkboard] arc tagging failed:', err);
+              }
+              setArcTag(null);
+              setSheetCardId(a.arcId); // back to the sheet, timeline populated
+            }}
+            disabled={arcTag.busy || arcTag.selected.size === 0}
+            style={{
+              padding: '7px 12px', borderRadius: 8, border: 'none', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', fontFamily: 'inherit',
+              background: getEntityColor('arc'), color: '#fff',
+              opacity: arcTag.selected.size === 0 ? 0.45 : arcTag.busy ? 0.7 : 1, whiteSpace: 'nowrap',
+            }}
+          >
+            {arcTag.busy ? 'Tagging…' : `Tag ${arcTag.selected.size || ''}`.trim()}
+          </button>
+          <button
+            onClick={() => { const id = arcTag.arcId; setArcTag(null); setSheetCardId(id); }}
+            style={{ background: 'transparent', border: 'none', color: theme === 'dark' ? '#8b8b96' : '#777', cursor: 'pointer', fontSize: 12.5, fontFamily: 'inherit', whiteSpace: 'nowrap' }}
+          >
+            cancel (Esc)
+          </button>
+        </div>
+      )}
+
       {wrapSeq && (
         <div
           style={{
@@ -7311,26 +8168,123 @@ export default function FreeformCorkboard() {
         </div>
       )}
 
-      {/* Cascade toasts — top-right, stacked. z-index keeps them above
-          canvas/peer but below the sheet overlay. Arc suggestions used to
-          stack here too; they now live in a right-side drawer opened from
-          the toolbar badge. */}
+      {/* THE BRAINDUMP RECEIPT. Sits ON the board, never over it: no scrim, no
+          drawer, the cards stay workable underneath. Above the panel's z so it
+          is readable even when the writer opens the questions, and beside the
+          drawer rather than on top of it. */}
+      {/* Hidden while the questions panel or the placement wall is up, back the
+          moment either closes (Ben, 2026-09-09). Answering is a full-surface
+          act: the panel scrims the board and the wall morphs it, and a receipt
+          floating over either one is in the way of the thing it sent you to
+          do. It is not dismissed, only stood down, so its state survives. */}
+      {receipt && !rightPanelOpen && placingStaged === null && (() => {
+        // stagedRows already holds only pending rows, so the count falls to
+        // zero on its own as the writer answers: the receipt tracks the dump
+        // rather than describing the instant it finished.
+        const pending = stagedRows.length;
+        return (
+          <div
+            style={{
+              position: 'fixed', zIndex: 200,
+              // Parked: exactly where the writer left it. Unparked: the default
+              // berth, which rides stickyTopPx so it sits under the toolbar in
+              // both its in-flow and stuck states rather than over it.
+              ...(receiptPos
+                ? { left: receiptPos.x, top: receiptPos.y }
+                : { top: stickyTopPx + 8, right: 20, transition: 'top 140ms linear' }),
+            }}
+          >
+            <Receipt
+              dragging={receiptDragging}
+              onHandleDown={(e) => {
+                const box = (e.currentTarget as HTMLElement).closest('[data-receipt]') as HTMLElement | null;
+                const host = box?.parentElement ?? null;
+                if (!host) return;
+                const r = host.getBoundingClientRect();
+                receiptDragRef.current = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+                setReceiptPos({ x: r.left, y: r.top });
+                setReceiptDragging(true);
+                (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                e.preventDefault();
+              }}
+              onHandleMove={(e) => {
+                const d = receiptDragRef.current;
+                if (!d) return;
+                // Clamped so it can never be parked off-screen; a receipt the
+                // writer cannot reach is worse than one in the way.
+                const w = 336, h = 120;
+                setReceiptPos({
+                  x: Math.min(Math.max(8, e.clientX - d.dx), window.innerWidth - w - 8),
+                  y: Math.min(Math.max(8, e.clientY - d.dy), window.innerHeight - h),
+                });
+              }}
+              onHandleUp={(e) => {
+                receiptDragRef.current = null;
+                setReceiptDragging(false);
+                try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch { /* already released */ }
+              }}
+              groups={receipt.groups}
+              tail={receipt.tail}
+              bars={receipt.bars}
+              pending={pending}
+              eyebrow={receipt.eyebrow}
+              ledeEmpty={receipt.ledeEmpty}
+              mintedSequences={receipt.mintedSequences}
+              onJump={(cardId) => {
+                // The card carries data-tour="card-<id>" (cards.tsx), which is
+                // the only stable handle on a canvas that positions by
+                // transform rather than scroll. Logged because a silent no-op
+                // here is indistinguishable from a dead click (live, 2026-09-09).
+                const el = document.querySelector(`[data-tour="card-${cardId}"]`);
+                if (!el) { setExpandedCardId(cardId); return; }
+                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                // Mark it while the scroll lands. The class is safe to set by
+                // hand: CardBox sets style and data-tour but never className,
+                // so React has nothing to clobber it with.
+                document.querySelectorAll('.ff-jump-hit').forEach((n) => n.classList.remove('ff-jump-hit'));
+                if (jumpHitTimerRef.current) window.clearTimeout(jumpHitTimerRef.current);
+                el.classList.add('ff-jump-hit');
+                jumpHitTimerRef.current = window.setTimeout(() => {
+                  el.classList.remove('ff-jump-hit');
+                  jumpHitTimerRef.current = null;
+                }, 1900);
+              }}
+              onAnswer={() => { setPanelForceSection('staged'); setRightPanelOpen(true); }}
+              onLater={dismissReceipt}
+              onDone={dismissReceipt}
+            />
+          </div>
+        );
+      })()}
+
+      {/* Receipts — top-right, stacked. Cascades and braindumps both land here.
+          Arc suggestions used to stack here too; they now live in a right-side
+          drawer opened from the toolbar badge. */}
       {cascadeState.activeToasts.length > 0 && (
         <div
           style={{
             position: 'fixed',
             top: 20,
-            right: 20,
             display: 'flex',
             flexDirection: 'column',
             gap: 8,
-            zIndex: 150,
+            // ABOVE the questions panel, and beside it (Ben, 2026-09-09). The
+            // panel is a full-screen scrim at z-180 that auto-opens whenever a
+            // dump raises a question, so at z-150 the receipt for that same
+            // dump was covered the instant it appeared. It also slides clear of
+            // the drawer rather than sitting on top of it: both are answers to
+            // "what just happened", and they should be readable together.
+            zIndex: 200,
+            right: rightPanelOpen ? 420 + 24 : 20,
+            transition: 'right 180ms cubic-bezier(0.32,0.72,0,1)',
             maxWidth: 380,
           }}
         >
           {cascadeState.activeToasts.map((toast) => (
             <CascadeToast
               key={toast.cardResponseId}
+              source={toast.source ?? 'cascade'}
+              factCount={toast.factCount ?? 0}
               newEntities={
                 toast.crossCardLandings.length > 0
                   ? toast.crossCardLandings
@@ -7348,13 +8302,14 @@ export default function FreeformCorkboard() {
         <RightPanel
           information={data.information ?? []}
           suggestions={arcSuggestions}
-          staged={stagedRows}
+          staged={stagedRowsOrdered}
           onAnswerStaged={(cardId, answer) => { setStagedSpotlight(null); onAnswerStaged(cardId, answer); }}
           onStagedSpotlight={onStagedSpotlight}
           onPlaceDragStart={(cardId) => { setStagedSpotlight(null); setPlacingStaged({ cardId }); }}
+          onConfirmSlot={onConfirmSlot}
           onPlaceDragEnd={() => setPlacingStaged(null)}
           hidden={placingStaged !== null}
-          arcs={aliveEntities.filter((e) => e.type === 'arc')}
+          arcs={aliveEntities.filter((e) => e.type === 'arc' && !String((e as any).character_id ?? ''))}
           locations={aliveEntities.filter((e) => e.type === 'location')}
           occursIn={data.edges?.occurs_in ?? []}
           signals={signals}
@@ -7365,7 +8320,7 @@ export default function FreeformCorkboard() {
           onDismissSuggestion={onDismissArcSuggestion}
           onOpenCard={(cardId) => setSheetCardId(cardId)}
           onEntitiesChanged={refreshEntities}
-          onClose={() => { setStagedSpotlight(null); setRightPanelOpen(false); }}
+          onClose={() => { panelAutoRef.current = false; setStagedSpotlight(null); setRightPanelOpen(false); }}
           openSection={panelForceSection}
         />
       )}
@@ -7723,6 +8678,7 @@ export default function FreeformCorkboard() {
               onClose={() => setSheetCardId(null)}
               onUpdateDescription={(d) => onUpdateDescription(sheetCardId, d)}
               onEntitiesChanged={refreshEntities}
+              onOpenCard={(id) => setSheetCardId(id)}
             />
           );
         }
@@ -7753,11 +8709,13 @@ export default function FreeformCorkboard() {
               edges={data.edges}
               auth={auth}
               projectId={storyId}
+              completedResponseIds={completedResponseIds}
               onClose={() => setSheetCardId(null)}
               onRename={(newName) => onRenameCard(sheetCardId, newName)}
               onUpdateDescription={(d) => onUpdateDescription(sheetCardId, d)}
               onOpenCard={(cardId) => setSheetCardId(cardId)}
               onEntitiesChanged={refreshEntities}
+              onTagScenes={() => openArcTagging(sheetCardId)}
             />
           );
         }
@@ -7767,6 +8725,7 @@ export default function FreeformCorkboard() {
             entity={e}
             signal={signals[sheetCardId] ?? {}}
             allEntities={data.entities}
+            information={data.information ?? []}
             edges={data.edges}
             precedesEdges={data.edges.precedes ?? []}
             auth={auth}

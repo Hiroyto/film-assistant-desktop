@@ -10,6 +10,7 @@ import {
   Moon,
 } from "lucide-react";
 import { Editor } from "@tiptap/react";
+import { applyElement, openTitlePage } from "../../editorUtils";
 import CharacterPanel from "../../../characters-home/CharacterPanel";
 
 interface Character {
@@ -44,26 +45,8 @@ interface ToolbarProps {
   onToggleCharacterLock?: (name: string) => void;
 }
 
-const updateParagraphAttribute = (
-  editor: Editor | null,
-  attributes: Record<string, any>
-): boolean => {
-  if (!editor) return false;
-  try {
-    const { state, dispatch } = editor.view;
-    const { $from } = state.selection;
-    if ($from.depth === 0) return false;
-    const pos = $from.before();
-    const node = state.doc.nodeAt(pos);
-    if (!node || node.type.name !== "paragraph") return false;
-    dispatch(state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, ...attributes }));
-    requestAnimationFrame(() => editor.commands.focus());
-    return true;
-  } catch (error) {
-    console.warn("Error in updateParagraphAttribute:", error);
-    return false;
-  }
-};
+// Shared with the keyboard shortcuts (editorUtils): one place that sets a
+// line's type, so leaving a parenthetical strips its parentheses on every path.
 
 const getActiveLineType = (editor: Editor | null): string | null => {
   if (!editor) return null;
@@ -106,6 +89,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
 
   // FD element order — matches the Cmd/Ctrl+1..6 direct shortcuts:
   //   1 slugline · 2 action · 3 character · 4 parenthetical · 5 dialogue · 6 transition
+  //   7 title page: goes to the title page (creates one at the top if none)
   const formatOptions: FormatOption[] = [
     { type: "scene", label: "slugline", icon: <FileText size={14} /> },
     { type: "description", label: "action", icon: <AlignLeft size={14} /> },
@@ -113,6 +97,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
     { type: "parenthetical", label: "parenthetical", icon: <Type size={14} /> },
     { type: "dialogue", label: "dialogue", icon: <Type size={14} /> },
     { type: "transition", label: "transition", icon: <AlignLeft size={14} /> },
+    { type: "title", label: "title page", icon: <FileText size={14} /> },
   ];
 
   const applyFormat = (type: string) => {
@@ -121,19 +106,12 @@ const Toolbar: React.FC<ToolbarProps> = ({
       const { $from } = editor.view.state.selection;
       if ($from.depth === 0) editor.commands.setTextSelection(1);
 
-      const success = updateParagraphAttribute(editor, { lineType: type });
-
-      if (type === "parenthetical" && success) {
-        const { $from: $f } = editor.view.state.selection;
-        if ($f.depth > 0) {
-          const node = $f.parent;
-          if (!node.textContent.trim()) {
-            editor.commands.insertContent("(");
-          } else if (!node.textContent.startsWith("(")) {
-            editor.commands.insertContentAt($f.before() + 1, "(");
-          }
-        }
-      }
+      // FD semantics (2026-09-12): the toolbar ADDS a paragraph of the
+      // element, converting only a blank line in place. Reformatting a line
+      // that has text is Cmd+Option+number. Title page (7) is a place, not a
+      // line: it goes there, creating one at the top when there is none.
+      if (type === "title") { openTitlePage(editor); return; }
+      applyElement(editor, type, "add");
 
       editor.view.updateState(editor.view.state);
       requestAnimationFrame(() => editor.commands.focus());

@@ -229,9 +229,25 @@ export const updateParagraphAttribute = (
       return false;
     }
 
-    // Merge new attributes with existing ones and apply
+    // Merge new attributes with existing ones and apply. LEAVING A
+    // PARENTHETICAL (Ben, 2026-09-12): the type is applied with a seeded
+    // "(" and the Enter handler closes it with ")", so a line demoted back
+    // to dialogue or action kept its parentheses. Strip a leading "(" and a
+    // trailing ")" in the same transaction whenever the type changes away
+    // from parenthetical; text that never got wrapped is left alone.
+    const tr = state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, ...attributes });
+    const leaving = node.attrs.lineType === "parenthetical"
+      && "lineType" in attributes && attributes.lineType !== "parenthetical";
+    if (leaving) {
+      const text = node.textContent;
+      if (text.startsWith("(")) {
+        const start = pos + 1;
+        if (text.length > 1 && text.endsWith(")")) tr.delete(start + text.length - 1, start + text.length);
+        tr.delete(start, start + 1);
+      }
+    }
     dispatch(
-      state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, ...attributes })
+      tr
     );
 
     // Re-focus after attribute change to keep cursor in place
@@ -559,4 +575,200 @@ export const debounce = <F extends (...args: any[]) => any>(
     }
     timeout = setTimeout(() => func(...args), waitFor);
   };
+};
+
+// ---------------------------------------------------------------------------
+// ELEMENT APPLICATION, FINAL DRAFT SEMANTICS (Ben, 2026-09-12; verified
+// against the FD10 manual). FD has two different operations:
+//   - Cmd+number "adds a [X] paragraph": a NEW paragraph of that element.
+//   - Cmd+Option+number "reformats the current paragraph": converts in place.
+// Tab "supplements the Return key" and lands on the alternate element; on a
+// blank paragraph it converts that paragraph (the manual writes Action to
+// Character as "Return + Tab": Return makes a blank Action, Tab turns it into
+// Character). So 'add' converts a blank line in place and otherwise inserts
+// the new paragraph AFTER the current one, never splitting it at the cursor.
+// ---------------------------------------------------------------------------
+
+export const PARA_STYLE = "font-family: 'Courier New', monospace; font-size: 12pt;";
+
+/** Seed the opening "(" on a parenthetical the way Final Draft does. */
+const seedParenthetical = (editor: Editor) => {
+  const { $from } = editor.view.state.selection;
+  if ($from.depth === 0) return;
+  const node = $from.parent;
+  if (!node.textContent.trim()) {
+    editor.commands.insertContent("(");
+  } else if (!node.textContent.startsWith("(")) {
+    editor.commands.insertContentAt($from.before() + 1, "(");
+  }
+};
+
+export const applyElement = (
+  editor: Editor | null,
+  type: string,
+  mode: "add" | "reformat",
+  extraAttrs: Record<string, any> = {},
+): boolean => {
+  if (!editor) return false;
+  try {
+    const { state } = editor.view;
+    const { $from } = state.selection;
+    if ($from.depth === 0) return false;
+    const node = $from.parent;
+    const blank = node.textContent.trim() === "";
+
+    if (mode === "reformat" || blank) {
+      const ok = updateParagraphAttribute(editor, { lineType: type, ...extraAttrs });
+      if (ok && type === "parenthetical") seedParenthetical(editor);
+      return ok;
+    }
+
+    // Leaving a character cue for a new line beneath it: continueds first,
+    // so the cue text is final before the new paragraph is placed after it.
+    if (node.attrs?.lineType === "character") maybeAppendContd(editor);
+    const st2 = editor.view.state;
+    const $f2 = st2.selection.$from;
+    const node2 = $f2.parent;
+    // Add: a fresh paragraph of the element after this one, cursor inside it.
+    const after = $f2.after();
+    const para = st2.schema.nodes.paragraph.create({
+      ...node2.attrs,
+      lineType: type,
+      "data-scene-id": null,
+      style: PARA_STYLE,
+      ...extraAttrs,
+    });
+    const tr = st2.tr.insert(after, para);
+    tr.setSelection(TextSelection.create(tr.doc, after + 1));
+    editor.view.dispatch(tr.scrollIntoView());
+    if (type === "parenthetical") editor.commands.insertContent("(");
+    requestAnimationFrame(() => editor.commands.focus());
+    return true;
+  } catch (error) {
+    console.warn("Error in applyElement:", error);
+    return false;
+  }
+};
+
+// ---------------------------------------------------------------------------
+// AUTOMATIC CHARACTER CONTINUEDS (Ben, 2026-09-12; FD10 manual, "Automatic
+// Character Continueds"): the (CONT'D) text "will be placed after the
+// character's name when the character's dialogue within a scene is
+// interrupted by an element that is not another character's dialogue (i.e.
+// an Action or General element). The character continued text is not
+// inserted if a character's speech is continued from one scene to the next."
+// Enabled by default in FD. Runs when the writer LEAVES a character line
+// (Enter, Tab, toolbar, autofill accept): walk back from the cue; dialogue
+// and parentheticals are transparent, action / general / shot / transition
+// count as the interruption, a scene heading ends the search, and the first
+// earlier cue decides: same name after an interruption gets (CONT'D).
+// ---------------------------------------------------------------------------
+
+const CONTD = "(CONT'D)";
+
+/** The cue's base name: "NELL (V.O.) (CONT'D)" -> "NELL". */
+const cueBaseName = (text: string): string =>
+  text.replace(/\s*\([^)]*\)\s*/g, " ").replace(/\s+/g, " ").trim().toUpperCase();
+
+export const maybeAppendContd = (editor: Editor | null): boolean => {
+  if (!editor) return false;
+  try {
+    const { state } = editor.view;
+    const { $from } = state.selection;
+    if ($from.depth === 0) return false;
+    const cue = $from.parent;
+    if (cue.attrs?.lineType !== "character") return false;
+    const text = cue.textContent;
+    if (!text.trim() || /\(\s*CONT'?D\s*\)/i.test(text)) return false;
+    const me = cueBaseName(text);
+    if (!me) return false;
+
+    // Walk the document's top-level paragraphs backwards from the cue.
+    const cueStart = $from.before();
+    let interrupted = false;
+    let verdict = false;
+    const before: any[] = [];
+    state.doc.forEach((node, offset) => { if (offset < cueStart) before.push(node); });
+    for (let i = before.length - 1; i >= 0; i--) {
+      const n = before[i];
+      if (n.type.name !== "paragraph") continue;
+      const lt = String(n.attrs?.lineType ?? "");
+      const blank = n.textContent.trim() === "";
+      if (blank) continue;
+      if (lt === "scene") break;
+      if (lt === "character") {
+        verdict = interrupted && cueBaseName(n.textContent) === me;
+        break;
+      }
+      if (lt === "dialogue" || lt === "parenthetical") continue;
+      interrupted = true; // description, general, shot, transition
+    }
+    if (!verdict) return false;
+    const end = $from.end();
+    const sep = /\s$/.test(text) ? "" : " ";
+    editor.view.dispatch(state.tr.insertText(sep + CONTD, end, end));
+    return true;
+  } catch (error) {
+    console.warn("Error in maybeAppendContd:", error);
+    return false;
+  }
+};
+
+// ---------------------------------------------------------------------------
+// TITLE PAGE (element 7, 2026-09-15). Final Draft keeps the title page as a
+// separate document; here it is the run of `title` paragraphs at the top of
+// the script, laid out on its own sheet. So element 7 is not "add a title
+// line here": it GOES to the title page, creating an empty one at the top
+// when the script has none. Cmd+Alt+7 still converts the current line in
+// place, for editing lines already on the page.
+//
+// Freeform surface: paragraphs above the first scene's head paragraph read
+// as scratch, so a title page inserted at the top takes over that head's
+// region tag (the import writes its title lines the same way).
+// ---------------------------------------------------------------------------
+
+export const openTitlePage = (editor: Editor | null): boolean => {
+  if (!editor) return false;
+  try {
+    const { state } = editor.view;
+    const first = state.doc.firstChild;
+    if (!first) return false;
+    if (first.attrs?.lineType === "title") {
+      // Jump to the end of the last title line.
+      let end = 0;
+      let pos = 0;
+      for (let i = 0; i < state.doc.childCount; i++) {
+        const n = state.doc.child(i);
+        if (n.attrs?.lineType !== "title") break;
+        end = pos + n.nodeSize - 1;
+        pos += n.nodeSize;
+      }
+      const tr = state.tr.setSelection(TextSelection.create(state.doc, end));
+      editor.view.dispatch(tr.scrollIntoView());
+      editor.view.focus();
+      requestAnimationFrame(() => editor.commands.focus());
+      return true;
+    }
+    const para = state.schema.nodes.paragraph.create({
+      ...first.attrs,
+      lineType: "title",
+      sluglineSelected: false,
+      pendingGeneration: false,
+      style: PARA_STYLE,
+    });
+    let tr = state.tr.insert(0, para);
+    if (first.attrs?.["data-scene-id"]) {
+      tr = tr.setNodeMarkup(para.nodeSize, undefined, { ...first.attrs, "data-scene-id": null });
+    }
+    tr = tr.setSelection(TextSelection.create(tr.doc, 1));
+    editor.view.dispatch(tr.scrollIntoView());
+    // The toolbar click took focus; give it straight back so the writer can
+    // type the title without a second click.
+    editor.view.focus();
+    requestAnimationFrame(() => editor.commands.focus());
+    return true;
+  } catch (error) {
+    console.warn("Error in openTitlePage:", error);
+    return false;
+  }
 };

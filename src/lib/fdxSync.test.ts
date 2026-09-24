@@ -6,6 +6,7 @@ import {
   emptyStore,
   matchScenes,
   normHeading,
+  remapStoreCard,
   sceneToHtml,
   sceneTitleOf,
   scenesToPages,
@@ -285,5 +286,55 @@ describe('contiguousGroups', () => {
   it('agrupa índices contíguos', () => {
     expect(contiguousGroups([0, 1, 2, 5, 6, 9])).toEqual([[0, 1, 2], [5, 6], [9]]);
     expect(contiguousGroups([])).toEqual([]);
+  });
+});
+
+describe('remapStoreCard (resposta do strip que troca o card)', () => {
+  const s1 = scene('1', 'INT. BAR - NIGHT', ['A bebe.']);
+  const s2 = scene('2', 'INT. BAR - CONTINUOUS', ['B chega.'], 1);
+  const s3 = scene('3', 'EXT. RUA - DAY', ['C corre.'], 2);
+
+  it('merge: as cenas do card mintado passam a compor o alvo; o estado do morto vai embora', () => {
+    const st = storeWith(record(s1, 'ev_staged'), record(s2, 'ev_staged'), record(s3, 'ev_other'));
+    st.events.ev_staged = { savedHash: 'h1', extractedHash: 'h1' };
+    st.events.ev_target = { savedHash: 't1', extractedHash: 't1' };
+    expect(remapStoreCard(st, ['ev_staged'], 'ev_target')).toBe(2);
+    const byEvent = Object.values(st.scenes).map((r) => r.eventId);
+    expect(byEvent.filter((id) => id === 'ev_target')).toHaveLength(2);
+    expect(byEvent).toContain('ev_other');
+    expect(st.events.ev_staged).toBeUndefined();
+    // O sobrevivente mantém o estado: o hash das páginas (agora com as cenas
+    // movidas) já difere, então a rodada seguinte re-salva sozinha.
+    expect(st.events.ev_target).toEqual({ savedHash: 't1', extractedHash: 't1' });
+  });
+
+  it('convert (sequência → cena): a cabeça E os membros fundidos vão para o card novo', () => {
+    const st = storeWith(record(s1, 'seq_old'), record(s2, 'ev_member'), record(s3, 'ev_other'));
+    expect(remapStoreCard(st, ['seq_old', 'ev_member'], 'ev_new')).toBe(2);
+    expect(Object.values(st.scenes).filter((r) => r.eventId === 'ev_new')).toHaveLength(2);
+    expect(Object.values(st.scenes).find((r) => r.eventId === 'ev_other')).toBeTruthy();
+  });
+
+  it('a cena da cabeça já não estava no arquivo (missing): o registro segue junto, marcado como estava', () => {
+    const st = storeWith(record(s1, 'ev_staged', { missingSince: '2026-09-01T00:00:00.000Z' }));
+    expect(remapStoreCard(st, ['ev_staged'], 'ev_target')).toBe(1);
+    const rec = Object.values(st.scenes)[0];
+    expect(rec.eventId).toBe('ev_target');
+    expect(rec.missingSince).toBe('2026-09-01T00:00:00.000Z');
+  });
+
+  it('no-op quando nenhuma cena do arquivo compõe o card (pergunta que não era do cowork)', () => {
+    const st = storeWith(record(s1, 'ev_a'));
+    st.events.ev_a = { savedHash: 'x' };
+    expect(remapStoreCard(st, ['ev_board_only'], 'ev_target')).toBe(0);
+    expect(Object.values(st.scenes)[0].eventId).toBe('ev_a');
+    expect(st.events.ev_a).toEqual({ savedHash: 'x' });
+  });
+
+  it('ignora from === to, ids vazios e alvo vazio', () => {
+    const st = storeWith(record(s1, 'ev_a'));
+    expect(remapStoreCard(st, ['ev_a'], 'ev_a')).toBe(0);
+    expect(remapStoreCard(st, ['', 'ev_a'], '')).toBe(0);
+    expect(Object.values(st.scenes)[0].eventId).toBe('ev_a');
   });
 });

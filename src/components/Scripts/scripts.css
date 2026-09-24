@@ -98,9 +98,9 @@
 .ProseMirror p {
   margin: 0;
   padding: 0 !important;
-  min-height: 1.5em !important;
+  min-height: 1em !important;
   position: relative !important;
-  line-height: 1.5 !important;
+  line-height: 1 !important;
   white-space: pre-wrap !important;
   color: #000000 !important;
   font-family: "Courier New", "Courier", monospace !important;
@@ -126,7 +126,7 @@
 .ProseMirror
   p[data-line-type="dialogue"]
   + p:not([data-line-type="dialogue"]):not([data-line-type="parenthetical"]) {
-  margin-top: 1.8em
+  margin-top: 1em
 }
 
 .ProseMirror p:empty::before {
@@ -169,7 +169,7 @@
   margin-bottom: 0 !important;
   font-family: "Courier New", "Courier", monospace !important;
   font-size: 12pt !important;
-  line-height: 1.5 !important;
+  line-height: 1 !important;
 }
 
 /* ACTION/DESCRIPTION - Flush left */
@@ -198,7 +198,7 @@
   width: 2.3in !important;
   font-family: "Courier New", "Courier", monospace !important;
   font-size: 12pt !important;
-  line-height: 1.5 !important;
+  line-height: 1 !important;
   margin-top: 0;
   margin-bottom: 0 !important;
 }
@@ -221,7 +221,7 @@
   text-transform: uppercase;
   font-family: "Courier New", "Courier", monospace !important;
   font-size: 12pt !important;
-  line-height: 1.5 !important;
+  line-height: 1 !important;
   margin-top: 1em;
   margin-bottom: 1em !important;
 }
@@ -251,7 +251,7 @@
   color: #f3f4f6 !important;
   font-family: "Courier New", "Courier", monospace !important;
   font-size: 12pt !important;
-  line-height: 1.5 !important;
+  line-height: 1 !important;
   min-height: auto !important;
   height: auto !important;
 }
@@ -260,7 +260,7 @@
   color: #f3f4f6 !important;
   font-family: "Courier New", "Courier", monospace !important;
   font-size: 12pt !important;
-  line-height: 1.5 !important;
+  line-height: 1 !important;
 }
 
 .screenplay-content-area.dark-theme .ProseMirror p[data-line-type="description"] {
@@ -325,7 +325,7 @@
   .ProseMirror
   p[data-line-type="dialogue"]
   + p:not([data-line-type="dialogue"]):not([data-line-type="parenthetical"]) {
-  margin-top: 1.8em;
+  margin-top: 1em;
 }
 
 .screenplay-content-area.dark-theme .ProseMirror ::selection {
@@ -354,7 +354,7 @@
   color: #111827 !important;
   font-family: "Courier New", "Courier", monospace !important;
   font-size: 12pt !important;
-  line-height: 1.5 !important;
+  line-height: 1 !important;
   min-height: auto !important;
   height: auto !important;
 }
@@ -363,7 +363,7 @@
   color: #111827 !important;
   font-family: "Courier New", "Courier", monospace !important;
   font-size: 12pt !important;
-  line-height: 1.5 !important;
+  line-height: 1 !important;
 }
 
 .screenplay-content-area.light-theme .ProseMirror p[data-line-type="description"] {
@@ -427,7 +427,7 @@
   .ProseMirror
   p[data-line-type="dialogue"]
   + p:not([data-line-type="dialogue"]):not([data-line-type="parenthetical"]) {
-  margin-top: 1.8em;
+  margin-top: 1em;
 }
 
 .screenplay-content-area.light-theme .ProseMirror ::selection {
@@ -604,7 +604,7 @@
   .ProseMirror
   p[data-line-type="dialogue"]
   + p:not([data-line-type="dialogue"]):not([data-line-type="parenthetical"]) {
-  margin-top: 1.8em;
+  margin-top: 1em;
 }
 
 /* ===== 9. TOOLBAR STYLES ===== */
@@ -1058,7 +1058,7 @@
 .ProseMirror p br.screenplay-line-break {
   font-family: "Courier New", "Courier", monospace !important;
   font-size: 12pt !important;
-  line-height: 1.5 !important;
+  line-height: 1 !important;
 }
 
 .ProseMirror br.screenplay-line-break + * { display: inline; }
@@ -1139,7 +1139,7 @@
   .ProseMirror * {
     font-family: "Courier New", "Courier", monospace !important;
     font-size: 12pt !important;
-    line-height: 1.5 !important;
+    line-height: 1 !important;
     color: black !important;
   }
 }
@@ -1297,3 +1297,38 @@
     inset 0 0 4px rgba(16, 185, 129, 0.1);
   transition: background 0.3s ease;
 }
+
+/* SINGLE SPACING (2026-09-12, Ben): Final Draft sets Courier 12pt at single
+   spacing, six lines to the inch, so a page holds about 55 lines. Our 1.5
+   leading held two thirds of that and inflated every page count by half.
+   Paragraph spacing stays in em (2 before a scene heading, 1 before action,
+   character and transition, 0 before parenthetical and dialogue), which is
+   the standard template. */
+
+/* Space-before is suppressed at the top of the first page (Final Draft): the
+   document's first paragraph starts exactly at the 1in text margin. Later
+   pages get the same from the page-break margin (PageBreaks.ts). */
+.paginated-editor-content > p:first-child { margin-top: 0 !important; }
+
+/* ===== TITLE PAGE (2026-09-15) =====
+   Lines typed `title` (the import classifier's title-page detection, or a
+   whole-script paste): centred on a 6in column, single-spaced, and the
+   PageBreaks plugin forces the first script line onto the next sheet. */
+.ProseMirror p[data-line-type="title"] {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  width: 6in !important;
+  max-width: 6in !important;
+  text-align: center;
+  margin-top: 0;
+  margin-bottom: 0 !important;
+}
+.screenplay-content-area.dark-theme .ProseMirror p[data-line-type="title"] { color: #f3f4f6 !important; }
+.screenplay-content-area.light-theme .ProseMirror p[data-line-type="title"] { color: #111827 !important; }
+.fullscreen-script-overlay .screenplay-content .ProseMirror p[data-line-type="title"] { color: white !important; text-align: center; }
+.fullscreen-script-overlay .screenplay-content-area.light-theme .ProseMirror p[data-line-type="title"] { color: black !important; }
+.ProseMirror p[data-line-type="title"] + p[data-line-type="title"] { margin-top: 1em; }
+.ProseMirror p[data-line-type="title"].ff-title-credit { margin-top: 3em; }
+.ProseMirror p[data-line-type="title"].ff-title-contact { text-align: left; }
+.ProseMirror p[data-line-type="title"].ff-title-contact { margin-top: 1em; } /* the drop to the sheet bottom is injected by PageBreaks */
+.ProseMirror > p[data-line-type="title"]:first-child { margin-top: 3in; }

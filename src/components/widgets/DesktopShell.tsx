@@ -84,7 +84,13 @@ export function DesktopShell(): JSX.Element | null {
 
   return (
     <>
-      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 40 }}>
+      {/* Badge no canto inferior ESQUERDO: o direito tem UI fixa por rota (zoom do
+          corkboard, toast do roteiro, CTA do dashboard) e o centro, as pílulas do
+          board. z 40 (o mesmo do footer antigo): fica SOB os backdrops dos modais
+          (z 50 — senão o "Resolve" re-emite o conflito com o modal aberto e zera a
+          escolha) e acima das páginas com <Theme> (o root theme do Radix é um
+          contexto z 0, então a sidebar z 99 da Home não a cobre). */}
+      <div style={{ position: 'fixed', left: 12, bottom: 12, zIndex: 40 }}>
         <SyncStatusBar
           onRetry={() => void requestSyncNow()}
           onViewConflicts={() => {

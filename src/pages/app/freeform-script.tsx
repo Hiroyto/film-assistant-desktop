@@ -47,10 +47,12 @@ import {
   deleteCard,
   tagEventPrecedes,
   untagEventPrecedes,
+  placeStagedCard,
   tagSequenceContains,
   updateCardNarrativeStatus,
   updateCardDescription,
   updateCardName,
+  listStagedQuestions,
   type ProjectEntity,
   type ListProjectEntitiesResponse,
   type NarrativeStatus,
@@ -66,6 +68,8 @@ import { loadStoredGraph, saveStoredGraph } from '../../lib/localGraphStore';
 import { scriptTextToHtml } from '../../lib/screenplayParse';
 import { acquireStorySession, queueEditGlobal, pulseExtractionGlobal } from '../../lib/storySession';
 import InternIcon from '../../components/Freeform/InternIcon';
+import { PlacementGrid, type GridPick } from '../../components/Freeform/corkboard/placementGrid';
+import { HoverTip } from '../../components/Freeform/corkboard/tooltip';
 import '../../components/Scripts/scripts.css';
 import '../../components/Scripts/filmassistant-screenplay.css';
 
@@ -241,6 +245,12 @@ function tagFirstParagraph(html: string, eventId: string): string {
 // ---- Left navigator model: the outline in shell form ------------------------
 type NavScene = { eventId: string; scNo: number; title: string };
 type NavSection = { seqId: string | null; title: string; color: string; scenes: NavScene[] };
+// A sequence that exists on the board with NO scenes yet. The navigator used
+// to build sections by walking the SPINE, so an empty sequence never appeared
+// and had no writing surface at all: every surface (scratch tail, a scene's
+// pages, "+ New scene", mid-document paste) is anchored RELATIVE to an
+// existing scene, so an empty container was unreachable. These render as
+// sections with a hover-revealed "+ Scene" (Ben, 2026-09-08).
 // Navigator dot semantics (Ben, 2026-07-16): green = written and extraction
 // current; grey = needs extraction (edited past the floor since the last
 // extraction, extraction in flight, or imported/never-extracted); hollow =
@@ -474,6 +484,8 @@ export default function FreeformScript() {
   // Left navigator: sequences as sections, scenes as rows.
   const [navSections, setNavSections] = useState<NavSection[]>([]);
   const [statusById, setStatusById] = useState<Map<string, SceneStatus>>(new Map());
+  const statusByIdRef = useRef(statusById);
+  statusByIdRef.current = statusById;
   const [activeSceneId, setActiveSceneId] = useState<string | null>(null);
   const navOpenRef = useRef<boolean>(true);
   const [navOpen, setNavOpen] = useState<boolean>(() => {
@@ -489,6 +501,50 @@ export default function FreeformScript() {
   });
   const [hoverSceneId, setHoverSceneId] = useState<string | null>(null);
   const [hoverSeqIdx, setHoverSeqIdx] = useState<number | null>(null);
+  // Leaving a sequence is DELAYED; entering is immediate. A scene row grows on
+  // hover (full title plus the Read button), so the row you just left shrinks
+  // and the whole section jumps up under a pointer that has not moved. Chrome
+  // re-evaluates hover after that layout change and fires mouseleave on the
+  // section before the next row's mouseenter arrives, which read as the
+  // sequence collapsing the moment you aimed at the scene below (Ben,
+  // 2026-09-08). The grace window lets the real enter land first.
+  // Which sequence's CARD is up. Separate from hoverSeqIdx, which marks the
+  // section the pointer is in and unfurls every header inside it: the card is
+  // header-only, so hovering a scene row hands the slot to that scene's card.
+  const [seqCardIdx, setSeqCardIdx] = useState<number | null>(null);
+  const [seqCardTop, setSeqCardTop] = useState(0);
+  const seqCardTimer = useRef<number | null>(null);
+  const openSeqCard = useCallback((si: number, top?: number) => {
+    // The naming form owns the slot while it is open.
+    if (pendingSceneRef.current) return;
+    if (seqCardTimer.current) { window.clearTimeout(seqCardTimer.current); seqCardTimer.current = null; }
+    // The sequence card and the scene card share one slot beside the rail.
+    if (typeof top === 'number') { setProxyCard(null); setSeqCardTop(top); }
+    setSeqCardIdx(si);
+  }, []);
+  const closeSeqCard = useCallback((si: number) => {
+    if (seqCardTimer.current) window.clearTimeout(seqCardTimer.current);
+    seqCardTimer.current = window.setTimeout(() => {
+      seqCardTimer.current = null;
+      setSeqCardIdx((c) => (c === si ? null : c));
+    }, 140);
+  }, []);
+  const seqLeaveTimer = useRef<number | null>(null);
+  const enterSeq = useCallback((si: number) => {
+    if (seqLeaveTimer.current) { window.clearTimeout(seqLeaveTimer.current); seqLeaveTimer.current = null; }
+    setHoverSeqIdx(si);
+  }, []);
+  const leaveSeq = useCallback((si: number) => {
+    if (seqLeaveTimer.current) window.clearTimeout(seqLeaveTimer.current);
+    seqLeaveTimer.current = window.setTimeout(() => {
+      seqLeaveTimer.current = null;
+      setHoverSeqIdx((c) => (c === si ? null : c));
+    }, 140);
+  }, []);
+  useEffect(() => () => {
+    if (seqLeaveTimer.current) window.clearTimeout(seqLeaveTimer.current);
+    if (seqCardTimer.current) window.clearTimeout(seqCardTimer.current);
+  }, []);
   // Second click on the active scene opens this (summary + cast + door to
   // the full card). { eventId, top } — top anchors the popover to the row.
   const [proxyCard, setProxyCard] = useState<{ eventId: string; top: number } | null>(null);
@@ -543,6 +599,11 @@ export default function FreeformScript() {
       const readTarget =
         rows.find((sc) => { const st = statusById.get(sc.eventId); return st === 'written' || st === 'stale'; })
         ?? rows[0];
+      // Rewritten 2026-09-13 for the current surface (Ben: "update to fit the
+      // new outline"): the rail with its + Scene slots and + New scene, writing
+      // into a declared scene or carving from the tail, Read on the hover card
+      // (the sequence header pill is gone; the Peer menu reads a stretch),
+      // Auto-merge, Sync, and the Board button that carries the questions.
       const steps: TourStep[] = [
         {
           id: 'script-nav',
@@ -551,7 +612,7 @@ export default function FreeformScript() {
           onEnter: () => setNavOpen(true),
           content: body(
             'Your outline came with you.',
-            'Every scene from your board is a row here, in story order, grouped by sequence. The dots track what is written, what changed since the engine last read it, and what is still empty. Click a row to jump to it.',
+            'Every scene from your board is a row here, in story order, grouped by sequence. The dots track what is written, what changed since the engine last read it, and what is still empty. An empty sequence keeps a + Scene slot. Click a row to write into that scene.',
           ),
         },
         {
@@ -560,7 +621,16 @@ export default function FreeformScript() {
           placement: 'side',
           content: body(
             'Now just write.',
-            'Type your scenes as screenplay pages. You never mark where a scene starts or ends: the engine follows your sluglines and keeps the board in sync as you go.',
+            'Write into a scene you picked from the outline and it belongs to that scene. Keep writing past the last scene and the engine carves new scenes out of your pages and places them on the board.',
+          ),
+        },
+        {
+          id: 'script-new-scene',
+          selector: '[data-tour="script-new-scene"]',
+          placement: 'side',
+          content: body(
+            'Or declare one first.',
+            'New scene mints a card, lets you place it on the board, and opens it here to write into. Inside an empty sequence, + Scene does the same without the placement step.',
           ),
         },
         ...(readTarget
@@ -573,11 +643,11 @@ export default function FreeformScript() {
               content: body(
                 'The peer reads pages.',
                 <>
-                  Once a scene is written, hit{' '}
+                  Hover a written scene and hit{' '}
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: PEER_BLUE, fontWeight: 600, verticalAlign: 'middle' }}>
                     <InternIcon size={11} />Read
                   </span>{' '}
-                  and the peer measures your pages against what the scene is meant to do. The same button on a sequence header reads that whole stretch at once.
+                  on its card: the peer measures your pages against what the scene is meant to do. The Peer menu up top reads a whole sequence or the whole draft.
                 </>,
               ),
             }]
@@ -585,11 +655,35 @@ export default function FreeformScript() {
         {
           id: 'script-notes',
           selector: '[data-tour="script-peer-seg"]',
-          nextLabel: "You're set →",
           onEnter: () => setTourReadSceneId(null),
           content: body(
             'Notes pin to your lines.',
             'Each note sits in the margin beside the exact line it is about; hover a pin to read it. Review gathers everything into a docket you clear pass by pass, and a note clears itself when your rewrite answers it.',
+          ),
+        },
+        {
+          id: 'script-automerge',
+          selector: '[data-tour="script-automerge"]',
+          content: body(
+            'Auto-merge keeps the board current.',
+            'On by default: what you write applies to the board on its own, and the board lists every change on its receipt when you go back. Turn it off and changes that need your call wait as questions instead.',
+          ),
+        },
+        {
+          id: 'script-sync',
+          selector: '[data-tour="script-sync"]',
+          content: body(
+            'Sync when you want it now.',
+            'Your pages work themselves into the outline as you pause. Sync board does it immediately.',
+          ),
+        },
+        {
+          id: 'script-board',
+          selector: '[data-tour="script-board"]',
+          nextLabel: "You're set →",
+          content: body(
+            'Back to the board.',
+            'When your pages leave a question for you, the count grows out of this button and takes you straight to it on the board.',
           ),
         },
       ];
@@ -781,6 +875,49 @@ export default function FreeformScript() {
     });
   }, [manualOnlyKey]);
 
+  // JUST WRITE (Ben, 2026-09-11). Script extraction only: with this on, the
+  // questions a carve raises are answered at persist time the way the pages
+  // would answer them (re-telling replaces, a confident same-beat call merges,
+  // a tentative one keeps), and the board lists what was applied when the
+  // writer returns, each with its reverse. Placement never needed an answer
+  // here: the document order is the placement. Prose braindumps on the board
+  // are untouched. Per story, in this browser, like auto-sync.
+  const justWriteKey = `ff-just-write-${storyId ?? ''}`;
+  const [justWrite, setJustWrite] = useState<boolean>(() => {
+    // ON by default (Ben, 2026-09-12): off is the opt-out.
+    try { return localStorage.getItem(`ff-just-write-${storyId ?? ''}`) !== '0'; } catch { return true; }
+  });
+  const justWriteRef = useRef(justWrite);
+  justWriteRef.current = justWrite;
+  const toggleJustWrite = useCallback(() => {
+    setJustWrite((v) => {
+      try { localStorage.setItem(justWriteKey, v ? '0' : '1'); } catch { /* ignore */ }
+      return !v;
+    });
+  }, [justWriteKey]);
+
+  // QUESTIONS WAITING ON THE BOARD. The script page has no listener for
+  // extraction outcomes, so the count is fetched: on mount, when the tab
+  // regains focus, and on a slow tick while the page is open (a carve lands
+  // about a minute after the writer stops typing). The count is a door: it
+  // sends the writer to the board's panel, where questions are answered.
+  const [pendingQuestions, setPendingQuestions] = useState(0);
+  useEffect(() => {
+    if (!auth || !storyId) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await listStagedQuestions({ projectId: storyId }, auth.token);
+        if (!cancelled) setPendingQuestions((res.questions ?? []).filter((q) => q.status === 'pending').length);
+      } catch { /* keep the last count */ }
+    };
+    void tick();
+    const onFocus = () => { void tick(); };
+    window.addEventListener('focus', onFocus);
+    const iv = window.setInterval(() => { if (document.visibilityState === 'visible') void tick(); }, 30000);
+    return () => { cancelled = true; window.removeEventListener('focus', onFocus); window.clearInterval(iv); };
+  }, [auth, storyId]);
+
   // eventId → last persisted region HTML (dirty-check baseline).
   const baselineRef = useRef<Map<string, string>>(new Map());
   // Spine order + titles — drives anchor INSERTION position for scenes that
@@ -790,10 +927,6 @@ export default function FreeformScript() {
   // Graph edges kept for the "+ New scene" splice + sequence membership.
   const precedesRef = useRef<Array<{ from: string; to: string }>>([]);
   const seqOfEventRef = useRef<Map<string, string>>(new Map());
-  // "+ New scene" inline input state.
-  const [addSceneOpen, setAddSceneOpen] = useState(false);
-  const [addSceneTitle, setAddSceneTitle] = useState('');
-  const [addSceneBusy, setAddSceneBusy] = useState(false);
   const getAllHTMLRef = useRef<(() => string) | null>(null);
   const getAllEditorsRef = useRef<(() => Editor[]) | null>(null);
   const saveTimerRef = useRef<number | null>(null);
@@ -1069,6 +1202,69 @@ export default function FreeformScript() {
               : 'unwritten',
           );
         });
+        // EMPTY SEQUENCES (2026-09-08). The walk above only emits a section
+        // where a scene occurs, so sequences with no scenes vanish. Insert
+        // them at their own rank in the sequence chain, which is where the
+        // writer sees them on the board.
+        {
+          const seqPre = ((entities.edges as any)?.sequence_precedes ?? []) as { from: string; to: string }[];
+          const nextOf = new Map(seqPre.map((e) => [e.from, e.to]));
+          const heads = new Set(seqById.keys());
+          for (const e of seqPre) heads.delete(e.to);
+          const rank = new Map<string, number>();
+          let r = 0;
+          for (const head of heads) {
+            let cur: string | undefined = head;
+            const seen = new Set<string>();
+            while (cur && !seen.has(cur)) { seen.add(cur); rank.set(cur, r++); cur = nextOf.get(cur); }
+          }
+          // Unchained sequences sort last rather than being dropped.
+          for (const id of seqById.keys()) if (!rank.has(id)) rank.set(id, r++);
+          const present = new Set(sections.map((x) => x.seqId).filter(Boolean) as string[]);
+          const empties = [...seqById.keys()].filter((id) => !present.has(id));
+          for (const id of empties) {
+            const ent = seqById.get(id);
+            const sec: NavSection = {
+              seqId: id,
+              title: (ent?.working_title ?? ent?.working_name ?? 'Sequence') as string,
+              color: (((ent?.color ?? '') as string).trim() || '#22c55e'),
+              scenes: [],
+            };
+            const myRank = rank.get(id) ?? Number.MAX_SAFE_INTEGER;
+            const at = sections.findIndex((x) => x.seqId && (rank.get(x.seqId) ?? -1) > myRank);
+            if (at < 0) sections.push(sec); else sections.splice(at, 0, sec);
+          }
+        }
+        // CROSS-CHAIN (2026-09-08). A scene can be chained straight to a
+        // SEQUENCE node rather than to another scene: placing a card after an
+        // empty sequence writes Sequence -> Event, which the blob buckets as
+        // cross_precedes. The walk above only reads the EVENT spine, so such a
+        // scene sorted by whichever scene happened to precede it and the empty
+        // sequence fell to the tail, so the board and the rail disagreed about
+        // the same placement (Ben, 2026-09-08). Honour the cross edges here.
+        {
+          const cross = ((entities.edges as any)?.cross_precedes ?? []) as { from: string; to: string }[];
+          const idxOfSeq = (id: string) => sections.findIndex((x) => x.seqId === id);
+          const idxOfEventSec = (id: string) => sections.findIndex((x) => x.scenes.some((sc) => sc.eventId === id));
+          const move = (from: number, to: number) => {
+            if (from < 0 || to < 0 || from === to) return;
+            const [x] = sections.splice(from, 1);
+            sections.splice(from < to ? to - 1 : to, 0, x);
+          };
+          for (const e of cross) {
+            if (seqById.has(e.from)) {
+              // Sequence -> Event: that scene's section follows the sequence.
+              // Only a LOOSE section moves; a scene that belongs to another
+              // sequence is positioned by its own container, not by this edge.
+              const si = idxOfSeq(e.from);
+              const ei = idxOfEventSec(e.to);
+              if (si >= 0 && ei >= 0 && sections[ei].seqId === null) move(ei, si + 1);
+            } else if (seqById.has(e.to)) {
+              // Event -> Sequence: the sequence follows that scene's section.
+              move(idxOfSeq(e.to), idxOfEventSec(e.from) + 1);
+            }
+          }
+        }
         setNavSections(sections);
         setStatusById(statuses);
 
@@ -1308,6 +1504,14 @@ export default function FreeformScript() {
       for (let r = tailIdx + 1; r < regionOrder.length; r++) {
         const rid = regionOrder[r];
         if ((baselineRef.current.get(rid) ?? '') !== '') continue; // real pages: bound
+        // DECLARED (Ben, 2026-09-08): the writer created this scene, placed it
+        // on the wall and opened it from the rail. That is not the stray click
+        // this reroute was written for, and it is not residue from a deleted
+        // scene. It is an obligation, so the region owns what is typed in it
+        // and gets a baseline on the first save. Without this a scene made
+        // through the new placement flow could never receive its own pages:
+        // binding required persisted pages, and pages required binding.
+        if (declaredAnchorsRef.current.has(rid)) continue;
         for (let i = 0; i < out.length; i++) {
           if (out[i].regionId === rid) {
             if (normText(out[i].text) !== '') slotIds.add(rid);
@@ -1320,7 +1524,7 @@ export default function FreeformScript() {
       // session): nothing is bound — the whole document is the open tail.
       for (let i = 0; i < out.length; i++) {
         const rid = out[i].regionId;
-        if (rid && rid !== SCRATCH && (baselineRef.current.get(rid) ?? '') === '') {
+        if (rid && rid !== SCRATCH && (baselineRef.current.get(rid) ?? '') === '' && !declaredAnchorsRef.current.has(rid)) {
           if (normText(out[i].text) !== '') slotIds.add(rid);
           toScratch(out[i], i);
         }
@@ -1556,8 +1760,28 @@ export default function FreeformScript() {
     setSaveState('saving');
     try {
       for (const { eventId, html } of dirty) {
+        const wasDeclared = (baselineRef.current.get(eventId) ?? '') === '';
         await saveSceneText({ projectId: storyId, eventId, html, ledger: ledgers.get(eventId) }, a.token);
         baselineRef.current.set(eventId, html);
+        // PROMOTION. A declared region just received its first pages, so it
+        // stops being provisional and becomes a region like any other: the
+        // baseline above is what binds it from here on, and registering its
+        // blocks as settled means no walk between now and the next remount
+        // can re-route them to scratch. Same move the carve makes for a scene
+        // it has just bound text to.
+        if (wasDeclared && declaredAnchorsRef.current.has(eventId)) {
+          const k = blockKeysOf(html);
+          let reg = settledRef.current.byRegion.get(eventId);
+          if (!reg) {
+            reg = { ids: new Set(), hashes: new Set(), count: 0 };
+            settledRef.current.byRegion.set(eventId, reg);
+          }
+          for (const id of k.ids) reg.ids.add(id);
+          for (const h of k.hashes) reg.hashes.add(h);
+          reg.count = (html.match(/<p\b/g) ?? []).length;
+          declaredAnchorsRef.current.delete(eventId);
+          console.info('[freeform-script] declared scene promoted to a real region', { eventId, chars: html.replace(/<[^>]*>/g, '').trim().length });
+        }
       }
       setStatusById((cur) => {
         const next = new Map(cur);
@@ -1934,6 +2158,8 @@ export default function FreeformScript() {
       {
         jobType: 'extract-braindump', projectId: storyId, userId: a.userId, braindumpId,
         prose, sourceFormat: 'screenplay',
+        // JUST WRITE rides the carve only; the board's prose dumps never see it.
+        ...(justWriteRef.current ? { autoResolve: true } : {}),
         // Card-by-card reveal on an open board (entity_streamed): the tail
         // lane streams like typed braindumps do. Spans + the continuation
         // verdict are path-independent (stamped in common post-LLM code).
@@ -2048,6 +2274,7 @@ export default function FreeformScript() {
       }
     }
     if (prev && prev !== activeSceneId) {
+      sweepAnchorRef.current?.(prev);
       scheduleExtractCheck(prev);
       // Scene jumps arm the TAIL's settle-watcher too: navigator deep links
       // re-focus the editor (no blur ever fires), so without this a writer
@@ -2748,6 +2975,60 @@ export default function FreeformScript() {
   // end of the nearest preceding scene that has a region (document start when
   // none). This is the EXPLICIT chosen-region act — unwritten scenes render
   // nowhere until the writer starts them from the panel.
+  // Regions the writer DECLARED this session by opening them from the rail.
+  // Two jobs, both resting on the same fact (the writer chose this scene on
+  // purpose):
+  //   1. while still empty, the anchor is provisional and sweeps on exit, so
+  //      clicking around the rail leaves no blank lines in the pages;
+  //   2. once written into, the walker binds that text to the scene instead
+  //      of rerouting it to the open tail. Scene identity has to live on a
+  //      real paragraph, and an anchor is that paragraph.
+  const declaredAnchorsRef = useRef<Set<string>>(new Set());
+  // The sweep is defined below, next to findAnchor; the scene-exit effect runs
+  // above it and reaches it through this ref.
+  const sweepAnchorRef = useRef<((eventId: string) => void) | null>(null);
+
+  // Leaving a scene the writer never wrote into: take the anchor back out.
+  // Every guard here has to hold, because removing a paragraph that DOES
+  // carry pages would delete the writer's work:
+  //   1. this session inserted it (never a region loaded from the server),
+  //   2. the scene is still unwritten (a cleared scene keeps its region so
+  //      the keep-or-trash decision stays live),
+  //   3. the anchor paragraph is empty, and
+  //   4. it is the region's only paragraph, so nothing follows it before the
+  //      next scene's tag or the end of the document.
+  const sweepEmptyAnchor = useCallback((eventId: string) => {
+    if (!declaredAnchorsRef.current.has(eventId)) return;
+    if ((statusByIdRef.current.get(eventId) ?? 'unwritten') !== 'unwritten') {
+      declaredAnchorsRef.current.delete(eventId);
+      return;
+    }
+    const loc = findAnchor(eventId);
+    if (!loc) { declaredAnchorsRef.current.delete(eventId); return; }
+    try {
+      const node: any = loc.ed.state.doc.nodeAt(loc.pos);
+      if (!node || node.type?.name !== 'paragraph' || node.content.size > 0) return;
+      // Anything of the writer's between this anchor and the next scene tag
+      // means the region is in use, whatever the anchor line itself holds.
+      let bare = true;
+      loc.ed.state.doc.descendants((n: any, pos: number) => {
+        if (pos <= loc.pos || !bare) return pos <= loc.pos;
+        if (n.type?.name !== 'paragraph') return true;
+        const tag = String(n.attrs?.['data-scene-id'] ?? '');
+        if (tag && tag !== eventId) { bare = true; return false; }
+        bare = false;
+        return false;
+      });
+      if (!bare) return;
+      loc.ed.chain().deleteRange({ from: loc.pos, to: loc.pos + node.nodeSize }).run();
+      declaredAnchorsRef.current.delete(eventId);
+    } catch (e) {
+      console.warn('[freeform-script] anchor sweep failed', { eventId, error: e });
+    }
+  }, [findAnchor]);
+
+  sweepAnchorRef.current = sweepEmptyAnchor;
+
   const insertSceneAnchor = useCallback((eventId: string): { ed: Editor; pos: number } | null => {
     const editors = getAllEditorsRef.current?.() ?? [];
     if (editors.length === 0) return null;
@@ -2784,6 +3065,10 @@ export default function FreeformScript() {
       insertPos = end;
     }
     try {
+      // Provisional until written into: leaving without typing sweeps it (see
+      // sweepEmptyAnchor). Only anchors inserted here are ever swept, so a
+      // region that came back from the server is never touched.
+      declaredAnchorsRef.current.add(eventId);
       targetEd
         .chain()
         .insertContentAt(insertPos, {
@@ -2813,9 +3098,30 @@ export default function FreeformScript() {
     if (!loc) loc = insertSceneAnchor(eventId);
     if (!loc) return;
     try {
-      const dom = loc.ed.view.nodeDOM(loc.pos) as HTMLElement | null;
+      // Scene one's region opens with the title page when the script has
+      // one (its head paragraph IS the first title line). "Go to scene one"
+      // means the slugline, so step past title lines to the first script
+      // paragraph of the region.
+      let pos = loc.pos;
+      const doc = loc.ed.state.doc;
+      for (;;) {
+        const n = doc.nodeAt(pos);
+        if (!n || n.type.name !== 'paragraph' || n.attrs?.lineType !== 'title') break;
+        const next = pos + n.nodeSize;
+        if (next >= doc.content.size) break;
+        pos = next;
+      }
+      const dom = loc.ed.view.nodeDOM(pos) as HTMLElement | null;
       dom?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      loc.ed.chain().focus().setTextSelection(Math.min(loc.pos + 1, loc.ed.state.doc.content.size)).run();
+      loc.ed.chain().setTextSelection(Math.min(pos + 1, loc.ed.state.doc.content.size)).run();
+      // Focus the VIEW, not the chain. A rail row is not focusable, so the
+      // browser blurs the editor to BODY on mousedown, and TipTap's chained
+      // .focus() does not bring it back: the event log for a rail click read
+      // mousedown, focusout to BODY, click, and no focusin at all. The caret
+      // was never placed, in the one flow whose whole job is to place it
+      // (Ben, 2026-09-08). The mousedown preventDefault on the row stops the
+      // blur happening in the first place; this is the belt to that braces.
+      loc.ed.view.focus();
       setActiveSceneId(eventId);
     } catch { /* ignore */ }
   }, [findAnchor, insertSceneAnchor]);
@@ -2851,91 +3157,254 @@ export default function FreeformScript() {
   // (appended when none), inherits the anchor's sequence, gets its anchor
   // inserted in the document, and receives the caret. Structure stays
   // writer-declared; extraction never invents scenes.
-  const addScene = useCallback(async (title: string) => {
+  // ---- "+ Scene" on an EMPTY sequence (Ben, 2026-09-08). Empty-only on
+  // purpose: a sequence that already has scenes has an unambiguous anchor
+  // (append after its last), and that path is the fold/peel work, not this.
+  // Position derives from the SEQUENCE's own rank, since there is no scene to
+  // anchor to: the new scene precedes the first scene of the next sequence
+  // that has one, else follows the last scene of the previous sequence that
+  // does. The card is created immediately so it has an id to write into, and
+  // the proxy card opens in CONFIRM mode: an accidental click leaves a card
+  // the writer named, not a stray.
+  // Opening the namer costs NOTHING: no network, no placeholder card. The
+  // first build created the card on click and only then opened the popup,
+  // which put three round trips plus a graph refresh in front of the writer
+  // (Ben: "there is a delay after hitting the +Scene button"). The card is
+  // now minted on CONFIRM, with the writer's own title, so there is also no
+  // "New scene" placeholder to strand.
+  // The peer reads PAGES. A scene with nothing written, or a sequence whose
+  // scenes are all empty, has nothing for it to read, so the button is absent
+  // rather than present-and-disabled: a control that can never fire here is
+  // noise on the rail (Ben, 2026-09-08).
+  const scenePageable = useCallback((eventId: string) => {
+    const st = statusById.get(eventId);
+    return st === 'written' || st === 'stale';
+  }, [statusById]);
+  // The namer is a two-step form. Step 1 NAMES the scene; step 2 PLACES it,
+  // and only then is anything minted. "+ Scene" on an empty sequence skips
+  // step 2 (fixed: true) because the sequence's own rank already fixes the
+  // position; "+ New scene" runs both steps.
+  type PendingScene = {
+    seqId: string | null;
+    afterEventId: string | null;
+    title: string;
+    description: string;
+    top: number;
+    step: 'name' | 'place';
+    fixed: boolean;
+  };
+  const [pendingScene, setPendingScene] = useState<PendingScene | null>(null);
+  const pendingSceneRef = useRef<PendingScene | null>(null);
+  pendingSceneRef.current = pendingScene;
+  // A freshly minted, UNPLACED scene, held while the wall is up. Same shape as
+  // the corkboard's fresh-card placement: the card exists, has no position on
+  // the spine, and the writer drops it onto a seam to give it one.
+  const [placingScene, setPlacingScene] = useState<{ cardId: string; title: string } | null>(null);
+  const [wallOpen, setWallOpen] = useState(false);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  // The form takes the slot beside the rail, so whichever card is in it goes.
+  // The sequence card in particular is the one the pointer was just on when
+  // "+ Scene" was clicked, and it would otherwise sit under the form.
+  const clearHoverCards = useCallback(() => {
+    if (seqCardTimer.current) { window.clearTimeout(seqCardTimer.current); seqCardTimer.current = null; }
+    setProxyCard(null);
+    setSeqCardIdx(null);
+  }, []);
+  const openSceneNamer = useCallback((seqId: string, top: number) => {
+    clearHoverCards();
+    setPendingScene({ seqId, afterEventId: null, title: '', description: '', top, step: 'name', fixed: true });
+  }, [clearHoverCards]);
+  const openScenePlacer = useCallback((top: number) => {
+    clearHoverCards();
+    setPendingScene({ seqId: null, afterEventId: null, title: '', description: '', top, step: 'name', fixed: false });
+  }, [clearHoverCards]);
+
+
+  // `slot` overrides the pending scene's own position. Picking a slot in step
+  // 2 both sets the position and confirms, and a setState would not be visible
+  // to this closure in the same tick, so the pick is passed straight through.
+  const confirmNewScene = useCallback(async (slot?: { seqId: string | null; after: string | null }) => {
     const a = authRef.current;
-    if (!a || !storyId) return;
-    const t = title.trim();
+    const base = pendingScene;
+    if (!a || !storyId || !base) return;
+    const pend: PendingScene = slot ? { ...base, seqId: slot.seqId, afterEventId: slot.after } : base;
+    const t = pend.title.trim();
     if (!t) return;
-    setAddSceneBusy(true);
+    setConfirmBusy(true);
     try {
-      const order = spineOrderRef.current;
-      const anchor = prevActiveRef.current ?? order[order.length - 1] ?? null;
+      const secs = navSections;
+      // WHERE. Two ways in. A fixed pending scene ("+ Scene" on an empty
+      // sequence) derives its position from that sequence's rank: it goes
+      // before the first scene of the next populated sequence, else after the
+      // last scene of the previous one. A placed pending scene carries the
+      // slot the writer picked, and `before` is whatever currently follows it.
+      let before: string | null = null;
+      let after: string | null = null;
+      if (pend.fixed) {
+        const idx = secs.findIndex((x) => x.seqId === pend.seqId);
+        for (let i = idx + 1; i < secs.length && !before; i++) {
+          if (secs[i].scenes.length) before = secs[i].scenes[0].eventId;
+        }
+        if (!before) {
+          for (let i = idx - 1; i >= 0 && !after; i--) {
+            if (secs[i].scenes.length) after = secs[i].scenes[secs[i].scenes.length - 1].eventId;
+          }
+        }
+      } else {
+        const order = spineOrderRef.current;
+        after = pend.afterEventId;
+        if (after) {
+          const i = order.indexOf(after);
+          before = i >= 0 ? (order[i + 1] ?? null) : null;
+        } else {
+          // Head of a section: the new scene lands in front of that section's
+          // first scene, and behind whatever preceded it in the spine.
+          const sec = secs.find((x) => x.seqId === pend.seqId);
+          const first = sec?.scenes[0]?.eventId ?? null;
+          before = first ?? null;
+          const i = first ? order.indexOf(first) : -1;
+          after = i > 0 ? order[i - 1] : null;
+        }
+      }
       const res = await createCard(
         {
-          kind: 'event',
-          projectId: storyId,
-          userId: a.userId,
-          workingName: t,
-          ...(anchor ? { precededByEventId: anchor } : {}),
+          kind: 'event', projectId: storyId, userId: a.userId, workingName: t,
+          ...(pend.description.trim() ? { description: pend.description.trim() } : {}),
         },
         a.token,
       );
-      if ('exists' in res && res.exists) {
-        // Same-titled scene already exists — jump to it instead of duplicating.
-        scrollToScene(res.cardId);
-        return;
-      }
+      // A same-titled card already exists: nothing to mint, just go to it.
+      if ('exists' in res && res.exists) { setPendingScene(null); scrollToScene(res.cardId); return; }
       if (!('created' in res) || !res.created) return;
+      // Close the namer as soon as the card is real. The nesting and ordering
+      // edges below are best-effort and the writer should not wait on them.
+      setPendingScene(null);
       const newId = res.entity.id;
-
-      // Splice: the anchor's old successor now follows the NEW scene.
-      if (anchor) {
-        const succ = precedesRef.current.find((p) => p.from === anchor && p.to !== newId)?.to;
-        if (succ) {
-          try {
-            await untagEventPrecedes({ fromEventId: anchor, toEventId: succ, projectId: storyId }, a.token);
-            await tagEventPrecedes({ fromEventId: newId, toEventId: succ, projectId: storyId }, a.token);
-            precedesRef.current = precedesRef.current.filter((p) => !(p.from === anchor && p.to === succ));
-            precedesRef.current.push({ from: newId, to: succ });
-          } catch (e) {
-            console.warn('[freeform-script] spine splice failed (scene appended after anchor)', e);
-          }
-        }
-        precedesRef.current.push({ from: anchor, to: newId });
-        const sid = seqOfEventRef.current.get(anchor);
-        if (sid) {
-          tagSequenceContains({ sequenceId: sid, eventId: newId, projectId: storyId }, a.token)
-            .then(() => { seqOfEventRef.current.set(newId, sid); })
-            .catch(() => { /* membership is best-effort */ });
-        }
+      // Nest, then ORDER EXPLICITLY. The ordering edge is written here rather
+      // than left to any splice: the tail splice appends after the spine's
+      // end, which is exactly wrong for a scene that belongs earlier.
+      if (pend.seqId) {
+        try { await tagSequenceContains({ projectId: storyId, sequenceId: pend.seqId, eventId: newId }, a.token); } catch { /* best-effort */ }
       }
-
-      // Local bookkeeping: spine order, titles, baselines, panel rows + SC renumber.
-      const idx = anchor ? order.indexOf(anchor) : -1;
-      if (idx >= 0) order.splice(idx + 1, 0, newId);
-      else order.push(newId);
-      titleByIdRef.current.set(newId, t);
-      baselineRef.current.set(newId, '');
+      try {
+        // Inserting BETWEEN two scenes means cutting the edge they share
+        // first, or the spine forks and the reader gets two successors.
+        if (after && before) {
+          try { await untagEventPrecedes({ fromEventId: after, toEventId: before, projectId: storyId }, a.token); } catch { /* the edge may not exist */ }
+        }
+        if (after) await tagEventPrecedes({ fromEventId: after, toEventId: newId, projectId: storyId }, a.token);
+        if (before) await tagEventPrecedes({ fromEventId: newId, toEventId: before, projectId: storyId }, a.token);
+      } catch { /* best-effort; the writer can re-order */ }
+      // Same as the wall drop: show it in the rail now, reconcile after. Only
+      // the loader effect builds the rail and the document's scene regions, so
+      // without the local insert the scene stays invisible until a reload.
+      setNavSections((cur) => {
+        const next = cur.map((sec) => ({ ...sec, scenes: [...sec.scenes] }));
+        const at = next.findIndex((x) => x.seqId === pend.seqId);
+        const row: NavScene = { eventId: newId, scNo: 0, title: t };
+        if (at >= 0) next[at].scenes.push(row);
+        let n = 1;
+        for (const sec of next) for (const sc of sec.scenes) sc.scNo = n++;
+        return next;
+      });
       setStatusById((cur) => new Map(cur).set(newId, 'unwritten'));
       setSceneCount((c) => c + 1);
+      void refreshGraph();
+      setReloadTick((t) => t + 1);
+    } finally {
+      setConfirmBusy(false);
+    }
+  }, [storyId, pendingScene, navSections, refreshGraph, scrollToScene]);
+
+  // "+ New scene": mint the card from the form, then hand it to the WALL. The
+  // card is real but has no position on the spine until the writer drops it,
+  // which is the corkboard's fresh-card flow (New then Scene) brought over to
+  // the script surface so both surfaces place a scene the same way.
+  const mintAndPlace = useCallback(async () => {
+    const a = authRef.current;
+    const pend = pendingScene;
+    if (!a || !storyId || !pend) return;
+    const t = pend.title.trim() || 'Untitled scene';
+    setConfirmBusy(true);
+    try {
+      const res = await createCard(
+        {
+          kind: 'event', projectId: storyId, userId: a.userId, workingName: t,
+          ...(pend.description.trim() ? { description: pend.description.trim() } : {}),
+        },
+        a.token,
+      );
+      if ('exists' in res && res.exists) { setPendingScene(null); scrollToScene(res.cardId); return; }
+      if (!('created' in res) || !res.created) return;
+      setPendingScene(null);
+      // Straight to the wall. No refresh first: the wall renders from
+      // graphData and explicitly excludes the card being placed, so a round
+      // trip here only makes the writer wait to see the board.
+      setPlacingScene({ cardId: res.entity.id, title: t });
+      setWallOpen(true);
+    } finally {
+      setConfirmBusy(false);
+    }
+  }, [storyId, pendingScene, refreshGraph, scrollToScene]);
+
+  // The drop lands. placeStagedCard applies the whole pick server-side:
+  // containment, the before/after position, and the one PRECEDES link that a
+  // between-seam drop replaces. The splice is not re-derived here.
+  const onWallDrop = useCallback(async (pick: GridPick) => {
+    const a = authRef.current;
+    const card = placingScene;
+    setWallOpen(false);
+    if (!a || !storyId || !card) return;
+    try {
+      await placeStagedCard(
+        {
+          projectId: storyId, userId: a.userId, cardId: card.cardId,
+          placement: {
+            targetId: pick.targetId,
+            ...(pick.position ? { position: pick.position } : {}),
+            ...(pick.containment ? { containment: pick.containment } : {}),
+            ...(pick.nextId ? { nextId: pick.nextId } : {}),
+          },
+        },
+        a.token,
+      );
+      // The rail is rebuilt only by the loader effect, so a placement used to
+      // be invisible until a full reload of entities + braindumps + scene
+      // texts, with the editor remounting behind the loading gate. That reload
+      // is the latency (Ben, 2026-09-08). Insert the row where the pick says
+      // it goes, then let the reload reconcile in its own time.
       setNavSections((cur) => {
-        const next = cur.map((s) => ({ ...s, scenes: [...s.scenes] }));
-        const row: NavScene = { eventId: newId, scNo: 0, title: t };
-        let placed = false;
-        if (anchor) {
+        const next = cur.map((sec) => ({ ...sec, scenes: [...sec.scenes] }));
+        const row: NavScene = { eventId: card.cardId, scNo: 0, title: card.title };
+        const seqAt = next.findIndex((x) => x.seqId === pick.targetId);
+        if (seqAt >= 0) {
+          // Target is a SEQUENCE: before it, inside at the end, or outside.
+          if (pick.position === 'before') next[seqAt].scenes.unshift(row);
+          else if (pick.containment === 'none') next.splice(seqAt + 1, 0, { seqId: null, title: '', color: '', scenes: [row] });
+          else next[seqAt].scenes.push(row);
+        } else {
+          // Target is a SCENE: the row lands beside it in its own section.
           for (const sec of next) {
-            const i = sec.scenes.findIndex((sc) => sc.eventId === anchor);
-            if (i >= 0) { sec.scenes.splice(i + 1, 0, row); placed = true; break; }
+            const i = sec.scenes.findIndex((sc) => sc.eventId === pick.targetId);
+            if (i >= 0) { sec.scenes.splice(pick.position === 'before' ? i : i + 1, 0, row); break; }
           }
-        }
-        if (!placed) {
-          const last = next[next.length - 1];
-          if (last && last.seqId === null) last.scenes.push(row);
-          else next.push({ seqId: null, title: '', color: '', scenes: [row] });
         }
         let n = 1;
         for (const sec of next) for (const sc of sec.scenes) sc.scNo = n++;
         return next;
       });
-
-      // Into the document, caret placed (the chosen-region act).
-      scrollToScene(newId);
+      setStatusById((cur) => new Map(cur).set(card.cardId, 'unwritten'));
+      setSceneCount((c) => c + 1);
     } catch (e) {
-      console.warn('[freeform-script] add scene failed', e);
-    } finally {
-      setAddSceneBusy(false);
+      console.warn('[freeform-script] place-staged-card failed', e);
     }
-  }, [storyId, scrollToScene]);
+    // The DOCUMENT still needs its region for the new scene, and only the
+    // loader builds those. It runs after the rail is already right, so the
+    // rebuild is no longer the thing the writer waits on to see the placement.
+    void refreshGraph();
+    setReloadTick((t) => t + 1);
+  }, [storyId, placingScene, refreshGraph]);
+
 
   // ---- Active-region tracking: the scene whose region holds the caret.
   // Walk pages in order up to the focused editor's selection, keeping the
@@ -2968,11 +3437,27 @@ export default function FreeformScript() {
   // posture Scripts.tsx takes).
   const attachedRef = useRef<Editor | null>(null);
   const selTimerRef = useRef<number | null>(null);
+  // IDLE SETTLE (Ben, 2026-09-11: "it seems to only work if I jump to the
+  // board"). Every carve trigger was an EXIT: a scene change, a blur, Sync.
+  // A writer who keeps writing in the tail never exits, so the tail sat
+  // unextracted until they left. A pause after the last edit is the other
+  // settle signal. It schedules the ordinary tail check (same grace, same
+  // gates: content floor, unchanged hash, one generation at a time), so a
+  // pause inside a bound scene costs nothing and an unchanged tail re-fires
+  // nothing. Manual-only still suppresses it, inside scheduleExtractCheck.
+  const TAIL_IDLE_MS = 20000;
+  const tailIdleRef = useRef<number | null>(null);
   const handleEditorReady = useCallback((editor: Editor) => {
     if (attachedRef.current === editor) return;
     attachedRef.current = editor;
     editor.on('update', () => {
       scheduleSave();
+      if (tailIdleRef.current) window.clearTimeout(tailIdleRef.current);
+      tailIdleRef.current = window.setTimeout(() => {
+        tailIdleRef.current = null;
+        console.info('[freeform-script] tail idle settle');
+        scheduleExtractCheck(SCRATCH);
+      }, TAIL_IDLE_MS);
       // Rolling last-good-walk snapshot (the torn-down-walk guard's source
       // of truth): refreshed shortly after every edit, while editors are
       // certainly alive.
@@ -3017,7 +3502,7 @@ export default function FreeformScript() {
       // edit still has a trusted walk to fall back to.
       refreshWalkSnapshot();
     }, 800);
-  }, [scheduleSave, updateActiveScene, collectRegionTexts, refreshWalkSnapshot]);
+  }, [scheduleSave, updateActiveScene, collectRegionTexts, refreshWalkSnapshot, scheduleExtractCheck]);
 
   // Background-work watcher: cheap poll of the two in-flight signals (refs
   // don't re-render; identical setState values bail out, so this is quiet).
@@ -3089,6 +3574,10 @@ export default function FreeformScript() {
   }
 
   return (
+    // HoverTip reads the mode off ThemeCtx, so the provider has to sit above
+    // everything that carries a tooltip, not just the two subtrees that used
+    // to need it. The nested providers below are now redundant but harmless.
+    <ThemeCtx.Provider value={theme}>
     <div
       style={{
         display: 'flex', flexDirection: 'column',
@@ -3109,8 +3598,10 @@ export default function FreeformScript() {
           ? { '--tb-hair': '#26262c', '--tb-mut': '#8a8a93', '--tb-txt': '#c9c9d1', '--tb-hov': 'rgba(255,255,255,0.055)', '--tb-peer': '#54bfdb', '--tb-peer-bg': 'rgba(84,191,219,0.13)', '--tb-peer-bg-h': 'rgba(84,191,219,0.2)' }
           : { '--tb-hair': '#e3dbcb', '--tb-mut': '#8a8578', '--tb-txt': '#4a4a45', '--tb-hov': 'rgba(0,0,0,0.045)', '--tb-peer': '#0f7f9f', '--tb-peer-bg': 'rgba(15,127,159,0.10)', '--tb-peer-bg-h': 'rgba(15,127,159,0.16)' }),
       } as React.CSSProperties}>
+        <span data-tour="script-board" className={`ff-board-wrap${pendingQuestions > 0 ? ' has-q' : ''}`}>
         <a
           href={`/freeform/${storyId}`}
+          className="ff-board-link"
           onClick={(e) => {
             e.preventDefault();
             // Fire the exit extractions NOW, while the document walk is
@@ -3128,6 +3619,32 @@ export default function FreeformScript() {
         >
           ← Board
         </a>
+        {/* QUESTIONS WAITING (Ben, 2026-09-11): the count is part of the Board
+            button's own shape, a filled segment that grows out of the same
+            outline. Same door: it lands on the board with the panel open on
+            the questions. */}
+        {pendingQuestions > 0 && (
+          <HoverTip
+            text={`${pendingQuestions} question${pendingQuestions === 1 ? '' : 's'} from your pages ${pendingQuestions === 1 ? 'is' : 'are'} waiting on the board. Answer there; nothing is lost while you write.`}
+            placement="bottom-right"
+            accent="#ff8c42"
+            width={230}
+          >
+          <button
+            className="ff-board-q"
+            onClick={() => {
+              void runSave();
+              flushExtractions();
+              playPageWipe('left', () => routerNavigate(`/freeform/${storyId}`, { state: { openPanel: 'staged' } }));
+            }}
+          >
+            <span style={{ whiteSpace: 'nowrap' }}>
+              {pendingQuestions} question{pendingQuestions === 1 ? '' : 's'}
+            </span>
+          </button>
+          </HoverTip>
+        )}
+        </span>
         <span style={{ color: theme === 'dark' ? '#e6e6ea' : '#1a1a1a', fontSize: 14, fontWeight: 700 }}>Script</span>
         <span style={{ color: '#6b6b74', fontSize: 12 }}>
           {sceneCount} scene{sceneCount === 1 ? '' : 's'} from your outline
@@ -3158,6 +3675,23 @@ export default function FreeformScript() {
           >
             {manualOnly ? 'Auto-sync off' : 'Auto-sync on'}
           </button>
+          <HoverTip
+            text={justWrite
+              ? 'Auto-merge is on: all changes in your script auto-apply to the board. The board lists every change when you go back.'
+              : 'Auto-merge is off: changes from your script may hold for your approval on the board.'}
+            placement="bottom-left"
+            accent={PEER_BLUE}
+            width={250}
+          >
+          <button
+            data-tour="script-automerge"
+            className="ff-tb-btn ff-tb-ghost"
+            onClick={toggleJustWrite}
+            style={justWrite ? { color: PEER_BLUE } : undefined}
+          >
+            {justWrite ? 'Auto-merge on' : 'Auto-merge off'}
+          </button>
+          </HoverTip>
           <span style={{ width: 1, height: 16, background: 'var(--tb-hair)', flexShrink: 0 }} />
           {/* Peer group — ALWAYS on stage (Marko 2026-08-23: every peer
               affordance used to be hover-revealed or note-gated, so the peer
@@ -3166,10 +3700,16 @@ export default function FreeformScript() {
               count and the Notes/Review segments as before. */}
           <div data-tour="script-peer-seg" style={{ position: 'relative', display: 'inline-flex' }}>
           <div className="ff-tb-seg" style={{ borderColor: 'rgba(84,191,219,0.4)', borderRadius: 999 }}>
+            <HoverTip
+              text="Coverage across the scenes you have written: where your pages do what the card says they are meant to do, and where they come apart. Read one scene, its sequence, or the whole draft."
+              placement="bottom-left"
+              accent={PEER_BLUE}
+              width={240}
+              wrapStyle={{ display: 'inline-flex', height: '100%' }}
+            >
             <button
               className="ff-tb-btn"
               onClick={() => setPeerMenuOpen((v) => !v)}
-              title="Your peer: it reads pages and measures them against what each scene is meant to do"
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 700, color: '#54bfdb',
                 height: '100%', padding: '0 12px', borderRadius: 0, border: 'none',
@@ -3180,6 +3720,7 @@ export default function FreeformScript() {
               <span style={{ display: 'inline-flex', opacity: 0.9 }}><InternIcon size={12} /></span>
               Peer{allNotes.length > 0 ? <span style={{ fontVariantNumeric: 'tabular-nums', opacity: 0.9 }}>· {allNotes.length}</span> : null}
             </button>
+            </HoverTip>
             {notesVisible && (
               <>
                 <button
@@ -3234,14 +3775,18 @@ export default function FreeformScript() {
                     >
                       {gl}Read this scene<span style={scope}>{activeMeta ? `SC ${String(activeMeta.scNo).padStart(2, '0')}` : ''}</span>
                     </button>
-                    {activeSec?.seqId && (
+                    {activeSec?.seqId && (() => {
+                      const seqPageable = activeSec.scenes.some((sc) => scenePageable(sc.eventId));
+                      return (
                       <button
-                        onClick={() => { setPeerMenuOpen(false); void readSequence(activeSec.seqId!, activeSec.title); }}
-                        className="ff-peer-menu-item" style={itemStyle(true)}
+                        onClick={() => { if (!seqPageable) return; setPeerMenuOpen(false); void readSequence(activeSec.seqId!, activeSec.title); }}
+                        className="ff-peer-menu-item" style={itemStyle(seqPageable)}
+                        title={seqPageable ? undefined : 'Write a scene in this sequence first, then the peer can read it'}
                       >
                         {gl}Read this sequence<span style={scope}>{activeSec.title}</span>
                       </button>
-                    )}
+                      );
+                    })()}
                     <button
                       onClick={() => { setPeerMenuOpen(false); void readDraft(); }}
                       className="ff-peer-menu-item" style={itemStyle(true)}
@@ -3253,10 +3798,18 @@ export default function FreeformScript() {
               );
             })()}
           </div>
+          <HoverTip
+            text={bgBusy
+              ? 'Working your pages into the outline. Cards, cast and facts are being updated from what you have written.'
+              : 'Save now and work these pages into the outline: scene cards, cast and facts update from what you have written. Happens on its own as you write; this does it immediately.'}
+            placement="bottom-left"
+            accent="#ff8c42"
+            width={240}
+          >
           <button
+            data-tour="script-sync"
             className="ff-tb-btn ff-tb-sync"
             onClick={syncNow}
-            title={bgBusy ? 'Working your pages into the outline…' : 'Save and update your outline from these pages now'}
           >
             {bgBusy && (
               <span
@@ -3269,6 +3822,7 @@ export default function FreeformScript() {
             )}
             {bgBusy ? 'Syncing…' : 'Sync board'}
           </button>
+          </HoverTip>
         </div>
       </div>
 
@@ -3292,10 +3846,18 @@ export default function FreeformScript() {
               const draftCnt = allNotes.filter((n) => n.mode === 'draft').length;
               return (
                 <div style={{ padding: '0 10px 8px' }}>
+                  <HoverTip
+                    text={draftCnt > 0
+                      ? `${draftCnt} draft note${draftCnt === 1 ? '' : 's'} already. Read the whole draft again: the peer looks across every scene for the big things, then gives you notes or a clean bill.`
+                      : 'The peer reads every scene at once and looks for what only shows up across the whole draft: threads dropped, beats repeated, a promise never paid off.'}
+                    placement="bottom-right"
+                    accent={PEER_BLUE}
+                    width={240}
+                    wrapStyle={{ display: 'block' }}
+                  >
                   <button
                     onClick={() => { void readDraft(); }}
                     disabled={readingDraft}
-                    title={draftCnt > 0 ? `${draftCnt} draft note${draftCnt === 1 ? '' : 's'} — read the whole draft again` : 'Read the whole draft with the peer: the big notes, or a clean bill'}
                     style={{
                       width: '100%', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
                       padding: '5px 9px', borderRadius: 6, fontSize: 11, fontWeight: 700, fontFamily: 'system-ui, sans-serif',
@@ -3312,12 +3874,23 @@ export default function FreeformScript() {
                       ? <><span style={{ width: 9, height: 9, borderRadius: '50%', border: '2px solid rgba(84,191,219,0.3)', borderTopColor: '#54bfdb', display: 'inline-block', animation: 'ffspin 0.9s linear infinite' }} />Reading the draft…</>
                       : <><span style={{ display: 'inline-flex', opacity: 0.9 }}><InternIcon size={11} /></span>Read the draft{draftCnt > 0 ? ` · ${draftCnt}` : ''}</>}
                   </button>
+                  </HoverTip>
                 </div>
               );
             })()}
             {navSections.map((sec, si) => (
               <div
                 key={sec.seqId ?? `loose-${si}`}
+                // The SECTION is the hover space, not the header: the header,
+                // its scene rows and the "+ Scene" row are one container, so
+                // moving down into the scenes must not read as leaving the
+                // sequence (Ben, 2026-09-08).
+                {...(sec.seqId
+                  ? {
+                      onMouseEnter: () => enterSeq(si),
+                      onMouseLeave: () => leaveSeq(si),
+                    }
+                  : {})}
                 style={{
                   margin: '0 4px 6px',
                   borderRadius: 7,
@@ -3329,8 +3902,11 @@ export default function FreeformScript() {
               >
                 {sec.seqId && (
                   <div
-                    onMouseEnter={() => setHoverSeqIdx(si)}
-                    onMouseLeave={() => setHoverSeqIdx((c) => (c === si ? null : c))}
+                    onMouseEnter={(e) => {
+                      enterSeq(si);
+                      openSeqCard(si, (e.currentTarget as HTMLElement).getBoundingClientRect().top);
+                    }}
+                    onMouseLeave={() => closeSeqCard(si)}
                     style={{ display: 'flex', alignItems: 'flex-start', gap: 7, padding: '7px 10px 3px' }}
                   >
                     <span style={{ width: 8, height: 8, borderRadius: 2, background: sec.color, flexShrink: 0, marginTop: 2 }} />
@@ -3345,34 +3921,64 @@ export default function FreeformScript() {
                     >
                       {sec.title}
                     </span>
-                    {(() => {
-                      const seqNoteCount = allNotes.filter((n) => n.mode === 'sequence' && n.seq_id === sec.seqId).length;
-                      const busy = readingSeq === sec.seqId;
-                      return (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); void readSequence(sec.seqId!, sec.title); }}
-                          disabled={busy}
-                          title={seqNoteCount > 0 ? `${seqNoteCount} sequence note${seqNoteCount === 1 ? '' : 's'} — re-read this sequence` : 'Read this whole sequence with the peer'}
-                          style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 4, padding: '1px 6px', borderRadius: 5, fontSize: 9.5, fontWeight: 800, cursor: busy ? 'default' : 'pointer', border: `1px solid rgba(84,191,219,${seqNoteCount > 0 ? 0.5 : 0.35})`, background: seqNoteCount > 0 ? 'rgba(84,191,219,0.12)' : 'transparent', color: '#54bfdb' }}
-                        >
-                          {busy
-                            ? <span style={{ width: 8, height: 8, borderRadius: '50%', border: '2px solid rgba(84,191,219,0.3)', borderTopColor: '#54bfdb', display: 'inline-block', animation: 'ffspin 0.9s linear infinite' }} />
-                            : <><span style={{ display: 'inline-flex', opacity: 0.9 }}><InternIcon size={11} /></span>{seqNoteCount > 0 ? ` ${seqNoteCount}` : ''}</>}
-                        </button>
-                      );
-                    })()}
+
+                  </div>
+                )}
+                {sec.scenes.length === 0 && sec.seqId && (
+                  <div
+                    onMouseEnter={(e) => {
+                      enterSeq(si);
+                      // Entering by way of "+ Scene" still anchors the card to
+                      // this section, not to whichever one was hovered last.
+                      openSeqCard(si, (e.currentTarget as HTMLElement).getBoundingClientRect().top - 26);
+                    }}
+                    onMouseLeave={() => closeSeqCard(si)}
+                    onClick={(e) => {
+                      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                      openSceneNamer(sec.seqId!, r.top);
+                    }}
+                    title="Add the first scene to this sequence"
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
+                      padding: '4px 10px 4px 14px', margin: '0 6px 2px',
+                      borderRadius: 6, fontSize: 12, fontWeight: 600,
+                      color: pendingScene?.seqId === sec.seqId ? sec.color : (theme === 'dark' ? '#6b6b74' : '#999'),
+                      background: pendingScene?.seqId === sec.seqId
+                        ? `${sec.color}14`
+                        : (hoverSeqIdx === si ? (theme === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)') : 'transparent'),
+                      transition: 'background 120ms, color 120ms',
+                    }}
+                  >
+                    <span style={{
+                      width: 9, height: 9, borderRadius: '50%', flexShrink: 0,
+                      border: `1px dashed ${theme === 'dark' ? '#4a4a52' : '#bbb'}`,
+                    }} />
+                    + Scene
                   </div>
                 )}
                 {sec.scenes.map((sc) => {
                   const st = statusById.get(sc.eventId) ?? 'unwritten';
                   const active = activeSceneId === sc.eventId;
                   const reading = readingScene === sc.eventId;
-                  // The tour's Read beat counts as a hover: the row grows to
-                  // make room and the hover-reveal Read button shows. A scene
-                  // being READ holds the expanded state too — the pulsing
-                  // peer ring needs the room, not a spinner crushed into the
-                  // collapsed cluster.
+                  // The tour's Read beat counts as a hover, and so does a scene
+                  // being READ (the row wears the pulsing peer ring).
+                  // A hovered row NEVER changes height. It used to grow to fit
+                  // the full title plus the Read button, animated over 180ms —
+                  // and since Chrome re-evaluates which element is under the
+                  // pointer on every frame of that animation, the row below the
+                  // one you were leaving kept sliding out from under the cursor.
+                  // Ben: "i literally cannot get to SC02". The full title lives
+                  // in the proxy card that pops out on hover; the rail row stays
+                  // one line and the Read button overlays it.
                   const hovered = hoverSceneId === sc.eventId || tourReadSceneId === sc.eventId || reading;
+                  // EXPANSION is the sequence's, not the row's: hovering
+                  // anywhere in a sequence unfurls every header inside it, the
+                  // container's own title included (Ben, 2026-09-08). Rows
+                  // therefore stop moving the moment you are inside a section,
+                  // so crossing between them costs no layout at all. HOVER
+                  // stays the row's: the tint, the rule and the popout card
+                  // still mark the one scene under the pointer.
+                  const expanded = hoverSeqIdx === si || hovered;
                   return (
                     <div
                       key={sc.eventId}
@@ -3382,7 +3988,15 @@ export default function FreeformScript() {
                         // (proxyHover machinery), not on a second click.
                         scrollToScene(sc.eventId);
                       }}
+                      // Do not let the browser blur the editor: the caret has
+                      // to survive the trip to the rail and back.
+                      onMouseDown={(e) => e.preventDefault()}
                       onMouseEnter={(e) => {
+                        // The row re-claims its own section: whatever order the
+                        // wrapper's enter/leave arrived in after the reflow,
+                        // the row under the pointer is the truth.
+                        enterSeq(si);
+                        closeSeqCard(si);
                         setHoverSceneId(sc.eventId);
                         openProxyHover(sc.eventId, (e.currentTarget as HTMLElement).getBoundingClientRect().top);
                       }}
@@ -3391,10 +4005,19 @@ export default function FreeformScript() {
                         scheduleProxyClose();
                       }}
                       style={{
-                        display: 'flex', alignItems: hovered ? 'flex-start' : 'center', gap: 8, cursor: 'pointer',
+                        display: 'flex', alignItems: expanded ? 'flex-start' : 'center', gap: 8, cursor: 'pointer',
                         position: 'relative',
-                        padding: hovered ? '4px 10px 28px 14px' : '4px 10px 4px 14px',
-                        transition: 'padding 180ms cubic-bezier(0.32,0.72,0,1), background 120ms',
+                        padding: '4px 10px 4px 14px',
+                        // Only the BACKGROUND eases. The height change is
+                        // instant on purpose: Chrome re-evaluates which element
+                        // is under the pointer on every frame of a transition,
+                        // so animating this row's height meant the row below it
+                        // slid past the cursor for 180ms and could not be
+                        // landed on ("i literally cannot get to SC02"). Instant
+                        // means one layout pass, committed with the same event
+                        // as the hover, so the pointer ends up inside the row it
+                        // just entered and stays there.
+                        transition: 'background 120ms',
                         background: reading
                           ? (theme === 'dark' ? 'rgba(84,191,219,0.05)' : 'rgba(84,191,219,0.06)')
                           : active
@@ -3408,55 +4031,42 @@ export default function FreeformScript() {
                         ...(reading ? { borderRadius: 7, animation: 'ffreadpulse 1.5s ease-in-out infinite' } : {}),
                       }}
                     >
-                      <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 10, fontWeight: 700, color: active || hovered ? '#ff8c42' : '#6b6b74', flexShrink: 0, width: 18, marginTop: hovered ? 2 : 0 }}>
+                      <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 10, fontWeight: 700, color: active || hovered ? '#ff8c42' : '#6b6b74', flexShrink: 0, width: 18, marginTop: expanded ? 2 : 0 }}>
                         {String(sc.scNo).padStart(2, '0')}
                       </span>
                       <span
                         style={{
                           fontSize: 12, color: theme === 'dark' ? (active || hovered ? '#e6e6ea' : '#b9b9c1') : '#333',
                           flex: 1, minWidth: 0,
-                          // Hover reveal: the row grows to fit the full title —
-                          // the wrap itself snaps, but the container height
-                          // eases, so the expansion reads as motion. The cap is
-                          // a clip guard, not a fixed height (max-height never
-                          // stretches short rows), so it must clear the longest
-                          // realistic title — 64 clipped ~5-line scene names
-                          // (the "malfunctioning lifter" cut-off).
-                          display: 'block', overflow: 'hidden',
-                          maxHeight: hovered ? 140 : 18,
-                          transition: 'max-height 180ms cubic-bezier(0.32,0.72,0,1)',
-                          ...(hovered
-                            ? { whiteSpace: 'normal', wordBreak: 'break-word' }
+                          // One line, always. On hover the title gives up WIDTH
+                          // to the Read button rather than the row giving up
+                          // height, so nothing below this row ever moves.
+                          // Clipped to one line at rest, the full title on
+                          // hover. The row grows in flow to fit it — no
+                          // transition, see the row's comment above.
+                          display: 'block', overflow: 'hidden', lineHeight: '18px',
+                          paddingRight: reading ? 52 : 0,
+                          ...(expanded
+                            ? {
+                                whiteSpace: 'normal', wordBreak: 'break-word',
+                                animation: 'ffunfurl 170ms cubic-bezier(0.32,0.72,0,1)',
+                              }
                             : { textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
                         }}
                       >
                         {sc.title}
                       </span>
-                      {/* Per-scene PEER button (§4b: generation lives where the
-                          scenes do). Shows on hover or when the scene already
-                          has notes; the count badges scenes that carry notes. */}
+
+                      {/* The peer's note COUNT, and nothing else: a bare
+                          peer-blue numeral, zero chrome, no layout of its own.
+                          The READ action moved into the hover popout card. */}
                       {(() => {
-                        // Concept A (2026-07-24): the COUNT is a bare peer-blue
-                        // numeral (glanceable, zero chrome); the READ action is
-                        // a hover-reveal overlay. The container header keeps
-                        // the rail's only pill.
                         const cnt = noteCountByScene.get(sc.eventId) ?? 0;
-                        const writable = st === 'written' || st === 'stale';
                         return (
                           <>
-                            {hovered && !reading && (
-                              <button
-                                onClick={(e) => { e.stopPropagation(); void readScene(sc.eventId); }}
-                                disabled={!writable}
-                                title={writable ? (cnt > 0 ? `${cnt} peer note${cnt === 1 ? '' : 's'} — re-read this scene` : 'Read this scene with the peer') : 'Write the scene first, then the peer can read it'}
-                                style={{ position: 'absolute', right: 10, bottom: 5, display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 7px', borderRadius: 5, fontSize: 9, fontWeight: 700, cursor: !writable ? 'default' : 'pointer', border: '1px solid rgba(84,191,219,0.4)', background: 'transparent', color: '#54bfdb', opacity: writable ? 1 : 0.5, animation: 'ffpop 160ms cubic-bezier(0.32,0.72,0,1)' }}
-                              >
-                                <span style={{ display: 'inline-flex', opacity: 0.9 }}><InternIcon size={10} /></span>Read
-                              </button>
-                            )}
                             {reading && (
                               // The ring carries the motion; this just names it.
-                              <span style={{ position: 'absolute', right: 10, bottom: 6, fontSize: 9, fontWeight: 700, color: '#54bfdb', opacity: 0.9 }}>
+                              <span style={{ position: 'absolute', right: 10, top: 7, zIndex: 7, fontSize: 9, fontWeight: 700, color: '#54bfdb', opacity: 0.9 }}>
                                 Reading…
                               </span>
                             )}
@@ -3504,49 +4114,31 @@ export default function FreeformScript() {
                 })}
               </div>
             ))}
-            {/* Declare a new scene: created after the ACTIVE scene, spliced
-                into the spine, caret placed. The writer names it; extraction
-                never invents structure. */}
+            {/* Declare a new scene. The writer NAMES it, then PLACES
+                it: two steps of one popup form, nothing minted until the
+                position is chosen. Extraction never invents structure. */}
             <div style={{ padding: '8px 14px' }}>
-              {addSceneOpen ? (
-                <input
-                  autoFocus
-                  value={addSceneTitle}
-                  disabled={addSceneBusy}
-                  onChange={(e) => setAddSceneTitle(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && addSceneTitle.trim()) {
-                      void addScene(addSceneTitle);
-                      setAddSceneOpen(false);
-                      setAddSceneTitle('');
-                    }
-                    if (e.key === 'Escape') { setAddSceneOpen(false); setAddSceneTitle(''); }
-                  }}
-                  onBlur={() => { if (!addSceneTitle.trim()) setAddSceneOpen(false); }}
-                  placeholder="Scene title, then Enter"
-                  style={{
-                    width: '100%', boxSizing: 'border-box', padding: '5px 9px',
-                    borderRadius: 6, fontSize: 12, fontFamily: 'system-ui, sans-serif',
-                    border: '1px solid rgba(255,107,53,0.5)',
-                    background: theme === 'dark' ? '#141417' : '#fff',
-                    color: theme === 'dark' ? '#e6e6ea' : '#1a1a1a', outline: 'none',
-                  }}
-                />
-              ) : (
-                <button
-                  onClick={() => setAddSceneOpen(true)}
-                  title="Add a scene after the one you're writing"
-                  style={{
-                    width: '100%', padding: '5px 9px', borderRadius: 6, cursor: 'pointer',
-                    fontSize: 12, fontWeight: 700, fontFamily: 'system-ui, sans-serif',
-                    border: `1px dashed ${theme === 'dark' ? '#3a3a42' : '#d8cfc0'}`,
-                    background: 'transparent',
-                    color: theme === 'dark' ? '#9a9aa4' : '#777', textAlign: 'left',
-                  }}
-                >
-                  + New scene
-                </button>
-              )}
+              <HoverTip
+                text="Name a scene and say what happens in it, then drop it where it goes in the story. Both fields are optional, and nothing is created until you place it."
+                placement="top"
+                accent="#ff8c42"
+                width={240}
+                wrapStyle={{ display: 'block' }}
+              >
+              <button
+                data-tour="script-new-scene"
+                onClick={(e) => openScenePlacer((e.currentTarget as HTMLElement).getBoundingClientRect().top - 40)}
+                style={{
+                  width: '100%', padding: '5px 9px', borderRadius: 6, cursor: 'pointer',
+                  fontSize: 12, fontWeight: 700, fontFamily: 'system-ui, sans-serif',
+                  border: `1px dashed ${theme === 'dark' ? '#3a3a42' : '#d8cfc0'}`,
+                  background: 'transparent',
+                  color: theme === 'dark' ? '#9a9aa4' : '#777', textAlign: 'left',
+                }}
+              >
+                + New scene
+              </button>
+              </HoverTip>
             </div>
           </div>
           {/* Resize handle: drag the rail's right edge. */}
@@ -3570,7 +4162,21 @@ export default function FreeformScript() {
             50%      { box-shadow: inset 0 0 0 1px rgba(84,191,219,0.85), 0 0 14px rgba(84,191,219,0.35); }
           }
           @keyframes ffpop { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: translateY(0); } }
+          /* The scene row's unfurl. The row's HEIGHT cannot be transitioned —
+             Chrome re-targets hover every frame of a transition and the row
+             below slides past the cursor — so the box snaps and the revealed
+             text carries the motion instead. Transform and opacity never
+             affect layout, so this is free. */
+          @keyframes ffunfurl { from { opacity: 0.25; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+          .ff-slot-row:hover:not(:disabled) { background: rgba(255,107,53,0.12) !important; border-color: rgba(255,107,53,0.45) !important; color: #ff8c42 !important; }
           @keyframes ffblink { 50% { opacity: 0.25; } }
+          @keyframes ffqmorph { from { max-width: 0; opacity: 0; padding-left: 0; padding-right: 0; } to { max-width: 160px; opacity: 1; padding-left: 9px; padding-right: 9px; } }
+          .ff-board-wrap { display: inline-flex; align-items: stretch; height: 24px; border-radius: 999px; overflow: hidden; border: 1px solid transparent; margin-left: -10px; transition: border-color 200ms ease-out; }
+          .ff-board-wrap.has-q { border-color: rgba(255,140,66,0.5); }
+          .ff-board-link { display: inline-flex; align-items: center; padding: 0 10px; }
+          .ff-board-wrap.has-q .ff-board-link:hover { background: rgba(255,140,66,0.1); }
+          .ff-board-q { display: inline-flex; align-items: center; height: 100%; margin: 0; padding: 0 9px; border: none; border-left: 1px solid rgba(255,140,66,0.4); border-radius: 0; overflow: hidden; max-width: 160px; cursor: pointer; font-family: inherit; font-size: 11.5px; font-weight: 700; color: #ff8c42; background: rgba(255,140,66,0.16); animation: ffqmorph 320ms cubic-bezier(0.32,0.72,0,1) both; }
+          .ff-board-q:hover { background: rgba(255,140,66,0.28); }
           @keyframes ffslidein { from { opacity: 0; transform: translateX(22px); } to { opacity: 1; transform: translateX(0); } }
           @keyframes ffcardin { from { opacity: 0; transform: translateX(-8px) scale(0.98); } to { opacity: 1; transform: none; } }
           .ff-nav-handle { transition: color 160ms, border-color 160ms, background 160ms, transform 160ms; }
@@ -3594,10 +4200,51 @@ export default function FreeformScript() {
              StudioBinder spec, freeform-scoped. Scene/action/shot/etc. stay at
              the 1.5in left margin (base). The .screenplay-content-area in the
              chain out-specifies the shared .dark-theme/.light-theme rules. */
-          .ff-script-host .screenplay-content-area .ProseMirror p[data-line-type="character"] { margin-left: 192px !important; }      /* 3.5in */
-          .ff-script-host .screenplay-content-area .ProseMirror p[data-line-type="dialogue"] { margin-left: 96px !important; width: 288px !important; }  /* 2.5in - 5.5in */
-          .ff-script-host .screenplay-content-area .ProseMirror p[data-line-type="parenthetical"] { margin-left: 144px !important; width: auto !important; }  /* 3.0in */
+          .ff-script-host .screenplay-content-area .ProseMirror p[data-line-type="character"] { margin-left: 211px !important; }      /* 3.7in (FD default) */
+          .ff-script-host .screenplay-content-area .ProseMirror p[data-line-type="dialogue"] { margin-left: 96px !important; width: 336px !important; }  /* 2.5in to 6.0in (FD default, 3.5in wide) */
+          .ff-script-host .screenplay-content-area .ProseMirror p[data-line-type="parenthetical"] { margin-left: 154px !important; width: 240px !important; }  /* 3.1in to 5.6in (FD default) */
           .ff-script-host .screenplay-content-area .ProseMirror p[data-line-type="transition"] { margin-left: 0 !important; width: 576px !important; text-align: right !important; }  /* to 7.5in (right margin) */
+          /* FINAL DRAFT SPACE-BEFORE (2026-09-12, Ben's side-by-side paste: a
+             blank line was landing before every dialogue and parenthetical,
+             costing a quarter of the page). Pinned here so no generic
+             paragraph rule can reintroduce it: 2 lines before a scene
+             heading, 1 before action, character and transition, 0 before
+             parenthetical and dialogue. Lines are 16px (single spacing). */
+          /* :not(.pm-page-break-start): the page-break pass injects the break as
+             an INLINE margin-top without !important, and a stylesheet !important
+             beats it. With these rules unguarded every break was cancelled and
+             text ran off the page bottom (Ben, 2026-09-12). */
+          .ff-script-host .screenplay-content-area .ProseMirror p[data-line-type="scene"]:not(.pm-page-break-start) { margin-top: 32px !important; }
+          .ff-script-host .screenplay-content-area .ProseMirror p[data-line-type="description"]:not(.pm-page-break-start) { margin-top: 16px !important; }
+          .ff-script-host .screenplay-content-area .ProseMirror p[data-line-type="character"]:not(.pm-page-break-start) { margin-top: 16px !important; }
+          .ff-script-host .screenplay-content-area .ProseMirror p[data-line-type="transition"]:not(.pm-page-break-start) { margin-top: 16px !important; }
+          .ff-script-host .screenplay-content-area .ProseMirror p[data-line-type="parenthetical"]:not(.pm-page-break-start) { margin-top: 0 !important; }
+          .ff-script-host .screenplay-content-area .ProseMirror p[data-line-type="dialogue"]:not(.pm-page-break-start) { margin-top: 0 !important; }
+          /* TITLE PAGE LAYOUT (2026-09-15), the Final Draft defaults: the title
+             a third of the way down the sheet, one blank line between title
+             lines, two before a credit line ("Written by", "Based on"), and
+             the contact block (email, phone, rights) flush left AT the
+             bottom (PageBreaks measures that drop). Roles are classes the paragraph node derives from the
+             text (Screenwritingline.tsx). The repeated [data-line-type] and
+             the :not() raise specificity over the first-child reset below. */
+          .ff-script-host .screenplay-content-area .ProseMirror p[data-line-type="title"]:not(.pm-page-break-start):not(.pm-title-push) { margin-top: 16px !important; }
+          /* Centre on the SHEET, not the text column: the column sits 1.5in
+             from the left edge and 1in from the right, so its centre is a
+             quarter inch right of the sheet's. Contact lines stay at the
+             margin. */
+          .ff-script-host .screenplay-content-area .ProseMirror p[data-line-type="title"]:not(.ff-title-contact) { margin-left: -24px !important; }
+          .ff-script-host .screenplay-content-area .ProseMirror p[data-line-type="title"].ff-title-credit:not(.pm-page-break-start):not(.pm-title-push) { margin-top: 48px !important; }
+          .ff-script-host .screenplay-content-area .ProseMirror p[data-line-type="title"].ff-title-contact { text-align: left !important; }
+          /* The contact block's drop to the sheet bottom is measured and injected
+             by PageBreaks (class pm-title-push, inline margin-top); the sheet
+             decides, not a fixed gap. */
+          .ff-script-host .screenplay-content-area .ProseMirror p[data-line-type="title"].ff-title-contact:not(.pm-page-break-start):not(.pm-title-push) { margin-top: 16px !important; }
+          .ff-script-host .screenplay-content-area .ProseMirror > p[data-line-type="title"][data-line-type]:first-child:not(.pm-page-break-start):not(.pm-title-push) { margin-top: 288px !important; }
+          .ff-script-host .screenplay-content-area .ProseMirror p[data-line-type] { margin-bottom: 0 !important; }
+          /* Outranks the per-type rules above (their :not() adds specificity):
+             the document's first paragraph starts at the 1in text margin. */
+          .ff-script-host .screenplay-content-area .ProseMirror > p[data-line-type]:first-child:not(.pm-page-break-start) { margin-top: 0 !important; }
+          .ff-script-host .screenplay-content-area .ProseMirror > p:first-child { margin-top: 0 !important; }
           /* Toolbar action cluster (top bar, right side). Theme values ride
              the --tb-* vars set inline on the bar; hover/active/focus states
              live here because inline styles cannot express them. */
@@ -3887,7 +4534,7 @@ export default function FreeformScript() {
         // DOCKET ROW (+ the expanded note card: slate with SC only, the tier
         // light-leak, the LIVE clipping, the voice, and the action rail with
         // Discuss (dead, §6 placeholder) / Dismiss / Mark addressed).
-        const CLIP_CENTER = new Set(['character', 'dialogue', 'parenthetical']);
+        const CLIP_CENTER = new Set(['title', 'character', 'dialogue', 'parenthetical']);
         const docketRow = (e: DkEntry) => {
           const n = e.note;
           const c = noteColor(n);
@@ -4148,6 +4795,231 @@ export default function FreeformScript() {
         );
       })()}
 
+      {pendingScene && (() => {
+        const dark = theme === 'dark';
+        const pend = pendingScene;
+        const top = Math.max(12, Math.min(pend.top, window.innerHeight - 300));
+        const sec = navSections.find((x) => x.seqId === pend.seqId);
+        const label = pend.title.trim() || 'Untitled scene';
+        return (
+          <div
+            style={{
+              position: 'fixed', left: navWidth + 10, top, width: 300, zIndex: 902,
+              animation: 'ffcardin 200ms cubic-bezier(0.32,0.72,0,1)',
+              borderRadius: 10, padding: '12px 14px', fontFamily: 'system-ui, sans-serif',
+              background: dark ? '#141417' : '#fff',
+              border: '1px solid rgba(255,107,53,0.4)',
+              boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
+            }}
+          >
+            {/* The form is the SCENE CARD's own template: the same two fields
+                the card carries, in the same order, both optional. An unnamed
+                scene is still a scene; it lands as "Untitled scene" and the
+                writer renames it on the card. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 9 }}>
+              <span style={{
+                width: 9, height: 9, borderRadius: '50%', flexShrink: 0,
+                border: `1px dashed ${dark ? '#4a4a52' : '#bbb'}`,
+              }} />
+              <span style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5, color: dark ? '#6b6b74' : '#999' }}>
+                New scene
+              </span>
+              {pend.fixed && (
+                <span style={{ marginLeft: 'auto', minWidth: 0, fontSize: 10.5, fontWeight: 700, color: sec?.color ?? '#22c55e', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {sec?.title ?? 'Sequence'}
+                </span>
+              )}
+            </div>
+
+            <input
+              autoFocus
+              value={pend.title}
+              onChange={(e) => setPendingScene((c) => (c ? { ...c, title: e.target.value } : c))}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') { e.preventDefault(); setPendingScene(null); }
+              }}
+              placeholder="Scene Title"
+              style={{
+                width: '100%', boxSizing: 'border-box', padding: '7px 9px', borderRadius: 6,
+                fontSize: 13, fontWeight: 600, fontFamily: 'system-ui, sans-serif',
+                border: `1px solid ${dark ? '#33333a' : '#ddd'}`,
+                background: dark ? '#0e0e10' : '#fff',
+                color: dark ? '#e6e6ea' : '#1a1a1a', outline: 'none',
+              }}
+            />
+            <textarea
+              value={pend.description}
+              onChange={(e) => setPendingScene((c) => (c ? { ...c, description: e.target.value } : c))}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') { e.preventDefault(); setPendingScene(null); }
+              }}
+              rows={3}
+              placeholder="What happens in it (optional)"
+              style={{
+                width: '100%', boxSizing: 'border-box', marginTop: 6, padding: '7px 9px',
+                borderRadius: 6, fontSize: 12, lineHeight: 1.45, resize: 'vertical',
+                fontFamily: 'system-ui, sans-serif',
+                border: `1px solid ${dark ? '#33333a' : '#ddd'}`,
+                background: dark ? '#0e0e10' : '#fff',
+                color: dark ? '#e6e6ea' : '#1a1a1a', outline: 'none',
+              }}
+            />
+
+            <div style={{ display: 'flex', gap: 6, marginTop: 9 }}>
+              <button
+                onClick={() => { if (pend.fixed) void confirmNewScene(); else void mintAndPlace(); }}
+                disabled={confirmBusy}
+                style={{
+                  flex: 1, padding: '6px 10px', borderRadius: 6, fontSize: 11.5, fontWeight: 700,
+                  border: 'none', cursor: confirmBusy ? 'default' : 'pointer',
+                  background: '#ff6b35', color: '#fff',
+                }}
+              >
+                {confirmBusy ? 'Adding…' : pend.fixed ? 'Add scene' : 'Place it'}
+              </button>
+              <button
+                onClick={() => setPendingScene(null)}
+                style={{
+                  padding: '6px 10px', borderRadius: 6, fontSize: 11.5, fontWeight: 600,
+                  border: `1px solid ${dark ? '#33333a' : '#ddd'}`, background: 'transparent',
+                  color: dark ? '#9a9aa4' : '#777', cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+            {!pend.fixed && (
+              <div style={{ marginTop: 7, fontSize: 10.5, lineHeight: 1.4, color: dark ? '#6b6b74' : '#999' }}>
+                Next: drop <b style={{ fontWeight: 700, color: dark ? '#9a9aa4' : '#777' }}>{label}</b> where it goes in the story.
+              </div>
+            )}
+          </div>
+        );
+      })()}
+      {/* THE WALL. Placement Control's grid, the same component the corkboard
+          uses, hosted here as a full-surface overlay: the whole story as
+          notecards in reading order with sequences draped over it, and the
+          gutters between cards are the drop slots. The card follows the
+          pointer and snaps into a seam. noMerge because a card minted seconds
+          ago has nothing to merge into, and "Leave unplaced" is the one
+          deliberate way out (an orphaned scene should never be a stray Esc). */}
+      {placingScene && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 1400, overflow: 'auto',
+            background: theme === 'dark' ? '#0e0e10' : '#fbf8f1',
+          }}
+        >
+          <PlacementGrid
+            open={wallOpen}
+            onExited={() => setPlacingScene(null)}
+            dark={theme === 'dark'}
+            entities={(graphData?.entities ?? []).filter((e) => !e.deleted_at && e.id !== placingScene.cardId)}
+            contains={graphData?.edges?.contains ?? []}
+            seqChain={[
+              ...(graphData?.edges?.sequence_precedes ?? []),
+              ...(graphData?.edges?.precedes ?? []),
+              ...(graphData?.edges?.cross_precedes ?? []),
+            ]}
+            eventOrder={navSections.flatMap((sec) => sec.scenes.map((sc) => sc.eventId))}
+            positions={{}}
+            canvasWidth={Math.max(720, window.innerWidth - 48)}
+            viewOrigin={{ x: 0, y: 0 }}
+            dropCard={{ title: placingScene.title, kind: 'scene' }}
+            onDrop={(pick) => { void onWallDrop(pick); }}
+            onPick={(pick) => { void onWallDrop(pick); }}
+            noMerge
+            onCancel={() => setWallOpen(false)}
+            onLeaveUnplaced={() => { setWallOpen(false); void refreshGraph(); }}
+          />
+        </div>
+      )}
+
+      {/* SEQUENCE CARD — the scene card's counterpart, on the header. Hovering
+          a sequence title in the rail should show you what the container IS,
+          the same way hovering a scene shows you the scene (Ben, 2026-09-08).
+          It takes the same slot beside the rail, so only one is ever up. */}
+      {seqCardIdx !== null && !proxyCard && (() => {
+        const sec = navSections[seqCardIdx];
+        if (!sec?.seqId) return null;
+        const si = seqCardIdx;
+        const ent = graphData?.entities.find((x) => x.id === sec.seqId && !x.deleted_at);
+        const summary = String(ent?.summary ?? ent?.description ?? '').trim();
+        const noteCount = allNotes.filter((n) => n.mode === 'sequence' && n.seq_id === sec.seqId).length;
+        const pageable = sec.scenes.some((sc) => scenePageable(sc.eventId));
+        const busy = readingSeq === sec.seqId;
+        const dark = theme === 'dark';
+        const top = Math.max(12, Math.min(seqCardTop, window.innerHeight - 300));
+        return (
+          <div
+            onMouseEnter={() => openSeqCard(si)}
+            onMouseLeave={() => closeSeqCard(si)}
+            style={{
+              position: 'fixed', left: navWidth + 10, top, width: 300, zIndex: 901,
+              animation: 'ffcardin 200ms cubic-bezier(0.32,0.72,0,1)',
+              transition: 'top 240ms cubic-bezier(0.32,0.72,0,1)',
+              borderRadius: 10, padding: '12px 14px', fontFamily: 'system-ui, sans-serif',
+              background: dark ? '#141417' : '#fff',
+              border: `1px solid ${sec.color}66`,
+              boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: sec.color, flexShrink: 0 }} />
+              <span style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5, color: dark ? '#6b6b74' : '#999' }}>
+                Sequence
+              </span>
+              <span style={{ marginLeft: 'auto', fontSize: 10.5, fontWeight: 600, color: dark ? '#6b6b74' : '#999', fontVariantNumeric: 'tabular-nums' }}>
+                {sec.scenes.length === 0 ? 'No scenes yet' : `${sec.scenes.length} scene${sec.scenes.length === 1 ? '' : 's'}`}
+              </span>
+            </div>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: dark ? '#e6e6ea' : '#1a1a1a', marginBottom: 8, lineHeight: 1.35 }}>
+              {sec.title}
+            </div>
+            {summary !== '' && (
+              <div style={{ fontSize: 12, color: dark ? '#aeaeb6' : '#555', lineHeight: 1.45, marginBottom: 10 }}>
+                {summary}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button
+                onClick={() => { setFullCardId(sec.seqId!); setSeqCardIdx(null); }}
+                style={{
+                  flex: 1, padding: '6px 10px', borderRadius: 7, cursor: 'pointer',
+                  fontSize: 12, fontWeight: 700, fontFamily: 'system-ui, sans-serif',
+                  border: `1px solid ${sec.color}80`, background: `${sec.color}1f`, color: sec.color,
+                }}
+              >
+                Open full card
+              </button>
+              {pageable && (
+                <HoverTip
+                  text={noteCount > 0
+                    ? `${noteCount} note${noteCount === 1 ? '' : 's'} on this sequence already. Read it again for what happens BETWEEN its scenes: escalation, repetition, setups and payoffs.`
+                    : 'The peer reads every scene in this sequence together and judges what happens between them: does each beat raise the last, do two scenes do the same job, does a thread get dropped.'}
+                  placement="bottom-left"
+                  accent={PEER_BLUE}
+                  width={240}
+                >
+                <button
+                  onClick={() => { if (busy) return; void readSequence(sec.seqId!, sec.title); setSeqCardIdx(null); }}
+                  style={{
+                    flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 5,
+                    padding: '6px 10px', borderRadius: 7, cursor: busy ? 'default' : 'pointer',
+                    fontSize: 12, fontWeight: 700, fontFamily: 'system-ui, sans-serif',
+                    border: '1px solid rgba(84,191,219,0.5)', background: 'rgba(84,191,219,0.12)', color: PEER_BLUE,
+                  }}
+                >
+                  {busy
+                    ? <span style={{ width: 9, height: 9, borderRadius: '50%', border: '2px solid rgba(84,191,219,0.3)', borderTopColor: PEER_BLUE, display: 'inline-block', animation: 'ffspin 0.9s linear infinite' }} />
+                    : <><span style={{ display: 'inline-flex', opacity: 0.9 }}><InternIcon size={12} /></span>Read{noteCount > 0 ? ` · ${noteCount}` : ''}</>}
+                </button>
+                </HoverTip>
+              )}
+            </div>
+          </div>
+        );
+      })()}
       {proxyCard && (() => {
         const g = graphData;
         const ent = g?.entities.find((x) => x.id === proxyCard.eventId && !x.deleted_at);
@@ -4213,16 +5085,51 @@ export default function FreeformScript() {
                   {locs.map((l) => l.working_name).join(' · ')}
                 </div>
               )}
-              <button
-                onClick={() => { setFullCardId(proxyCard.eventId); setProxyCard(null); }}
-                style={{
-                  width: '100%', padding: '6px 10px', borderRadius: 7, cursor: 'pointer',
-                  fontSize: 12, fontWeight: 700, fontFamily: 'system-ui, sans-serif',
-                  border: '1px solid rgba(255,107,53,0.5)', background: 'rgba(255,107,53,0.12)', color: '#ff8c42',
-                }}
-              >
-                Open full card
-              </button>
+              {/* The peer's READ lives here, not on the rail row (Ben,
+                  2026-09-08: the row cannot grow to hold it without shoving
+                  the row below it out from under the pointer). It sits beside
+                  "Open full card" because both are doors out of this popout.
+                  Absent, not disabled, when the scene has no pages. */}
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button
+                  onClick={() => { setFullCardId(proxyCard.eventId); setProxyCard(null); }}
+                  style={{
+                    flex: 1, padding: '6px 10px', borderRadius: 7, cursor: 'pointer',
+                    fontSize: 12, fontWeight: 700, fontFamily: 'system-ui, sans-serif',
+                    border: '1px solid rgba(255,107,53,0.5)', background: 'rgba(255,107,53,0.12)', color: '#ff8c42',
+                  }}
+                >
+                  Open full card
+                </button>
+                {scenePageable(proxyCard.eventId) && (() => {
+                  const busy = readingScene === proxyCard.eventId;
+                  const cnt = noteCountByScene.get(proxyCard.eventId) ?? 0;
+                  return (
+                    <HoverTip
+                      text={cnt > 0
+                        ? `${cnt} note${cnt === 1 ? '' : 's'} on this scene already. Read the pages again against what the card says the scene is meant to do.`
+                        : 'The peer reads this scene\'s pages against what the card says it is meant to do, and marks where the two come apart.'}
+                      placement="bottom-left"
+                      accent={PEER_BLUE}
+                      width={240}
+                    >
+                    <button
+                      onClick={() => { if (busy) return; void readScene(proxyCard.eventId); setProxyCard(null); }}
+                      style={{
+                        flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 5,
+                        padding: '6px 10px', borderRadius: 7, cursor: busy ? 'default' : 'pointer',
+                        fontSize: 12, fontWeight: 700, fontFamily: 'system-ui, sans-serif',
+                        border: '1px solid rgba(84,191,219,0.5)', background: 'rgba(84,191,219,0.12)', color: PEER_BLUE,
+                      }}
+                    >
+                      {busy
+                        ? <span style={{ width: 9, height: 9, borderRadius: '50%', border: '2px solid rgba(84,191,219,0.3)', borderTopColor: PEER_BLUE, display: 'inline-block', animation: 'ffspin 0.9s linear infinite' }} />
+                        : <><span style={{ display: 'inline-flex', opacity: 0.9 }}><InternIcon size={12} /></span>Read{cnt > 0 ? ` · ${cnt}` : ''}</>}
+                    </button>
+                    </HoverTip>
+                  );
+                })()}
+              </div>
             </div>
           </>
         );
@@ -4330,6 +5237,7 @@ export default function FreeformScript() {
               allEntities={graphData.entities}
               edges={graphData.edges}
               auth={auth}
+              completedResponseIds={emptyResponseIds}
               projectId={storyId}
               onClose={close}
               onEntitiesChanged={onChanged}
@@ -4343,5 +5251,6 @@ export default function FreeformScript() {
         return <ThemeCtx.Provider value={theme}>{sheet}</ThemeCtx.Provider>;
       })()}
     </div>
+    </ThemeCtx.Provider>
   );
 }

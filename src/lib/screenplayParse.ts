@@ -17,11 +17,44 @@
 //     INTRO inside action, never a character cue.
 //
 // Consumers: pdfText.ts (PDF -> indented text), importedTextToHtml in
-// freeform-script.tsx (text -> typed paragraphs). Eval: screenplayParse.test.ts
-// over a real positioned-PDF fixture + the flat Shawshank 24pp.
+// freeform-script.tsx (text -> typed paragraphs), the editor's plain-text
+// paste + Reformat (editor/extensions/PlainTextPaste.ts). Eval:
+// screenplayParse.test.ts over a real positioned-PDF fixture, the flat and
+// indented Shawshank 24pp, Paul's pilot scene one and Ben's tide-gauge scene.
+//
+// MIRROR: freeform-workflow-app/lib/screenplay-parse.mjs is the server port.
+// Any change to the grammar lands in BOTH files; both evals run the same
+// fixtures.
+//
+// 2026-09-15 (Ben's import-formatting regression):
+//   - Column detection ignores FRONT MATTER (everything above the first
+//     slugline). Scene one now carries the title page (the August span fix),
+//     and a flush-left contact block on that page formed the shallowest
+//     indent cluster, which the detector took as the action column; every
+//     role shifted one column and scene one came out all-action.
+//   - The action column is a KNOWN band, so a body whose margin is not the
+//     document's leftmost x (that same title page) stops flagging every
+//     action paragraph as residue.
+//   - TITLE PAGE detection: the head of the front matter, up to the first
+//     line that reads as script, becomes `title` blocks (one per line).
+//   - SPEECH GROUPS survive a blank line: the first line after a cue (or a
+//     parenthetical) is speech even across a blank, so double-spaced plain
+//     text (the editor's own paste/carve shape) keeps its cues. A blank
+//     after a dialogue line still ends the speech unless a wryly follows.
+//   - Curly quotes and apostrophes are cue furniture (SERGEANT “HAYES”).
+//   - perLine / inScript options + classifyParagraphs for the editor's
+//     Reformat (one block per paragraph, cues allowed without a slugline).
+//   - DOCUMENT COLUMNS FOR SHORT SLICES (2026-09-16, Reckless Roger import):
+//     a scene slice with fewer than three indent clusters fell to the flat
+//     grammar, where any short caps line with a parenthetical speaks
+//     ("MUSIC CARRIES OVER (1:18)" became a cue over a paragraph of action
+//     although it sat in the action column). documentRoles() reads the
+//     columns once per window and opts.roles hands them to every slice.
+//   - Script-start lines (OVER BLACK, FADE IN, TITLE CARD) never cue, and a
+//     cue extension never carries digits or a colon (timestamps).
 
 export type ScriptLineType =
-  | 'scene' | 'description' | 'character' | 'dialogue' | 'parenthetical' | 'transition';
+  | 'title' | 'scene' | 'description' | 'character' | 'dialogue' | 'parenthetical' | 'transition';
 
 export interface PdfTextItem { str: string; x: number; y: number; w: number }
 export interface PdfPageItems { width: number; height: number; items: PdfTextItem[] }
@@ -36,16 +69,40 @@ export interface ScriptBlock {
   uncertain?: true;
 }
 
+export interface ClassifyOptions {
+  /** The text sits inside a script: cues are allowed before any slugline and
+   *  no title page is detected (a selection, a mid-document paste). */
+  inScript?: boolean;
+  /** One block per non-blank line: no page-artifact skipping, no multi-line
+   *  parentheticals. For callers that map blocks back onto editor paragraphs. */
+  perLine?: boolean;
+  /** Column roles read from the whole document (documentRoles), handed to a
+   *  slice too short to find its own. null = treat as flat text. */
+  roles?: IndentRoles | null;
+}
+
 // ---- shared grammar --------------------------------------------------------
 
 const SLUG_LINE = /^(INT|EXT|EST|INT\.?\s*\/\s*EXT|I\/E)[.\s\-–]/i;
 const TRANSITION_RE = /^(CUT TO|SMASH CUT|MATCH CUT|WIPE TO|DISSOLVE TO|FADE (IN|OUT|TO|UP)|IRIS (IN|OUT)|TIME CUT)\b[.: ]*$|[A-Z ]+TO:$/;
-const PAGE_ARTIFACT = /^\s*(\d+\.?|\(CONTINUED\)|CONTINUED:?( \(\d+\))?|\(MORE\))\s*$/i;
-// A cue is caps plus the usual furniture: digits, apostrophes, dots, hyphens,
-// and a parenthetical extension ((O.S.), (V.O.), (CONT'D), (into phone)...).
-const CUE_SHAPE = /^[A-Z0-9 .'\-#&]+(\s*\((?:[^)]{1,24})\))?\s*$/;
+// (\d+\.?)+ also catches a page number stamped twice at one spot ("2.2.").
+const PAGE_ARTIFACT = /^\s*((\d+\.?)+|\(CONTINUED\)|CONTINUED:?( \(\d+\))?|\(MORE\))\s*$/i;
+// A cue is caps plus the usual furniture: digits, apostrophes (straight or
+// curly), quotes, dots, hyphens, and a parenthetical extension ((O.S.),
+// (V.O.), (CONT'D), (into phone)...).
+// Extensions may stack: WOMAN (O.S.) (CONT'D).
+// No digits or colons inside the extension: "(1:18)" is a timestamp on a
+// sound direction, not a speaker.
+const CUE_SHAPE = /^[A-Z0-9 .'’‘“”"\-#&]+(\s*\((?:[^)0-9:]{1,24})\))*\s*$/;
 // Caps lines that are camera/editing directions, never speakers.
-const SHOT_HEADING = /^(CLOSE ?UP|CLOSE ON|CLOSE SHOT|ANGLE|ANGLES? ON|INSERT|POV|REVERSE|WIDE|WIDER|AERIAL|TRACKING|MOVING|PAN|TILT|CRANE|ESTABLISHING|MONTAGE|SERIES OF SHOTS|BACK TO|TITLE|SUPER|LATER|CONTINUOUS|INTERCUT)\b/;
+// BEGIN / END / END OF forms of a montage, series, intercut or flashback are
+// structure, never speakers ("BEGIN MONTAGE" was a cue, 2026-09-16).
+const SHOT_HEADING = /^(CLOSE ?UP|CLOSE ON|CLOSE SHOT|ANGLE|ANGLES? ON|INSERT|POV|REVERSE|WIDE|WIDER|AERIAL|TRACKING|MOVING|PAN|TILT|CRANE|ESTABLISHING|MONTAGE|SERIES OF SHOTS|BACK TO|TITLE|SUPER|LATER|CONTINUOUS|INTERCUT|FLASHBACK|(BEGIN|END|END OF)\s+(MONTAGE|SERIES|INTERCUT|FLASHBACK|DREAM))\b/;
+// Lines that open the script proper; a title page never runs past one.
+const SCRIPT_START = /^(FADE IN|FADE UP|OVER BLACK|ON BLACK|FROM BLACK|IN BLACK|BLACK SCREEN|BLACKNESS|DARKNESS|TITLE CARD|TITLES?:|SUPER:|SUPERIMPOSE|MONTAGE|INSERT|OPEN ON|WE OPEN|COLD OPEN|TEASER|PROLOGUE|ACT ONE|ACT 1)\b/i;
+// Lines that mark a title page: bylines, source credits, contact, rights.
+const TITLE_MARKER = /^(written|screenplay|teleplay|story|created|original screenplay|an original screenplay|adapted|directed)\b|^by\b|^\(?based (up)?on\b|@|\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b|\brights reserved\b|copyright|©|\bwga\b|\bdraft\b|\brevision\b|\bregistered\b|\b[a-z0-9-]+\.(com|net|org|io|co|uk|me|tv|film)\b|^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.? \d{1,2},? \d{4}$|^\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}$/i;
+const TITLE_MAX_LINES = 25;
 
 const isCapsish = (t: string) => {
   const core = t.replace(/\([^)]*\)/g, '').trim();
@@ -77,7 +134,13 @@ export function linesFromPdfPages(pages: PdfPageItems[]): { lines: PhysicalLine[
       items.sort((a, b) => a.x - b.x);
       let text = '';
       let cursor: number | null = null;
+      let prev: PdfTextItem | null = null;
       for (const it of items) {
+        // A run printed twice at the same spot (Final Draft stamps the page
+        // number twice) would join into "2.2." and slip past the artifact
+        // filter: keep one.
+        if (prev && prev.str === it.str && Math.abs(prev.x - it.x) < 0.5) continue;
+        prev = it;
         if (cursor !== null && it.x - cursor > charW * 0.6) text += ' ';
         text += it.str;
         cursor = it.x + it.w;
@@ -103,7 +166,30 @@ export function linesFromPdfPages(pages: PdfPageItems[]): { lines: PhysicalLine[
     const g = lines[i - 1].y - lines[i].y;
     if (g > 0.5) gaps.push(g);
   }
-  return { lines, charWidth, leftMargin, lineGap: median(gaps) || 12 };
+  return { lines, charWidth, leftMargin, lineGap: baseGap(gaps) || 12 };
+}
+
+/** The SINGLE-line spacing: the smallest COMMON vertical gap, not the
+ *  median. In a dialogue-heavy script (cue, one-line speech, one-line
+ *  action) most gaps are paragraph gaps, so the median is the double gap
+ *  and "1.7x the median" never fires: every paragraph on a page fused into
+ *  one block (Paul's pilot, 2026-09-15: 17 blank lines in 589, all at page
+ *  tops). Gaps cluster within +-0.75pt; the shallowest cluster holding at
+ *  least 5% of the gaps (and 3) is the line pitch. */
+function baseGap(gaps: number[]): number {
+  if (!gaps.length) return 0;
+  const sorted = [...gaps].sort((a, b) => a - b);
+  const clusters: Array<{ center: number; count: number }> = [];
+  for (const g of sorted) {
+    const last = clusters[clusters.length - 1];
+    if (last && g - last.center <= 0.75) {
+      last.center = (last.center * last.count + g) / (last.count + 1);
+      last.count += 1;
+    } else clusters.push({ center: g, count: 1 });
+  }
+  const floor = Math.max(3, Math.ceil(gaps.length * 0.05));
+  const base = clusters.find((c) => c.count >= floor);
+  return base ? base.center : median(gaps);
 }
 
 /** The canonical text: each physical line indented by its column (leading
@@ -136,7 +222,8 @@ function median(xs: number[]): number {
 
 interface Line { text: string; indent: number; blank: boolean }
 
-interface IndentRoles {
+export interface IndentRoles {
+  action?: [number, number];
   dialogue?: [number, number];
   parenthetical?: [number, number];
   character?: [number, number];
@@ -146,7 +233,10 @@ interface IndentRoles {
 /** Per-document indent clusters -> element roles. Relative and self-
  *  calibrating: whatever columns THIS document uses, ranked action < dialogue
  *  < parenthetical < character < transition, cross-checked against content
- *  (a cue column is mostly caps; a parenthetical column mostly parens). */
+ *  (a cue column is mostly caps; a parenthetical column mostly parens).
+ *  Callers hand it the lines from the first slugline on: front matter votes
+ *  for no column (a title page's flush-left contact block once won the
+ *  action column and shifted every role, 2026-09-15). */
 function detectIndentRoles(lines: Line[]): IndentRoles | null {
   const counts = new Map<number, number>();
   for (const l of lines) {
@@ -164,8 +254,17 @@ function detectIndentRoles(lines: Line[]): IndentRoles | null {
   }
   const meaningful = centers.filter((c) => c.count >= 2);
   if (meaningful.length < 3) return null; // flat text: no layout signal
-  const [, ...aboveAction] = meaningful; // meaningful[0] = action/slug column
-  const roles: IndentRoles = {};
+  // The action column is the shallowest SUBSTANTIAL cluster: at least a tenth
+  // of the biggest one. A two-line cluster at the far left (a window's head
+  // slugline trimmed to indent 0, a title page's contact block) used to win
+  // the action column and shift every role one column to the right
+  // (2026-09-17, windows 2 and 3 of a re-import came out all-action).
+  const biggest = Math.max(...meaningful.map((c) => c.count));
+  const actionIdx = meaningful.findIndex((c) => c.count * 10 >= biggest);
+  if (actionIdx < 0 || meaningful.length - actionIdx < 3) return null;
+  const [actionCol, ...aboveAction] = meaningful.slice(actionIdx);
+  const bandOf = (c: { center: number }) => [c.center - 2, c.center + 2] as [number, number];
+  const roles: IndentRoles = { action: bandOf(actionCol) };
   const capsRatio = (band: [number, number]) => {
     const inBand = lines.filter((l) => !l.blank && l.indent >= band[0] && l.indent <= band[1]);
     return inBand.length ? inBand.filter((l) => isCapsish(l.text)).length / inBand.length : 0;
@@ -174,7 +273,6 @@ function detectIndentRoles(lines: Line[]): IndentRoles | null {
     const inBand = lines.filter((l) => !l.blank && l.indent >= band[0] && l.indent <= band[1]);
     return inBand.length ? inBand.filter((l) => /^\(/.test(l.text)).length / inBand.length : 0;
   };
-  const bandOf = (c: { center: number }) => [c.center - 2, c.center + 2] as [number, number];
   // Assign by order, then verify by content; unverifiable columns are skipped
   // rather than guessed (grammar still sees those lines).
   const unassigned = [...aboveAction];
@@ -207,15 +305,55 @@ function detectIndentRoles(lines: Line[]): IndentRoles | null {
 
 const inBand = (indent: number, band?: [number, number]) => !!band && indent >= band[0] && indent <= band[1];
 
+const toLines = (text: string): Line[] => text.split('\n').map((raw) => {
+  const t = raw.replace(/\s+$/, '');
+  const trimmed = t.trim();
+  return { text: trimmed, indent: t.length - t.replace(/^ +/, '').length, blank: trimmed.length === 0 };
+});
+
+/** The document's column roles, front matter excluded. Computed once per
+ *  window and handed to every scene slice via opts.roles, so a short scene
+ *  reads its columns from the whole script instead of falling to the flat
+ *  grammar. null = no layout signal (flat text). */
+export function documentRoles(text: string): IndentRoles | null {
+  const lines = toLines(text);
+  const firstSlug = lines.findIndex((l) => !l.blank && SLUG_LINE.test(l.text));
+  return detectIndentRoles(firstSlug > 0 ? lines.slice(firstSlug) : lines);
+}
+
+/** Index of the first line AFTER the title page (0 = no title page). The
+ *  title page is the head of the front matter: it stops at the first line
+ *  that reads as script (FADE IN, OVER BLACK, a transition, a shot heading,
+ *  a sentence of prose) and only counts when at least one line is a title
+ *  marker (a byline, a source credit, contact details, rights). Front matter
+ *  with no marker is the cold open, not a title page. */
+function titlePageEnd(lines: Line[]): number {
+  const firstSlug = lines.findIndex((l) => !l.blank && SLUG_LINE.test(l.text));
+  if (firstSlug <= 0) return 0;
+  let end = 0; let marker = false; let seen = 0;
+  for (let i = 0; i < firstSlug; i++) {
+    const l = lines[i];
+    if (l.blank) continue;
+    const t = l.text;
+    if (SCRIPT_START.test(t) || TRANSITION_RE.test(t) || SHOT_HEADING.test(t)) break;
+    const isMarker = TITLE_MARKER.test(t);
+    if (!isMarker) {
+      const words = t.split(/\s+/).length;
+      const sentence = /[.!?]["”')]*$/.test(t) && words >= 4;
+      if (sentence || words >= 9 || t.length > 70) break;
+    }
+    if (++seen > TITLE_MAX_LINES) break;
+    if (isMarker) marker = true;
+    end = i + 1;
+  }
+  return marker ? end : 0;
+}
+
 /** Classify indented (or flat) text into typed screenplay blocks. */
-export function classifyScriptText(text: string): ScriptBlock[] {
-  const rawLines = text.split('\n');
-  const lines: Line[] = rawLines.map((raw) => {
-    const t = raw.replace(/\s+$/, '');
-    const trimmed = t.trim();
-    return { text: trimmed, indent: t.length - t.replace(/^ +/, '').length, blank: trimmed.length === 0 };
-  });
-  const roles = detectIndentRoles(lines);
+export function classifyScriptText(text: string, opts: ClassifyOptions = {}): ScriptBlock[] {
+  const lines = toLines(text);
+  const roles = opts.roles !== undefined ? opts.roles : documentRoles(text);
+  const titleEnd = opts.inScript ? 0 : titlePageEnd(lines);
 
   const blocks: ScriptBlock[] = [];
   // Property access (not a bare let) so TS control-flow narrowing doesn't
@@ -226,27 +364,51 @@ export function classifyScriptText(text: string): ScriptBlock[] {
   const append = (text: string) => { if (state.cur) state.cur.text += ` ${text}`; };
 
   // Dialogue-group state: inside a cue's speech (dialogue + parentheticals).
+  // awaitingSpeech: the cue (or a wryly) has not been answered with dialogue
+  // yet, so a blank line must not end the group.
   let inSpeech = false;
-  let firstSlugSeen = false;
+  let awaitingSpeech = false;
+  let firstSlugSeen = !!opts.inScript;
   let openParen = false;
 
   const nextNonBlank = (from: number): Line | null => {
     for (let j = from; j < lines.length; j++) if (!lines[j].blank) return lines[j];
     return null;
   };
+  const closeParenthetical = () => {
+    if (opts.perLine) { close(); awaitingSpeech = true; } else openParen = true;
+  };
 
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
-    if (l.blank) { close(); inSpeech = false; openParen = false; continue; }
+    if (l.blank) {
+      close();
+      openParen = false;
+      // A blank line ends a speech only once the cue has been answered, and
+      // never when a wryly is next: double-spaced plain text keeps its groups.
+      if (inSpeech && !awaitingSpeech) {
+        const nx = nextNonBlank(i + 1);
+        if (!(nx && /^\(/.test(nx.text))) inSpeech = false;
+      }
+      continue;
+    }
     const t = l.text;
 
+    // Title page: one block per line, never merged, never a cue.
+    if (i < titleEnd) {
+      if (PAGE_ARTIFACT.test(t)) continue;
+      close();
+      blocks.push({ type: 'title', text: t });
+      continue;
+    }
+
     // Belt for flat text: page artifacts that had no positional strip.
-    if (PAGE_ARTIFACT.test(t)) continue;
+    if (!opts.perLine && PAGE_ARTIFACT.test(t)) continue;
 
     // Multi-line parenthetical continuation.
     if (openParen) {
       append(t);
-      if (/\)\s*$/.test(t)) { openParen = false; }
+      if (/\)\s*$/.test(t)) { openParen = false; awaitingSpeech = true; }
       continue;
     }
 
@@ -276,10 +438,11 @@ export function classifyScriptText(text: string): ScriptBlock[] {
     //    peels the leading paren into its own block. The old bug set openParen
     //    on any line not ENDING in ")", so an inline wryly ate the whole speech.
     if (/^\(/.test(t) && inSpeech) {
-      if (/^\([^)]*\)\s*$/.test(t)) { start('parenthetical', t); close(); continue; }
-      if (t.indexOf(')') === -1) { start('parenthetical', t); openParen = true; continue; }
+      if (/^\([^)]*\)\s*$/.test(t)) { start('parenthetical', t); close(); awaitingSpeech = true; continue; }
+      if (t.indexOf(')') === -1) { start('parenthetical', t); closeParenthetical(); continue; }
       if (state.cur?.type === 'dialogue') append(t);
       else start('dialogue', t);
+      awaitingSpeech = false;
       continue;
     }
 
@@ -288,7 +451,7 @@ export function classifyScriptText(text: string): ScriptBlock[] {
     // separator and the shot lexicon exclude them (they stay action).
     const next = nextNonBlank(i + 1);
     const shotHeading = / -- /.test(t) || SHOT_HEADING.test(t);
-    const looksCue = canCue && isCapsish(t) && CUE_SHAPE.test(t) && !shotHeading && t.length <= 40 && !!next;
+    const looksCue = canCue && isCapsish(t) && CUE_SHAPE.test(t) && !shotHeading && !SCRIPT_START.test(t) && t.length <= 40 && !!next;
     const cueByLayout = looksCue && inBand(l.indent, roles?.character);
     // Flat-text rule: an all-caps line whose successor starts lowercase is a
     // CAPS INTRO inside action ("ANDY DUFRESNE / is on the witness stand"),
@@ -300,6 +463,7 @@ export function classifyScriptText(text: string): ScriptBlock[] {
       start('character', t);
       close();
       inSpeech = true;
+      awaitingSpeech = true;
       continue;
     }
 
@@ -308,19 +472,21 @@ export function classifyScriptText(text: string): ScriptBlock[] {
       if (inBand(l.indent, roles.dialogue) && firstSlugSeen) {
         if (state.cur?.type === 'dialogue') append(t);
         else start('dialogue', t);
+        awaitingSpeech = false;
         continue;
       }
       if (inBand(l.indent, roles.parenthetical) && /^\(/.test(t)) {
-        if (/^\([^)]*\)\s*$/.test(t)) { start('parenthetical', t); close(); continue; }
-        if (t.indexOf(')') === -1) { start('parenthetical', t); openParen = true; continue; }
+        if (/^\([^)]*\)\s*$/.test(t)) { start('parenthetical', t); close(); awaitingSpeech = true; continue; }
+        if (t.indexOf(')') === -1) { start('parenthetical', t); closeParenthetical(); continue; }
         // Inline wryly at the parenthetical column: dialogue; L3 peels the paren.
         if (state.cur?.type === 'dialogue') append(t);
         else start('dialogue', t);
+        awaitingSpeech = false;
         continue;
       }
       // Action column (or unknown): description. A line sitting in NO known
       // column is the layout path's residue: flag it for the referee.
-      const knownColumn = l.indent <= 2 || inBand(l.indent, roles.dialogue) || inBand(l.indent, roles.parenthetical) || inBand(l.indent, roles.character) || inBand(l.indent, roles.transition);
+      const knownColumn = l.indent <= 2 || inBand(l.indent, roles.action) || inBand(l.indent, roles.dialogue) || inBand(l.indent, roles.parenthetical) || inBand(l.indent, roles.character) || inBand(l.indent, roles.transition);
       inSpeech = false;
       if (state.cur?.type === 'description') append(t);
       else start('description', t);
@@ -345,6 +511,7 @@ export function classifyScriptText(text: string): ScriptBlock[] {
     if (inSpeech) {
       if (state.cur?.type === 'dialogue') append(t);
       else start('dialogue', t);
+      awaitingSpeech = false;
       if (state.cur && state.cur.text.length > 220) state.cur.uncertain = true;
       continue;
     }
@@ -370,7 +537,7 @@ export function classifyScriptText(text: string): ScriptBlock[] {
 // Demotions cascade (a demoted cue orphans its dialogue), so repair runs to a
 // fixed point; adjacent description blocks produced by demotion merge back.
 
-export function repairScriptBlocks(blocks: ScriptBlock[]): ScriptBlock[] {
+export function repairScriptBlocks(blocks: ScriptBlock[], opts: { keepCount?: boolean } = {}): ScriptBlock[] {
   const out = blocks.map((b) => ({ ...b }));
   let changed = true;
   while (changed) {
@@ -394,6 +561,9 @@ export function repairScriptBlocks(blocks: ScriptBlock[]): ScriptBlock[] {
       }
     }
   }
+  // keepCount: the caller maps blocks back onto its own paragraphs 1:1, so
+  // no merging and no peeling.
+  if (opts.keepCount) return out;
   // Merge adjacent description blocks that demotion created (a demoted cue and
   // its demoted "dialogue" are one action paragraph again).
   const merged: ScriptBlock[] = [];
@@ -423,6 +593,27 @@ export function repairScriptBlocks(blocks: ScriptBlock[]): ScriptBlock[] {
   return peeled;
 }
 
+/** Type a list of editor paragraphs 1:1 (the Reformat action). Returns one
+ *  type per input, null for blank inputs or when the mapping cannot be
+ *  guaranteed (the caller keeps the existing type). inScript defaults to
+ *  true: a selection mid-script has no slugline above it. */
+export function classifyParagraphs(texts: string[], opts: { inScript?: boolean } = {}): Array<ScriptLineType | null> {
+  const idx: number[] = []; const parts: string[] = [];
+  texts.forEach((t, i) => {
+    const s = String(t ?? '').replace(/\s+/g, ' ').trim();
+    if (s) { idx.push(i); parts.push(s); }
+  });
+  const out: Array<ScriptLineType | null> = texts.map(() => null);
+  if (!parts.length) return out;
+  const blocks = repairScriptBlocks(
+    classifyScriptText(parts.join('\n\n'), { perLine: true, inScript: opts.inScript !== false }),
+    { keepCount: true },
+  );
+  if (blocks.length !== parts.length) return out;
+  blocks.forEach((b, k) => { out[idx[k]] = b.type; });
+  return out;
+}
+
 // ---- Output ---------------------------------------------------------------
 
 const escapeHtml = (s: string) =>
@@ -440,8 +631,8 @@ export function scriptParseResidue(blocks: ScriptBlock[]): { blocks: number; unc
   return { blocks: blocks.length, uncertain: blocks.filter((b) => b.uncertain).length };
 }
 
-export function scriptTextToHtml(text: string): string {
-  const blocks = repairScriptBlocks(classifyScriptText(text));
+export function scriptTextToHtml(text: string, opts: ClassifyOptions = {}): string {
+  const blocks = repairScriptBlocks(classifyScriptText(text, opts));
   const residue = scriptParseResidue(blocks);
   if (residue.uncertain > 0) {
     // eslint-disable-next-line no-console

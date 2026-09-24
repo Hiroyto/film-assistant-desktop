@@ -6,6 +6,12 @@
 //     2026-07-24 Shawshank import — the exact document whose mis-parse
 //     (caps intro -> cue, shredded action, page numbers as content) motivated
 //     the rebuild. Exercises the no-layout grammar path.
+//   - shawshank-24pp-indented.txt: the live re-import's canonical text.
+//   - pilot-scene1-indented.txt: scene one of Paul's pilot as the import
+//     sweep cut it (title page with a flush-left contact block, cold open,
+//     a curly-quoted cue). The 2026-09-15 all-action regression.
+//   - tide-gauge-flat.txt: Ben's scene as the editor's carve sends it (every
+//     paragraph double-spaced). The speech-group blank-line rule.
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import {
@@ -13,6 +19,8 @@ import {
   repairScriptBlocks,
   pdfPagesToIndentedText,
   scriptTextToHtml,
+  classifyParagraphs,
+  documentRoles,
   type PdfPageItems,
   type ScriptBlock,
 } from './screenplayParse';
@@ -20,7 +28,10 @@ import {
 // The full pipeline the app runs: classify then invariant-repair (L3).
 const parse = (t: string) => repairScriptBlocks(classifyScriptText(t));
 
-const fixture = (name: string) => readFileSync(join(__dirname, '__fixtures__', name), 'utf8');
+// Desktop: on Windows the fixtures are checked out with CRLF (core.autocrlf) and
+// the paragraph-split assertions below use '\n\n'. Normalize so the tests read
+// the same bytes the author's LF checkout does.
+const fixture = (name: string) => readFileSync(join(__dirname, '__fixtures__', name), 'utf8').replace(/\r\n/g, '\n');
 
 describe('layout path (positioned PDF)', () => {
   const pages: PdfPageItems[] = JSON.parse(fixture('test2-pdf-items.json'));
@@ -40,8 +51,13 @@ describe('layout path (positioned PDF)', () => {
   it('title page front matter never becomes a cue or dialogue', () => {
     const firstSlug = blocks.findIndex((b) => b.type === 'scene');
     for (const b of blocks.slice(0, firstSlug)) {
-      expect(['description']).toContain(b.type);
+      expect(['title', 'description']).toContain(b.type);
     }
+  });
+
+  it('the title page is typed title, one block per line', () => {
+    expect(blocks[0].type).toBe('title');
+    expect(blocks[0].text).toBe('TEST 2');
   });
 
   it('cues are followed by their speech', () => {
@@ -132,6 +148,13 @@ describe('indented path (the live re-import, full columns)', () => {
     expect(blocks[i + 1].text).toMatch(/^Yes, sir\. Absolutely\./);
   });
 
+  it('a cue with stacked extensions speaks: WOMAN (O.S.) (CONT’D)', () => {
+    const i = blocks.findIndex((b) => b.type === 'character' && b.text === 'WOMAN (O.S.) (CONT’D)');
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(blocks[i + 1].type).toBe('dialogue');
+    expect(blocks[i + 1].text).toMatch(/^Oh god\.\.\.that's sooo good/);
+  });
+
   it('shot headings are action, not speakers', () => {
     expect(blocks.find((b) => b.type === 'character' && /^CLOSEUP/.test(b.text))).toBeUndefined();
     const shot = blocks.find((b) => b.text.startsWith('CLOSEUP -- PAROLE FORM'));
@@ -172,6 +195,197 @@ describe('L2 confidence scoring (the referee go/no-go meter)', () => {
     // eslint-disable-next-line no-console
     console.info('residue: flat', r, 'of', flat.length);
     expect(r).toBeGreaterThan(0); // no layout, no blanks: uncertainty is real
+  });
+});
+
+
+describe('title page (the head of the front matter)', () => {
+  it('Shawshank: six title lines, then the slugline', () => {
+    const b = parse(fixture('shawshank-24pp-indented.txt'));
+    expect(b.slice(0, 6).map((x) => x.type)).toEqual(['title', 'title', 'title', 'title', 'title', 'title']);
+    expect(b[0].text).toBe('THE SHAWSHANK REDEMPTION');
+    expect(b[5].text).toBe('by Stephen King');
+    expect(b[6].type).toBe('scene');
+    expect(parse(fixture('shawshank-24pp-flat.txt')).filter((x) => x.type === 'title').length).toBe(6);
+  });
+
+  it('a cold open with no byline is not a title page', () => {
+    const b = parse('OVER BLACK.\nA diesel engine strains.\n\n     EXT. ROAD - DAY\n     A truck.');
+    expect(b.filter((x) => x.type === 'title').length).toBe(0);
+    expect(b[0].type).toBe('description');
+  });
+
+  it('an epigraph ends the title page and stays in the cold open', () => {
+    const b = parse('THE EI8HT\n"WHAT SURVIVES"\nWritten by\nA Writer\n\n"Until they become conscious they will never rebel."\n- George Orwell\n\nOVER BLACK.\n\nEXT. FARM - DAWN\nRows.');
+    expect(b.filter((x) => x.type === 'title').length).toBe(4);
+    expect(b[4].type).toBe('description');
+    expect(b[4].text).toMatch(/^"Until/);
+  });
+
+  it('inScript disables title detection', () => {
+    const b = repairScriptBlocks(classifyScriptText('THE TITLE\nWritten by\nSomeone\n\nINT. ROOM - DAY', { inScript: true }));
+    expect(b.filter((x) => x.type === 'title').length).toBe(0);
+  });
+});
+
+describe("Paul's pilot, scene one as swept (the 2026-09-15 regression)", () => {
+  const blocks = parse(fixture('pilot-scene1-indented.txt'));
+  const ofType = (t: string) => blocks.filter((b) => b.type === t);
+
+  it('the flush-left contact block does not hijack the action column', () => {
+    // Before: 44 description, 0 cues, 38 of 46 uncertain.
+    expect(ofType('character').length).toBeGreaterThanOrEqual(13);
+    expect(ofType('dialogue').length).toBeGreaterThanOrEqual(13);
+    expect(blocks.filter((b) => b.uncertain).length).toBeLessThanOrEqual(2);
+  });
+
+  it('eight title lines, contact block included, then OVER BLACK as action', () => {
+    expect(ofType('title').length).toBe(8);
+    expect(blocks[7].text).toBe('All rights reserved.');
+    expect(blocks[8].type).toBe('description');
+    expect(blocks[8].text).toMatch(/^OVER BLACK/);
+  });
+
+  it('NICK speaks', () => {
+    const i = blocks.findIndex((b) => b.type === 'character' && b.text === 'NICK');
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(blocks[i + 1].type).toBe('dialogue');
+    expect(blocks[i + 1].text).toMatch(/^Contact high left/);
+  });
+
+  it('a curly-quoted cue is a cue', () => {
+    expect(blocks.find((b) => b.type === 'character' && /HAYES/.test(b.text))).toBeDefined();
+  });
+});
+
+describe('double-spaced flat text keeps its speech groups (the carve / paste shape)', () => {
+  const blocks = parse(fixture('tide-gauge-flat.txt'));
+  const ofType = (t: string) => blocks.filter((b) => b.type === t);
+
+  it('19 cues, 19 dialogue, 3 parentheticals (was all action)', () => {
+    expect(ofType('character').length).toBe(19);
+    expect(ofType('dialogue').length).toBe(19);
+    expect(ofType('parenthetical').length).toBe(3);
+  });
+
+  it('NELL / (into the landline) / dialogue across blank lines', () => {
+    const i = blocks.findIndex((b) => b.type === 'character' && b.text === 'NELL');
+    expect(blocks[i + 1].type).toBe('parenthetical');
+    expect(blocks[i + 2].type).toBe('dialogue');
+  });
+
+  it('action after a dialogue line is action', () => {
+    expect(blocks.find((b) => /^She waits/.test(b.text))?.type).toBe('description');
+  });
+
+  it('a second double-spaced speech paragraph falls to action (the known ambiguity)', () => {
+    const b = parse('INT. ROOM - DAY\n\nBOB\n\nHello there.\n\nThis is the second paragraph of his speech.\n\nShe leaves.');
+    expect(b.map((x) => x.type)).toEqual(['scene', 'character', 'dialogue', 'description', 'description']);
+  });
+});
+
+describe('classifyParagraphs (Reformat): one type per paragraph', () => {
+  it('types every paragraph and preserves the count', () => {
+    const paras = fixture('tide-gauge-flat.txt').split('\n\n').map((s) => s.trim());
+    const types = classifyParagraphs(paras);
+    expect(types.length).toBe(paras.length);
+    expect(types.every((t) => t !== null)).toBe(true);
+    expect(types.slice(2, 5)).toEqual(['character', 'parenthetical', 'dialogue']);
+  });
+
+  it('a mid-script selection needs no slugline for cues', () => {
+    expect(classifyParagraphs(['NELL', 'They were. Twice more.', 'She turns the sheet over.'])).toEqual(['character', 'dialogue', 'description']);
+  });
+
+  it('blank paragraphs come back null; artifact-shaped ones keep a slot', () => {
+    expect(classifyParagraphs(['BOB', '', 'Hi.'])).toEqual(['character', null, 'dialogue']);
+    expect(classifyParagraphs(['BOB', '12.', 'Hi.']).length).toBe(3);
+  });
+});
+
+
+describe('Layer 0: paragraph gaps in a dialogue-heavy PDF (the "crushed action" report)', () => {
+  // A page shaped like Paul's pilot: one-line action, cue, one-line speech,
+  // repeat. Line pitch 12pt, a blank line (24pt) between paragraphs, so MORE
+  // than half of the vertical gaps are paragraph gaps. The old median-based
+  // line pitch read 24 and never emitted a blank line: the whole page became
+  // one action block.
+  const H = 792; const X = 108;
+  const items: Array<{ str: string; x: number; y: number; w: number }> = [];
+  let y = 700;
+  const put = (str: string, x = X) => { items.push({ str, x, y, w: str.length * 7.2 }); y -= 12; };
+  put('INT. ROOM - DAY'); y -= 12;
+  for (let i = 0; i < 6; i++) {
+    put(`Nick moves to the door, number ${i}.`); y -= 12;
+    put('NICK', X + 187); put('Contact high left.'); y -= 12;
+    put('Ash looks back at him.'); y -= 12;
+  }
+  // The page number, stamped twice at the same spot in the top band.
+  items.push({ str: '2.', x: 520, y: 760, w: 14 }, { str: '2.', x: 520, y: 760, w: 14 });
+  const pages: PdfPageItems[] = [{ width: 612, height: H, items }];
+  const text = pdfPagesToIndentedText(pages);
+  const blocks = parse(text);
+
+  it('emits a blank line at every paragraph gap', () => {
+    expect(text.split('\n').filter((l) => !l.trim()).length).toBeGreaterThanOrEqual(18);
+  });
+
+  it('keeps every action paragraph separate', () => {
+    expect(blocks.filter((b) => b.type === 'description').length).toBe(12);
+    expect(blocks.filter((b) => b.type === 'character').length).toBe(6);
+    expect(blocks.filter((b) => b.type === 'dialogue').length).toBe(6);
+  });
+
+  it('a page number stamped twice never reaches the text', () => {
+    expect(text).not.toMatch(/2\.2\./);
+    expect(parse('INT. A - DAY\n\n2.2.\n\nAction.').some((b) => /^2\.2\./.test(b.text))).toBe(false);
+  });
+});
+
+describe('document columns handed to a short slice (the Reckless Roger sound-direction cue)', () => {
+  const roles = documentRoles(fixture('shawshank-24pp-indented.txt'));
+  const slice = "EXT. THE FARM, LEAH'S GRAVE - SUNSET\n\nMUSIC CARRIES OVER (1:18)\n\nRoger stands at the foot of the tree holding Mabel. Her arms\nare wrapped around his neck with her head on his shoulder.\n\nThe air is quiet as their new reality sinks in.\n\nThen, the sound of a distant explosion turns their attention.";
+
+  it('documentRoles finds the columns, front matter excluded', () => {
+    expect(roles?.action).toBeDefined();
+    expect(roles?.character).toBeDefined();
+    expect(roles?.dialogue).toBeDefined();
+  });
+
+  it('with the document columns the sound direction is action (was a cue)', () => {
+    const b = repairScriptBlocks(classifyScriptText(slice, { roles }));
+    expect(b.filter((x) => x.type === 'character').length).toBe(0);
+    expect(b.filter((x) => x.type === 'description').length).toBe(4);
+  });
+
+  it('even flat: a cue extension never carries digits or a colon', () => {
+    expect(parse(slice).filter((x) => x.type === 'character').length).toBe(0);
+  });
+
+  it('BEGIN MONTAGE / END MONTAGE / FLASHBACK never cue', () => {
+    const b = parse('INT. ROOM - DAY\n\nBEGIN MONTAGE\n\nRoger and Mabel share a life on the farm.\n\nEND MONTAGE\n\nFLASHBACK\n\nThe barn.');
+    expect(b.filter((x) => x.type === 'character').length).toBe(0);
+  });
+
+  it('OVER BLACK / FADE IN never cue', () => {
+    const b = parse('INT. ROOM - DAY\n\nOVER BLACK.\n\nA DIESEL ENGINE strains.\n\nFADE IN:\n\nThe room.');
+    expect(b.filter((x) => x.type === 'character').length).toBe(0);
+  });
+
+  it('two trimmed sluglines at indent 0 do not steal the action column (a re-import window)', () => {
+    const w2 = ['EXT. SITE - LATER'].concat(Array.from({ length: 12 }, (_, i) => ['     Men sit on upturned crates outside the cabin, number ' + i + '.', '', '                          NICK', '               Contact high left, number ' + i + '!', '', '     Six rifles swing as one.', ''].join('\n')), ['INT. FLAT - NIGHT', '     Nick opens the door.', '', '                          ASH', '               Hello?']).join('\n');
+    const r = documentRoles(w2);
+    expect(r?.action?.[0]).toBeLessThanOrEqual(5);
+    expect(r?.action?.[1]).toBeGreaterThanOrEqual(5);
+    const b = parse(w2);
+    expect(b.filter((x) => x.type === 'character').length).toBe(13);
+    expect(b.filter((x) => x.type === 'dialogue').length).toBe(13);
+    expect(b.filter((x) => x.uncertain).length).toBe(0);
+  });
+
+  it('a real cue in the cue column still speaks under handed-in roles', () => {
+    const b = repairScriptBlocks(classifyScriptText('INT. ROOM - DAY\n\n                    BOB (V.O.)\n          Hello there.', { roles }));
+    expect(b.map((x) => x.type)).toEqual(['scene', 'character', 'dialogue']);
   });
 });
 
