@@ -56,9 +56,12 @@ export default function NewStoryModalApple({
         onClose();
     };
 
-    const WORKFLOWS: Array<{ id: StoryWorkflow; name: string; blurb: string; recommended?: boolean }> = [
+    // The outline template is closed to new stories: a fixed outline you fill
+    // in by hand is the opposite of a board built from your own pages.
+    // Existing outline stories still open at /home.
+    const WORKFLOWS: Array<{ id: StoryWorkflow; name: string; blurb: string; recommended?: boolean; disabled?: boolean }> = [
         { id: 'freeform', name: 'Corkboard', blurb: 'Freeform canvas: braindump, cards, and a writing peer.', recommended: true },
-        { id: 'outline', name: 'Outline Template', blurb: 'A fixed story outline surface for writers looking for structure.' },
+        { id: 'outline', name: 'Outline Template', blurb: 'A fixed story outline surface for writers looking for structure.', disabled: true },
     ];
 
     const modalVariants = {
@@ -129,10 +132,14 @@ export default function NewStoryModalApple({
                                                 <button
                                                     key={w.id}
                                                     type="button"
-                                                    onClick={() => setWorkflow(w.id)}
+                                                    disabled={w.disabled}
+                                                    aria-disabled={w.disabled}
+                                                    onClick={() => { if (!w.disabled) setWorkflow(w.id); }}
                                                     className={
                                                         'text-left rounded-xl px-4 py-3 border-2 transition-all duration-200 ' +
-                                                        (active
+                                                        (w.disabled
+                                                            ? 'border-white/10 bg-black/20 opacity-40 grayscale cursor-not-allowed'
+                                                            : active
                                                             ? 'border-[#ff6b35] bg-[#ff6b35]/15 shadow-[0_0_16px_rgba(255,107,53,0.18)]'
                                                             : 'border-[#ff8c42]/25 bg-black/30 hover:border-[#ff8c42]/50')
                                                     }
@@ -141,6 +148,11 @@ export default function NewStoryModalApple({
                                                         <div className={'font-semibold text-sm ' + (active ? 'text-[#ff8c42]' : 'text-white/85')}>
                                                             {w.name}
                                                         </div>
+                                                        {w.disabled && (
+                                                            <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-white/10 text-white/60 border border-white/20">
+                                                                Unavailable
+                                                            </span>
+                                                        )}
                                                         {w.recommended && (
                                                             <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-[#ff6b35]/20 text-[#ff8c42] border border-[#ff6b35]/40">
                                                                 Recommended

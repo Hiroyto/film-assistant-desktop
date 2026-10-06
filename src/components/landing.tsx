@@ -213,7 +213,7 @@ const Landing: React.FC = () => {
     return () => clearInterval(t);
   }, []);
 
-  // Auto-flip the outline-door carousel: braindump, board, cast
+  // Auto-flip the outline-door carousel: braindump, board, characters
   useEffect(() => {
     if (doorTab !== 'outline') return;
     const t = setInterval(() => setBoardSlide(s => (s + 1) % 3), 6000);
@@ -374,13 +374,13 @@ const Landing: React.FC = () => {
         </nav>
 
         <div className="hero-main-content">
-          <div className="ld-eyebrow">Screenwriting software with a living outline</div>
+          <div className="ld-eyebrow">Screenwriting software that outlines as you write</div>
 
-          <h1 className="ld-h1">Your story, fully staffed.</h1>
+          <h1 className="ld-h1">Your story.<br />Your writers room.</h1>
 
           <p className="ld-hero-sub">
-            Outline it or just write it. The board builds itself as you write, and
-            a reader who holds the whole story has notes.
+            Just write, and your board takes shape as you go. A story-aware reader
+            follows along, ready with notes whenever you want them.
           </p>
 
           <div className="ld-hero-ctas">
@@ -463,25 +463,25 @@ const Landing: React.FC = () => {
       <section className="philosophy-section" ref={philosophySectionRef}>
         <div className="philosophy-content philosophy-split">
           <div className="philosophy-split-left">
-            <h2 className="philosophy-headline">Your whole story, held together.</h2>
+            <h2 className="philosophy-headline">Never lose track of your story.</h2>
             <p className="philosophy-lede">
-              The more a story grows, the easier it becomes to lose the thread. We hold it
-              for you. FilmAssistant reads every page you write and keeps the whole thing
-              true underneath you, so:
+              The more your story grows, the more likely you are to lose track of it.
+              FilmAssistant never forgets. It reads every page you write and rewrite, and
+              updates your outline to match, so:
             </p>
           </div>
           <div className="philosophy-pillars">
             <div className="philosophy-pillar philosophy-pillar--warm">
               <span className="philosophy-bullet" />
-              <p className="philosophy-pillar-text">Your outline never drifts from your draft.</p>
+              <p className="philosophy-pillar-text">Your outline never drifts from your current draft.</p>
             </div>
             <div className="philosophy-pillar philosophy-pillar--warm">
               <span className="philosophy-bullet" />
-              <p className="philosophy-pillar-text">Leave for six months. Pick it up with momentum, instead of catching up.</p>
+              <p className="philosophy-pillar-text">Step away for any period of time and simply pick up right where you left off.</p>
             </div>
             <div className="philosophy-pillar philosophy-pillar--peer">
               <span className="philosophy-bullet" />
-              <p className="philosophy-pillar-text">Feedback the second you want it, from a reader who has read all of it, and won't just tell you it's great.</p>
+              <p className="philosophy-pillar-text">Immediate, actionable feedback from a reader who knows what you know, and won't just tell you it's great.</p>
             </div>
           </div>
         </div>
@@ -501,11 +501,12 @@ const Landing: React.FC = () => {
             <div className="ld-dot" ref={nextDotRef()} style={{ '--dot-color': SECTION_DOTS.doors } as React.CSSProperties} />
             Two ways in
           </div>
-          <h2 className="ld-title">Start through either door.</h2>
+          <h2 className="ld-title">Start the way that supports your process.</h2>
           <p className="ld-lede">
-            Some writers build the wall first. Some find the story in the pages.
-            FilmAssistant treats both as first-class, and both end in the same place:
-            a board and a script that agree.
+            Every writer's process is different. Some plan meticulously with outlines
+            and treatments; others find the story on the page. FilmAssistant treats both
+            approaches equally, so whatever works for you, you get a script and a board
+            that are always in sync.
           </p>
 
           <div className="ld-tabs" role="tablist" aria-label="Choose a starting point">
@@ -523,17 +524,17 @@ const Landing: React.FC = () => {
               aria-selected={doorTab === 'write'}
               onClick={() => setDoorTab('write')}
             >
-              I write first
+              I script first
             </button>
           </div>
 
           {doorTab === 'outline' ? (
             <div className="ld-door-panel">
               <div>
-                <h3>From fragments to a wall of cards.</h3>
+                <h3>Fragmented ideas to a wall of index cards.</h3>
                 <p>
                   Drop in whatever you have: half an idea, three characters and a grudge,
-                  a page of vibes. It becomes a corkboard of scene cards, cast, and
+                  a page of vibes. It becomes a corkboard of scene cards, characters, and
                   relationships you can shuffle like index cards.
                 </p>
                 <p>
@@ -597,7 +598,7 @@ const Landing: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Slide 3: mini cast view */}
+                {/* Slide 3: mini character view */}
                 <div className={`ld-slide ld-slide-zoomfrom ${boardSlide === 2 ? 'on' : ''}`}>
                   <div className="ld-cast">
                     <svg className="ld-cast-lines ld-stream" style={{ animationDelay: '0.9s' }} viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
@@ -628,7 +629,7 @@ const Landing: React.FC = () => {
                   />
                   <button
                     className={boardSlide === 2 ? 'on' : ''}
-                    aria-label="Show the cast"
+                    aria-label="Show the characters"
                     onClick={() => setBoardSlide(2)}
                   />
                 </div>
@@ -637,10 +638,10 @@ const Landing: React.FC = () => {
           ) : (
             <div className="ld-door-panel">
               <div>
-                <h3>Just type. The outline follows.</h3>
+                <h3>Just type. The outline follows you.</h3>
                 <p>
                   Open the script and write like you would anywhere: sluglines, action,
-                  dialogue. Scenes book themselves as cards, your cast appears as you
+                  dialogue. Scenes book themselves as cards, your characters appear as you
                   introduce them, and story facts get recorded as you establish them.
                 </p>
                 <p>
@@ -713,7 +714,7 @@ const Landing: React.FC = () => {
                               Marcus pulls the county file. The body under the singer's
                               name is a stranger. Someone paid for the paperwork.
                             </div>
-                            <div className="ld-xcard-castlabel">Cast</div>
+                            <div className="ld-xcard-castlabel">Characters</div>
                             <div className="ld-xcard-cast">Marcus · the night attendant</div>
                             <div className="ld-xcard-foot">
                               <div className="ld-xcard-links"><span>open full sheet ↗</span><span>delete</span></div>
@@ -753,31 +754,27 @@ const Landing: React.FC = () => {
           <h2 className="ld-title">One story. One direction.</h2>
           <p className="ld-lede">
             The board is a living reflection of your pages, not a second draft to
-            maintain. It reads what you write and keeps itself current. It never
+            maintain. It reads what you write and stays current. It never
             writes a word of your script.
           </p>
 
           <div className="ld-claimrows">
             <div className="ld-claimrow">
-              <span className="ld-claimrow-k gold">PAGES WIN</span>
-              <span>Write something that contradicts an old outline fact and the fact steps aside on its own.</span>
+              <span className="ld-claimrow-k gold">PAGES SYNC</span>
+              <span>Write something that contradicts the existing outline and the outline is automatically updated to reflect your changes.</span>
             </div>
             <div className="ld-claimrow">
-              <span className="ld-claimrow-k gold">YOUR HAND WINS</span>
-              <span>Edit a card and it sticks. The machine never overwrites you, and the board never touches your pages.</span>
-            </div>
-            <div className="ld-claimrow">
-              <span className="ld-claimrow-k gold">ALWAYS CURRENT</span>
-              <span>Freshness dots show exactly which scenes the board has caught up with.</span>
+              <span className="ld-claimrow-k gold">ALWAYS UP TO DATE</span>
+              <span>Freshness dots <span className="ld-navdot g ld-navdot-inline" aria-hidden="true"></span> show exactly which scenes the board has caught up with.</span>
             </div>
           </div>
 
           <div className="ld-import">
             <div>
-              <h3>Already have a draft? Bring it.</h3>
+              <h3>Already have a draft? Drop it in FilmAssistant!</h3>
               <p>
                 Import a feature-length screenplay and watch it break down into scenes,
-                sequences, cast, and story facts. A full board from 120 pages in minutes.
+                sequences, characters, and story facts. A full board of up to 120 pages populates in minutes.
               </p>
             </div>
           </div>
@@ -792,16 +789,16 @@ const Landing: React.FC = () => {
                 <div className="ld-dot" ref={nextDotRef()} style={{ '--dot-color': SECTION_DOTS.peer } as React.CSSProperties} />
                 The Peer
               </div>
-              <h2 className="ld-title">Notes from a reader who holds the whole story.</h2>
+              <h2 className="ld-title">Notes from a reader who knows your story.</h2>
               <p className="ld-lede">
-                Someone who remembers scene 9, someone who pushes back. The Peer sits in
-                those seats, and it knows every scene, every established fact, who knows
-                what, and who believes something that is no longer true.
+                A good reader remembers scene 9 and tells you when something isn't working.
+                FilmAssistant's Peer sits in that seat: it knows every scene, every established
+                fact, who knows what, and who believes something that is no longer true.
               </p>
               <ul className="ld-peer-claims">
                 <li>Catches the setup in scene 3 that pays off, or doesn't, in scene 40</li>
-                <li>Sees the dramatic irony your characters can't, and tells you how to play it</li>
-                <li>Asks the question under the scene, then your answer cascades: new facts and cards, minted from your words, never its inventions</li>
+                <li>Sees the dramatic irony your characters can't, and suggests how to play it</li>
+                <li>Asks the question under the scene, then your answer cascades: new facts and cards, derived from your words</li>
                 <li>Never rewrites your pages. Notes are notes.</li>
               </ul>
             </div>
@@ -854,21 +851,21 @@ const Landing: React.FC = () => {
             <div className="ld-dot" ref={nextDotRef()} style={{ '--dot-color': SECTION_DOTS.trust } as React.CSSProperties} />
             Trust
           </div>
-          <h2 className="ld-title">Your hand always wins.</h2>
+          <h2 className="ld-title">It's always your writing.</h2>
           <div className="ld-trust-grid">
             <div className="ld-trust-card">
-              <h3>The machine never overwrites you.</h3>
+              <h3>FilmAssistant never overwrites you.</h3>
               <p>
-                Nothing automatic ever deletes a card you made or rewrites a word you
-                typed. When your edit and the machine's disagree, yours wins, permanently.
-                That is not a policy. It is how the system is built.
+                It never deletes a card you made or rewrites a word you typed.
+                When your edit and an automatic update disagree, yours wins, permanently.
+                It's how FilmAssistant is built.
               </p>
               <div className="ld-trust-checks"><span>Writer edits are sticky</span><span>Nothing automatic deletes</span></div>
             </div>
             <div className="ld-trust-card">
-              <h3>Your stories stay yours.</h3>
+              <h3>It's your story, not ours.</h3>
               <p>
-                We never train on your work. Every story, character, and idea you create
+                FilmAssistant never trains on your work. Every story, character, and idea you create
                 belongs entirely to you: your scripts, your ideas, your IP.
               </p>
               <div className="ld-trust-checks"><span>No training</span><span>No sharing</span><span>You own it</span></div>
@@ -886,8 +883,8 @@ const Landing: React.FC = () => {
             We designed FilmAssistant to help filmmakers push their craft forward. AI can
             give you a foundation to figure out what makes your story flow, a framework to
             string conflict together without spending months toiling in outlines.
-            Ultimately, it is not a tool to replace the creative, but one to get you the
-            reps that further your craft, your voice, and what makes your story, well,
+            Ultimately, it is not a tool to replace the creative, but to further
+            your craft, your voice, and what makes your story, well,
             your story.
           </p>
         </div>
@@ -898,8 +895,8 @@ const Landing: React.FC = () => {
         <div className="ld-kicker orange">Pricing</div>
         <h2 className="ld-title">Simple, and you own what you make.</h2>
         <p className="ld-lede">
-          The beta is open now. These are the launch prices, so you know exactly
-          what you are joining.
+          The beta is now open. These are the launch prices, so you know exactly
+          what you're getting.
         </p>
         <div className="ld-price-grid">
           <div className="ld-price-card popular">
@@ -952,8 +949,10 @@ const Landing: React.FC = () => {
         <div className="ld-footer-inner">
           <div>
             <a href="#pricing" onClick={(e) => { e.preventDefault(); scrollTo(pricingSectionRef); }}>Pricing</a>
+            <a href="/privacy.html">Privacy Policy</a>
+            <a href="/terms.html">Terms of Service</a>
           </div>
-          <div>© 2026 filmassistant.io · Your stories stay yours.</div>
+          <div>© 2026 filmassistant.io · It's your story, not ours.</div>
         </div>
       </footer>
     </div>

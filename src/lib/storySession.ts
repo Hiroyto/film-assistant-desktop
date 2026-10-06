@@ -127,7 +127,34 @@ type Session = {
    *  an acceptable clear for the WS-silent lanes (scene-pages). */
   extractionPulseUntil: number;
   pulseListeners: Set<() => void>;
+  /** The board's import/braindump run, kept here because the board's own
+   *  state dies when the writer switches to the script and back (Ben,
+   *  2026-10-02: "it drops it"). The session hears the run's progress and
+   *  completion either way; a remounting board resumes from this. */
+  activeRun: ActiveRun | null;
 };
+
+export type ActiveRun = {
+  braindumpId: string;
+  startedAt: number;
+  windowed: boolean;
+  proseLength: number;
+  /** The board's submit-time receipt snapshot (ids as arrays). */
+  snapshot: { beforeIds: string[]; beforeInfoIds: string[]; beforeChars: Array<[string, { traits: string[]; aliases: string[] }]> } | null;
+  edgeCountAtSubmit: number;
+  cardCountAtSubmit: number;
+  noSavedLayoutAtSubmit: boolean;
+  /** Latest line the meter showed, and the windowed phase / part. */
+  msg: string;
+  winPhase?: string;
+  winProg?: { window?: number; total?: number };
+  /** The resolved graph arrived (the board's done-split). */
+  deltaApplied: boolean;
+  /** Set when braindump_complete lands, mounted board or not. */
+  completed: { counts: any; staged: number; at: number } | null;
+};
+
+const ACTIVE_RUN_TTL_MS = 20 * 60 * 1000;
 
 const sessions = new Map<string, Session>();
 
@@ -201,6 +228,7 @@ function getSession(storyId: string): Session {
       streamBuffer: new Map(),
       extractionPulseUntil: 0,
       pulseListeners: new Set(),
+      activeRun: null,
     };
     sessions.set(storyId, s);
   }
@@ -378,7 +406,23 @@ function openWs(s: Session) {
       // streamBuffer field comment). A mounted view's own handler renders
       // the live animation; the buffer serves views that mount mid-run.
       s.streamBuffer.set(String(msg.entity.id), { entity: msg.entity, at: Date.now() });
-    } else if (msg.type === 'braindump_complete') {
+    }
+    // The board's run, tracked whether or not the board is mounted.
+    const run = s.activeRun;
+    if (run && (!msg.braindumpId || msg.braindumpId === run.braindumpId)) {
+      if (msg.type === 'braindump_progress') {
+        if (msg.phase) run.winPhase = String(msg.phase);
+        if (msg.window || msg.total) {
+          run.winProg = { window: msg.window, total: msg.total };
+          if (msg.window && (msg.total ?? 0) > 1) run.msg = `Processing the script: part ${msg.window}/${msg.total}…`;
+        }
+      } else if (msg.type === 'graph_delta' && msg.braindumpId === run.braindumpId) {
+        run.deltaApplied = true;
+      } else if (msg.type === 'braindump_complete' && msg.braindumpId === run.braindumpId) {
+        run.completed = { counts: msg.counts ?? {}, staged: Number(msg.staged ?? 0), at: Date.now() };
+      }
+    }
+    if (msg.type === 'braindump_complete') {
       s.streamBuffer.clear();
       if (s.extractionPulseUntil > 0) {
         s.extractionPulseUntil = 0;
@@ -639,6 +683,31 @@ export function queueStructOpGlobal(storyId: string, op: StructOp): void {
  *  visually undoes a pending edit. */
 export function overlayPending(storyId: string, payload: ListProjectEntitiesResponse): ListProjectEntitiesResponse {
   return overlayQueue(getSession(storyId), payload);
+}
+
+/** The board's in-flight run for this story (or null). Runs older than the
+ *  TTL are treated as gone: a run that never reported back must not resume
+ *  a meter forever. */
+export function getActiveRun(storyId: string): ActiveRun | null {
+  const s = getSession(storyId);
+  const run = s.activeRun;
+  if (run && Date.now() - run.startedAt > ACTIVE_RUN_TTL_MS) { s.activeRun = null; return null; }
+  return run;
+}
+
+export function setActiveRun(storyId: string, run: ActiveRun | null): void {
+  getSession(storyId).activeRun = run;
+}
+
+/** Clear the run only if it is still THIS run (a newer one may have started). */
+export function clearActiveRun(storyId: string, braindumpId: string): void {
+  const s = getSession(storyId);
+  if (s.activeRun?.braindumpId === braindumpId) s.activeRun = null;
+}
+
+export function patchActiveRun(storyId: string, braindumpId: string, patch: Partial<ActiveRun>): void {
+  const s = getSession(storyId);
+  if (s.activeRun?.braindumpId === braindumpId) Object.assign(s.activeRun, patch);
 }
 
 /** Stamp the cross-view extraction pulse (script-side enqueues call this).

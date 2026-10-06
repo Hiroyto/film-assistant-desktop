@@ -187,7 +187,7 @@ export default function WowFlow({
           hideNext: true,
           content: stepBody(
             'Your first idea is loaded.',
-            'This sample shows you the engine. Tweak it or send it as-is, then hit Process and watch your story assemble itself.',
+            'This sample shows you how FilmAssistant works. Tweak it or send it as-is, then hit Process and watch your story assemble itself.',
           ),
         },
       ],
@@ -307,8 +307,8 @@ export default function WowFlow({
         selector: '[data-tour="receipt"]',
         placement: 'side',
         content: stepBody(
-          'Your receipt.',
-          'Every braindump ends with this: what landed and where it went, grouped by sequence. Anything the engine could not place waits below the line as a question for you, never a guess. It stays until you dismiss it.',
+          'Your breakdown.',
+          'Every braindump ends with this: what landed and where it went, grouped by sequence. Anything FilmAssistant could not place waits below the line as a question for you. It stays until you dismiss it.',
         ),
       });
     }
@@ -319,10 +319,10 @@ export default function WowFlow({
         id: `wow-card-${character.id}`,
         selector: `[data-tour="card-${character.id}"]`,
         content: stepBody(
-          'It pulled your cast.',
+          'It knows your characters.',
           <>
             {cardRef(displayName(character))} and your other characters came
-            straight out of your prose. The engine does not invent anyone; it
+            straight out of your prose. FilmAssistant does not invent anyone. It
             tracks who you wrote and the relationships between them.
           </>,
         ),
@@ -361,11 +361,11 @@ export default function WowFlow({
         onEnter: () => onHighlightTie?.(structTie),
         onExit: () => onHighlightTie?.(null),
         content: stepBody(
-          'It caught how they connect.',
+          'It knows how your characters are connected.',
           <>
             From the way you wrote {cardRef(displayName(rA))} and{' '}
-            {cardRef(displayName(rB))}, the engine read the tie between them.
-            It maps the relationships already in your story, it does not add
+            {cardRef(displayName(rB))}, FilmAssistant read the tie between them.
+            It maps the relationships already in your story and never adds
             new ones.
           </>,
         ),
@@ -381,7 +381,7 @@ export default function WowFlow({
           'And your scenes.',
           <>
             Each dramatized moment you wrote becomes a scene: one concrete beat
-            of the story. The engine lifts the scenes out of your prose and sets
+            of the story. FilmAssistant lifts the scenes out of your prose and sets
             them in order. It does not write new ones.
           </>,
         ),
@@ -394,10 +394,10 @@ export default function WowFlow({
         id: `wow-card-${sequence.id}`,
         selector: `[data-tour="card-${sequence.id}"]`,
         content: stepBody(
-          'It grouped your plot into sequences.',
+          'FilmAssistant grouped your plot into sequences.',
           <>
             A sequence is a section of your plot: a run of scenes with its own
-            arc, the chapters of your beats. The engine grouped the broad
+            arc, the chapters of your beats. It grouped the broad
             strokes you wrote into these movements.
           </>,
         ),
@@ -416,8 +416,8 @@ export default function WowFlow({
       // step used to point at a closed header.
       onEnter: () => onOpenPanelSection('suggestions'),
       content: stepBody(
-        "It's already thinking ahead.",
-        'Threads and arcs it noticed across your prose surface here as suggestions. Accept the ones that fit, dismiss the rest. Nothing lands without your say.',
+        'Already thinking ahead.',
+        'Threads and arcs it noticed across your prose surface here as suggestions. Accept the ones that fit, dismiss the rest. Nothing sticks without your say.',
       ),
     });
     steps.push({
@@ -429,7 +429,7 @@ export default function WowFlow({
       onEnter: () => onOpenPanelSection('information'),
       nextLabel: peerTarget ? "Open one of your cards →" : 'Got it →',
       content: stepBody(
-        'And it tracked the facts.',
+        'FilmAssistant tracks the facts.',
         'Every fact your prose established is recorded here in the panel, not as cards to open. The real work happens back on the board. Let\'s open one of your cards.',
       ),
       onExit: () => {
@@ -466,7 +466,7 @@ export default function WowFlow({
             id: 'wow-expand',
             selector: `[data-tour="card-${target}"]`,
             hideNext: true,
-            content: stepBody('Dig into one.', 'Click this card to open it up.'),
+            content: stepBody('Dig deeper.', 'Click this card to open it up.'),
           },
         ],
         { lockScroll: false, onSkip: onComplete },
@@ -511,7 +511,7 @@ export default function WowFlow({
             selector: '[data-tour="orbit-ask-peer"]',
             placement: 'side',
             hideNext: true,
-            content: stepBody('Now ask the peer.', 'Click Ask the peer. It reads this card and everything around it, then pushes back like a real reader.'),
+            content: stepBody('Now ask the FilmAssistant Peer.', 'Click Ask the peer. It reads this card and everything around it, then asks the questions a sharp reader would.'),
           },
         ],
         { lockScroll: false, blur: false, onSkip: onComplete },
@@ -592,7 +592,7 @@ export default function WowFlow({
             selector: `[data-tour="card-${target}"]`,
             placement: 'side',
             hideNext: true,
-            content: stepBody('Now open the full card.', 'Hit the glowing "open full sheet ↗" to see everything the engine tracks about it.'),
+            content: stepBody('Now open the full card.', 'Hit the glowing "open full sheet ↗" to see everything FilmAssistant tracks about it.'),
           },
         ],
         { lockScroll: false, onSkip: onComplete },
@@ -623,7 +623,7 @@ export default function WowFlow({
         'A living link to your work.',
         'The peer keeps its open questions here. Every answer you give updates this card and ripples through your beats. It grows as you do.',
       ),
-      nextLabel: 'Now try the peer \u2192',
+      nextLabel: 'Try the FilmAssistant Peer \u2192',
       onExit: () => setPhase('sheet-ask'),
     });
     const steps: TourStep[] =
@@ -641,10 +641,10 @@ export default function WowFlow({
             peerChip(),
           ]
         : [
-            chip('appears-in', 'Where they show up.', 'Every scene they touch, in story order, with what each one does to them.'),
-            chip('relationships', 'Their bonds.', 'Who they are to everyone else, tracked as the story develops.'),
+            chip('appears-in', 'Where this character shows up.', 'Every scene they touch, in story order, with what each one does to them.'),
+            chip('relationships', 'Character relationships.', 'Who they are to everyone else, tracked as the story develops.'),
             chip('knowledge', 'What they know.', 'Per scene: what they know, suspect, or are in the dark about. The dramatic-irony layer.'),
-            chip('arcs', 'Their arcs.', 'The threads they move through across the story.'),
+            chip('arcs', 'Character arcs.', 'The threads they move through across the story.'),
             peerChip(),
           ];
     // The sheet is open when this builds, so drop chip steps for chips this
@@ -669,23 +669,23 @@ export default function WowFlow({
         {
           id: 'wow-tb-new',
           selector: '[data-tour="toolbar-new"]',
-          content: stepBody('Build by hand, too.', 'Add a scene, character, or arc yourself anytime. The engine wires each new card into your beats.'),
+          content: stepBody('Build by hand.', 'Add a scene, character, or arc yourself anytime. FilmAssistant wires each new card into your beats.'),
         },
         {
           id: 'wow-tb-views',
           selector: '[data-tour="toolbar-views"]',
-          content: stepBody('See it your way.', 'Switch views: the free-form board, the character web, or your beats in story order.'),
+          content: stepBody('Customize your view.', 'Switch views: the free-form board, the character web, or your beats in story order.'),
         },
         {
           id: 'wow-tb-script',
           selector: '[data-tour="toolbar-script"]',
-          content: stepBody('Then draft the pages.', 'Script turns these beats into real screenplay pages. Your scenes wait there as slots, and a peer reads what you write. Your first visit walks you through it.'),
+          content: stepBody('Draft the pages.', 'In Script, you turn these beats into real screenplay pages. Your scenes wait there as slots, and the peer reads what you write. Your first visit walks you through it.'),
         },
         {
           id: 'wow-tb-import',
           selector: '[data-tour="toolbar-import"]',
           nextLabel: "You're set →",
-          content: stepBody('Already have pages?', 'Import a screenplay PDF (or drop one on the board) and it extracts into cards, same engine.'),
+          content: stepBody('Already have script pages?', 'Import a screenplay PDF, Final Draft or Fade In file (or drop one on the board) and it extracts into cards.'),
           onExit: () => { wowEvent('completed', { full: true }); setPhase('done'); onComplete(); },
         },
       ],
@@ -764,7 +764,7 @@ export default function WowFlow({
         {phase === 'answer' && (
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 12 }} style={bannerBottom(ORANGE)}>
             <div style={{ fontSize: 14, lineHeight: 1.55, color: '#ff8c42' }}>
-              This is the peer. It read your card and everything around it, then pushed back with the sharpest questions in your story. Answer one whenever you like and your beats grow from your take.
+              This is the peer. It read your card and everything around it, then created questions for you to review and answer as you see fit. When you answer, your story beats evolve and update.
             </div>
             <button
               onClick={() => { wowEvent('peer_seen'); setPhase('toolbar-tour'); }}

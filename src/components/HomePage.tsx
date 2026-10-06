@@ -66,7 +66,7 @@ const EXAMPLE_PROMPTS = [
 ];
 
 export function HomePage(props: HomePageProps) {
-  const STORIES_LIMIT = 10;
+  const STORIES_LIMIT = 35;
   // ============================================================
   // CONTEXT & GLOBAL STATE
   // ============================================================
@@ -603,7 +603,7 @@ export function HomePage(props: HomePageProps) {
             <div style={{ maxWidth: 280 }}>
               <div style={{ fontWeight: 700, fontSize: 14 }}>Start here.</div>
               <div style={{ marginTop: 6, fontSize: 13, lineHeight: 1.5 }}>
-                Click <strong>Build Your Story</strong> to begin — we'll walk you through your first one.
+                Click <strong>Build Your Story</strong> to begin. We'll walk you through your first one.
               </div>
             </div>
           ),
@@ -817,7 +817,7 @@ export function HomePage(props: HomePageProps) {
               Welcome to filmassistant.io
             </h2>
             <p style={{ margin: '0 auto 26px', maxWidth: 420, fontSize: 14.5, lineHeight: 1.6, color: 'rgba(255,255,255,0.72)' }}>
-              Want a quick guided tour? We'll walk you through building your first story and meeting the peer.
+              Want a quick guided tour? We'll walk you through building your first story and working with the FilmAssistant Peer.
             </p>
             <button
               onClick={beginWowTour}
@@ -862,7 +862,7 @@ export function HomePage(props: HomePageProps) {
         <div className="hero-banner">
           <div className="hero-content">
             <h1 className="hero-title">
-              Start with <span className="gradient-text">anything you've got</span>
+              Start with <span className="gradient-text">what you have</span>
             </h1>
             <p className="hero-subtitle">
               A line, a treatment, a finished draft. It all becomes your living outline.
@@ -930,16 +930,6 @@ export function HomePage(props: HomePageProps) {
             >
                 Blank Outline
               </button>
-              {storiesCount >= STORIES_LIMIT && (
-              <p style={{
-                color: '#ef4444',
-                fontSize: '13px',
-                marginTop: '12px',
-                textAlign: 'center'
-              }}>
-                Story limit reached ({STORIES_LIMIT}/{STORIES_LIMIT}). Delete a story to create a new one.
-              </p>
-            )}
             </div>
           </div>
 

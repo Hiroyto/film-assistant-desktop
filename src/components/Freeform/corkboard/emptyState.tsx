@@ -102,7 +102,7 @@ export function BoardEmptyState({
             color: dark ? '#e8e8ee' : '#2c3140',
           }}
         >
-          Get something on the board
+          Build the board
         </h2>
 
         <button
@@ -121,8 +121,10 @@ export function BoardEmptyState({
             cursor: 'pointer',
             background: hoverDump
               ? 'linear-gradient(135deg, #f2602c 0%, #f57f35 100%)'
-              : 'linear-gradient(135deg, #ff6b35 0%, #ff8c42 100%)',
-            boxShadow: '0 2px 14px rgba(255,107,53,0.34)',
+              // Light runs the DEEPER pair: white text on the brand orange is
+              // 2.3–2.8:1 on the cream board; #d9480f→#ea580c holds 3.6–4.3:1.
+              : 'linear-gradient(135deg, #d9480f 0%, #ea580c 100%)',
+            boxShadow: dark ? '0 2px 14px rgba(255,107,53,0.34)' : '0 2px 14px rgba(217,72,15,0.28)',
             transition: 'background 130ms ease-out',
             // The same mark the toolbar's Braindump button wears, so the two
             // ways in are recognisably one action.
@@ -140,7 +142,7 @@ export function BoardEmptyState({
           style={{
             margin: '9px 0 20px',
             fontSize: 11.5,
-            color: dark ? '#6e6e78' : '#9a9aa4',
+            color: dark ? '#6e6e78' : '#736b5e',
           }}
         >
           Paste an outline, a treatment, a few notes, or just write freely.
@@ -157,7 +159,7 @@ export function BoardEmptyState({
             textTransform: 'uppercase',
             letterSpacing: 0.7,
             fontWeight: 600,
-            color: dark ? '#5c5c66' : '#adaab2',
+            color: dark ? '#5c5c66' : '#736b5e',
           }}
         >
           <span style={{ flex: 1, height: 1, background: dark ? '#26262b' : '#ece5d7' }} />
@@ -171,7 +173,7 @@ export function BoardEmptyState({
               key={s.kind}
               label={s.label}
               hint={s.hint}
-              color={getEntityColor(s.kind as any)}
+              color={getEntityColor(s.kind as any, dark ? 'dark' : 'light')}
               dark={dark}
               onClick={() => onCreate(s.kind)}
             />
@@ -206,7 +208,7 @@ export function BoardEmptyState({
             fontSize: 12.5,
             fontWeight: 600,
             fontFamily: 'inherit',
-            color: hoverImport ? (dark ? '#d6d6de' : '#3d4150') : (dark ? '#9a9aa4' : '#6b6f7d'),
+            color: hoverImport ? (dark ? '#d6d6de' : '#3d4150') : (dark ? '#9a9aa4' : '#5c5448'),
             cursor: 'pointer',
             transition: 'background 120ms ease-out, border-color 120ms ease-out, color 120ms ease-out',
           }}
@@ -255,7 +257,7 @@ function StarterButton({
         minWidth: 130,
         padding: '10px 12px',
         borderRadius: 10,
-        border: `1px solid ${hover ? color : dark ? '#2a2a30' : '#e3e5ea'}`,
+        border: `1px solid ${hover ? color : dark ? '#2a2a30' : '#e6dfd2'}`,
         background: hover ? hexToRgba(color, dark ? 0.16 : 0.09) : 'transparent',
         cursor: 'pointer',
         fontFamily: 'inherit',
@@ -282,7 +284,7 @@ function StarterButton({
           marginTop: 3,
           fontSize: 11,
           lineHeight: 1.4,
-          color: dark ? '#75757f' : '#8f8f9a',
+          color: dark ? '#75757f' : '#736b5e',
         }}
       >
         {hint}

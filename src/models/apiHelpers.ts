@@ -53,6 +53,13 @@ function isRetriable(error: any): boolean {
   return typeof status === 'number' && status >= 500 && status <= 599;
 }
 
+// Refusal codes from the backend usage limits (freeform-workflow-app
+// lib/shared/usage-limits.mjs). The server message is writer-ready.
+const USAGE_CODES = new Set(['rate_limited', 'import_too_long', 'ai_paused_user', 'ai_paused_global']);
+
+// Requests the writer didn't directly ask for: a refusal here is not news.
+const QUIET_BACKGROUND_EVENTS = new Set(['enqueue-scene-extraction', 'check-scene-staleness']);
+
 /**
  * Wrapper seguro de chamada de API. Trata erros graciosamente e nunca rejeita —
  * sempre retorna ApiCallResult.
@@ -122,6 +129,15 @@ export const safeApiCall = async (
 
       if (error.code === 'ERR_NETWORK') {
         toast.error('Network error. Please check your connection.');
+      } else if (error.response && USAGE_CODES.has(error.response.data?.code)) {
+        // Usage limits (FIL-663). Background work the writer didn't start
+        // (scene sync on save) stays silent: the scene is still out of date
+        // and Sync board picks it up later. Everything else gets ONE toast
+        // per kind, replaced rather than stacked.
+        if (!QUIET_BACKGROUND_EVENTS.has(data?.event)) {
+          const code = error.response.data.code;
+          toast.error(error.response.data.error || 'Please try again in a moment.', { id: `usage-${code}` });
+        }
       } else if (error.response) {
         toast.error(error.response.data?.error || 'Server error');
       } else {

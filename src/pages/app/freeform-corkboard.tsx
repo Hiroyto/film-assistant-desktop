@@ -36,7 +36,7 @@ import { prefetchScriptData } from '../../lib/scriptPrefetch';
 import { playPageWipe } from '../../lib/pageWipe';
 import { useCascadeEvents } from '../../lib/useCascadeEvents';
 import { countFreshDeltaEdges, loadStoredGraph, mergeGraphDelta, onGraphUpdate, saveStoredGraph, type GraphDelta } from '../../lib/localGraphStore';
-import { acquireStorySession, overlayPending, queueStructOpGlobal, type StorySessionHandle } from '../../lib/storySession';
+import { acquireStorySession, overlayPending, queueStructOpGlobal, getActiveRun, setActiveRun, clearActiveRun, patchActiveRun, type StorySessionHandle } from '../../lib/storySession';
 import { fetchAuthSession } from 'aws-amplify/auth';
 import axios from 'axios';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
@@ -99,6 +99,15 @@ function withEntity(list: ProjectEntity[], ent: ProjectEntity): ProjectEntity[] 
   next[i] = { ...list[i], ...ent };
   return next;
 }
+
+// A screenplay import longer than this runs the WINDOWED pipeline on the
+// server. MIRROR of LARGE_SCRIPT_CHARS in freeform-workflow-app/lib/
+// extraction.mjs: the board used 40000 while the server used 18000, so a
+// 20-35 page script ran windowed behind the single-pass meter and its
+// elapsed counter never moved (Ben, 2026-10-02, a 39k-char import). The
+// first server phase ping also corrects a mismatch, so drift cannot strand
+// the meter again.
+const WINDOWED_SCRIPT_CHARS = 18000;
 
 export default function FreeformCorkboard() {
   const { storyId } = useParams<{ storyId: string }>();
@@ -220,10 +229,28 @@ export default function FreeformCorkboard() {
   // Only braindump_complete (or a long safety backstop) resolves a windowed run;
   // braindump_progress keeps it alive and refetches per window.
   const windowedRunRef = useRef(false);
+  // State mirror of windowedRunRef: the elapsed ticker re-arms when a run
+  // turns windowed mid-flight (the server's first phase ping), not only when
+  // the phase flips to extracting.
+  const [windowedRun, setWindowedRun] = useState(false);
+  const markWindowed = useCallback((v: boolean) => { windowedRunRef.current = v; setWindowedRun(v); }, []);
   // Interval poll id for the windowed path — WS can't be trusted over a multi-
   // minute run (the socket dies; braindump_complete comes back sent:0), so we
   // refetch on a timer so the board builds regardless of WS delivery.
   const windowedPollRef = useRef<number | null>(null);
+  // The single-pass run's fallback poll, and whether this board is still
+  // mounted: a run's timers outlive a route switch, and the remounted board
+  // starts its own (resume), so the old ones must stop and go inert.
+  const runPollRef = useRef<number | null>(null);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (runPollRef.current) { window.clearInterval(runPollRef.current); runPollRef.current = null; }
+      if (windowedPollRef.current) { window.clearInterval(windowedPollRef.current); windowedPollRef.current = null; }
+    };
+  }, []);
   // Windowed-import meter phase (reading → structuring → processing → wiring),
   // plus the per-window progress + a live elapsed clock. Driven by the backend
   // phase pings when the socket delivers, and by an elapsed/poll estimate when it
@@ -1204,7 +1231,7 @@ export default function FreeformCorkboard() {
     }, 1000);
     return () => window.clearInterval(iv);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [braindumpPhase]);
+  }, [braindumpPhase, windowedRun]);
   // Lost-WS belt: while a braindump is in flight, resolve locally once the
   // edge-bearing graph has landed AND SETTLED — edges past the submit baseline,
   // unchanged across two observations at least 4s apart. First-new-edge was the
@@ -4130,12 +4157,12 @@ export default function FreeformCorkboard() {
           const eventId = sType === 'event' ? from : target;
           const characterId = sType === 'character' ? from : target;
           if ((data?.edges.involves ?? []).some((i) => i.from === eventId && i.to === characterId)) {
-            setLinkNotice('Character already in the cast');
+            setLinkNotice('Character already in this scene');
             return;
           }
           setData((prev) => (prev ? { ...prev, edges: { ...prev.edges, involves: [...prev.edges.involves, { from: eventId, to: characterId }] } } : prev));
           queueStructOpGlobal(storyId, { kind: 'involves_tag', eventId, characterId });
-          setLinkNotice('Character added to the cast');
+          setLinkNotice('Character added to this scene');
           return;
         }
 
@@ -4437,78 +4464,30 @@ export default function FreeformCorkboard() {
   const [gridMounted, setGridMounted] = useState(false);
   useEffect(() => { if (gridOpen) setGridMounted(true); }, [gridOpen]);
 
-  // Braindump run tracking, split in two so a job enqueued ELSEWHERE (the .fdx
-  // cowork engine, lib/fdxSync) rides the SAME loading UI as a board-initiated
-  // dump: inflight ref, meter, phase messages, refetch polls, windowed backstops
-  // and the braindump_complete resolve. begin = before the enqueue (or right
-  // after, for external jobs); track = after the enqueue succeeded.
-  const beginBraindumpRun = useCallback((braindumpId: string, proseLength: number, windowed: boolean) => {
-    void proseLength; // reserved: the meter may scale its copy by size later
-    inflightBraindumpRef.current = braindumpId;
-    // RECEIPT SNAPSHOT, taken HERE and not at braindump_complete. Streamed
-    // cards fold into `data` as they arrive, so by the time the run completes
-    // the board already holds most of what the dump produced and a "before"
-    // taken then diffs to nothing (live, 2026-09-09: the receipt never fired).
-    dumpSnapshotRef.current = {
-      beforeIds: new Set((dataRef.current?.entities ?? []).filter((e) => !e.deleted_at).map((e) => e.id)),
-      beforeInfoIds: new Set((dataRef.current?.information ?? []).map((f: any) => String(f.id ?? f.information_id ?? ''))),
-      // What each character card said before this dump. A follow-up dump can
-      // add to a character who is already on the board (traits and aliases
-      // merge without asking); their id does not change, so without this the
-      // receipt had no way to notice and said nothing.
-      beforeChars: new Map(
-        (dataRef.current?.entities ?? [])
-          .filter((e) => e.type === 'character' && !e.deleted_at)
-          .map((e) => [e.id, {
-            traits: Array.isArray(e.established_traits) ? e.established_traits.map(String) : [],
-            aliases: Array.isArray((e as any).aliases) ? (e as any).aliases.map(String) : [],
-          }] as [string, { traits: string[]; aliases: string[] }]),
-      ),
-    };
-    // Large screenplay imports (> ~25pp) run the windowed backend path — multi-
-    // minute, window-by-window. Mark it so the fast give-up timers + edge belt
-    // don't resolve it early; it resolves on braindump_complete (or a long backstop).
-    const isWindowed = windowed;
-    windowedRunRef.current = isWindowed;
-    edgeCountAtSubmitRef.current = edgeCountOf(dataRef.current); // baseline for the lost-WS belt
-    deltaEdgesRef.current = 0; // FIL-516: fresh run, the belt stands ready until a delta arrives
-    beginWriteSettling(); // peer gate holds until braindump_complete (done-split)
-    cardCountAtSubmitRef.current = (dataRef.current?.entities ?? []).filter((e) => !e.deleted_at).length;
-    // No saved position on any live card (empty board, or a board the writer
-    // never arranged) → full story-order layout when this run lands.
-    noSavedLayoutAtSubmitRef.current = !(dataRef.current?.entities ?? [])
-      .some((e) => !e.deleted_at && e.staged !== '1' && !!layoutsRef.current[e.id]);
-    if (isWindowed) {
-      windowedStartRef.current = Date.now();
-      winLastAliveRef.current = cardCountAtSubmitRef.current;
-      winLastGrowthRef.current = Date.now();
-      resetWinMeter();
-      bumpWinPhase('reading');
-    } else {
-      resetWinMeter();
-    }
-    setBraindumpPhase('submitting');
-    setBraindumpMsg('Queueing extraction…');
-  }, []); // refs + setters only
-
-  const trackBraindumpRun = useCallback((braindumpId: string, proseLength: number) => {
-    const isWindowed = windowedRunRef.current;
-    setBraindumpPhase('extracting');
-    const idAtSubmit = braindumpId;
+  // RUN WATCHER: the polls, liveness deadline and backstops that carry a
+  // run to its resolution. One function for a fresh run AND for a run the
+  // board resumes after the writer went to the script and came back
+  // (getActiveRun in the story session), so both behave the same. Held in a
+  // ref and re-bound every render: it reads refs and stable setters, plus
+  // the meter helpers, which must be the current render's.
+  const watchRunRef = useRef<(idAtSubmit: string, isWindowed: boolean, startAt: number, proseLength: number, resumed: boolean) => void>(() => {});
+  watchRunRef.current = (idAtSubmit, isWindowed, startAt, proseLength, resumed) => {
     if (isWindowed) {
       // Windowed import: minutes long, and the WS socket does not survive it —
       // so POLL. Refetch every 15s so the board builds window-by-window
       // regardless of WS. The interval self-terminates when the run resolves
       // (inflight cleared by braindump_complete or the backstop). WS
       // progress/complete, when they do arrive, are a fast path on top.
-      setBraindumpMsg('Reading the script. This can take a few minutes; cards appear as each part is processed.');
+      if (!resumed) setBraindumpMsg('Reading the script. This can take a few minutes; cards appear as each part is processed.');
       if (windowedPollRef.current) window.clearInterval(windowedPollRef.current);
       const STABLE_MS = 45000; // graph unchanged this long ⇒ the run is done
       let lastSig = '';
       let stableSince = Date.now();
       const resolveWindowed = () => {
+        if (!mountedRef.current) return;
+        clearActiveRun(storyId!, idAtSubmit);
         inflightBraindumpRef.current = null;
-        windowedRunRef.current = false;
+        markWindowed(false);
         if (windowedPollRef.current) { window.clearInterval(windowedPollRef.current); windowedPollRef.current = null; }
         endWriteSettling();
         streamedEdgesRef.current = [];
@@ -4562,22 +4541,22 @@ export default function FreeformCorkboard() {
       // Hard backstop past the Lambda ceiling, in case the graph never stabilizes.
       window.setTimeout(() => {
         if (inflightBraindumpRef.current === idAtSubmit) resolveWindowed();
-      }, 960000);
+      }, Math.max(60000, 960000 - (Date.now() - startAt)));
     } else {
-      setBraindumpMsg('Extracting, usually 15-30s. New cards will appear when ready.');
+      if (!resumed) setBraindumpMsg('Extracting, usually 15-30s. New cards will appear when ready.');
       // LIVENESS deadline, not a fixed clock (the 20pp-import lesson: a
       // legitimate single-call extraction streams for 2-3 minutes, and the
       // old fixed 100s stop dropped the meter mid-run and left an edgeless
       // board). Base ceiling scales with input size; any WS sign of life
       // (streamed cards, extraction_progress ticks) extends 60s past itself.
-      const startAt = Date.now();
-      wsActivityRef.current = startAt;
+      wsActivityRef.current = Date.now();
       const HARD_MS = Math.max(100000, Math.min(330000, proseLength * 8));
       // Steady fallback poll while inflight (every 8s): keeps the board filling
       // even when the braindump_complete WS is lost, gives the stability
       // belt the consecutive reads it needs to judge "settled" instead of
       // resolving on the first partial mid-write read, and checks the
       // liveness deadline. Self-terminates when the run resolves.
+      if (runPollRef.current) window.clearInterval(runPollRef.current);
       const pollIv = window.setInterval(() => {
         if (inflightBraindumpRef.current !== idAtSubmit) {
           window.clearInterval(pollIv);
@@ -4588,6 +4567,7 @@ export default function FreeformCorkboard() {
         if (Date.now() > deadline) {
           // Truly dead run (no WS activity for 60s past the scaled ceiling):
           // resolve authoritatively instead of hanging forever.
+          clearActiveRun(storyId!, idAtSubmit);
           inflightBraindumpRef.current = null;
           endWriteSettling();
           setBraindumpPhase('done');
@@ -4599,6 +4579,7 @@ export default function FreeformCorkboard() {
           refreshEntitiesRef.current();
         }
       }, 8000);
+      runPollRef.current = pollIv;
       // At 45s, keep the writer informed — but DON'T flip to done, and don't
       // clobber a live "weaving" tick (recent WS activity means the meter
       // already carries better information than this generic line).
@@ -4608,24 +4589,108 @@ export default function FreeformCorkboard() {
         }
       }, 45000);
     }
-  }, []); // refs + setters only
+  };
+
+  // Braindump run tracking, split in two so a job enqueued ELSEWHERE (the .fdx
+  // cowork engine, lib/fdxSync) rides the SAME loading UI as a board-initiated
+  // dump: inflight ref, meter, phase messages, refetch polls, windowed backstops
+  // and the braindump_complete resolve. begin = before the enqueue (or right
+  // after, for external jobs); track = after the enqueue succeeded.
+  const beginBraindumpRun = useCallback((braindumpId: string, proseLength: number, windowed: boolean) => {
+    void proseLength; // reserved: the meter may scale its copy by size later
+    inflightBraindumpRef.current = braindumpId;
+    // RECEIPT SNAPSHOT, taken HERE and not at braindump_complete. Streamed
+    // cards fold into `data` as they arrive, so by the time the run completes
+    // the board already holds most of what the dump produced and a "before"
+    // taken then diffs to nothing (live, 2026-09-09: the receipt never fired).
+    dumpSnapshotRef.current = {
+      beforeIds: new Set((dataRef.current?.entities ?? []).filter((e) => !e.deleted_at).map((e) => e.id)),
+      beforeInfoIds: new Set((dataRef.current?.information ?? []).map((f: any) => String(f.id ?? f.information_id ?? ''))),
+      // What each character card said before this dump. A follow-up dump can
+      // add to a character who is already on the board (traits and aliases
+      // merge without asking); their id does not change, so without this the
+      // receipt had no way to notice and said nothing.
+      beforeChars: new Map(
+        (dataRef.current?.entities ?? [])
+          .filter((e) => e.type === 'character' && !e.deleted_at)
+          .map((e) => [e.id, {
+            traits: Array.isArray(e.established_traits) ? e.established_traits.map(String) : [],
+            aliases: Array.isArray((e as any).aliases) ? (e as any).aliases.map(String) : [],
+          }] as [string, { traits: string[]; aliases: string[] }]),
+      ),
+    };
+    // Large screenplay imports (> ~25pp) run the windowed backend path — multi-
+    // minute, window-by-window. Mark it so the fast give-up timers + edge belt
+    // don't resolve it early; it resolves on braindump_complete (or a long backstop).
+    const isWindowed = windowed;
+    markWindowed(isWindowed);
+    edgeCountAtSubmitRef.current = edgeCountOf(dataRef.current); // baseline for the lost-WS belt
+    deltaEdgesRef.current = 0; // FIL-516: fresh run, the belt stands ready until a delta arrives
+    beginWriteSettling(); // peer gate holds until braindump_complete (done-split)
+    cardCountAtSubmitRef.current = (dataRef.current?.entities ?? []).filter((e) => !e.deleted_at).length;
+    // No saved position on any live card (empty board, or a board the writer
+    // never arranged) → full story-order layout when this run lands.
+    noSavedLayoutAtSubmitRef.current = !(dataRef.current?.entities ?? [])
+      .some((e) => !e.deleted_at && e.staged !== '1' && !!layoutsRef.current[e.id]);
+    if (isWindowed) {
+      windowedStartRef.current = Date.now();
+      winLastAliveRef.current = cardCountAtSubmitRef.current;
+      winLastGrowthRef.current = Date.now();
+      resetWinMeter();
+      bumpWinPhase('reading');
+    } else {
+      resetWinMeter();
+    }
+    setBraindumpPhase('submitting');
+    setBraindumpMsg('Queueing extraction…');
+  }, [markWindowed]); // refs + stable setters only
+
+  const trackBraindumpRun = useCallback((braindumpId: string, proseLength: number) => {
+    const isWindowed = windowedRunRef.current;
+    setBraindumpPhase('extracting');
+    // The story session keeps the run across route switches (the writer goes
+    // to the script and comes back): the RESUME block in the WS effect puts
+    // the meter back from this record and watches again.
+    if (storyId) {
+      setActiveRun(storyId, {
+        braindumpId,
+        startedAt: Date.now(),
+        windowed: isWindowed,
+        proseLength,
+        snapshot: dumpSnapshotRef.current ? {
+          beforeIds: [...dumpSnapshotRef.current.beforeIds],
+          beforeInfoIds: [...dumpSnapshotRef.current.beforeInfoIds],
+          beforeChars: [...dumpSnapshotRef.current.beforeChars.entries()],
+        } : null,
+        edgeCountAtSubmit: edgeCountAtSubmitRef.current,
+        cardCountAtSubmit: cardCountAtSubmitRef.current,
+        noSavedLayoutAtSubmit: noSavedLayoutAtSubmitRef.current,
+        msg: isWindowed
+          ? 'Reading the script. This can take a few minutes; cards appear as each part is processed.'
+          : 'Extracting, usually 15-30s. New cards will appear when ready.',
+        deltaApplied: false,
+        completed: null,
+      });
+    }
+    watchRunRef.current(braindumpId, isWindowed, Date.now(), proseLength, false);
+  }, [storyId]); // refs + stable setters otherwise
 
   // Cowork .fdx: the engine enqueued a screenplay braindump on its own — show it
   // exactly like a board-initiated dump (idempotent per braindumpId, so a
   // remount mid-run re-attaches the meter instead of restarting it).
   const trackExternalBraindump = useCallback((braindumpId: string, proseLength: number) => {
     if (inflightBraindumpRef.current === braindumpId) return;
-    beginBraindumpRun(braindumpId, proseLength, proseLength > 40000);
+    beginBraindumpRun(braindumpId, proseLength, proseLength > WINDOWED_SCRIPT_CHARS);
     trackBraindumpRun(braindumpId, proseLength);
   }, [beginBraindumpRun, trackBraindumpRun]);
 
-  const runBraindumpExtraction = useCallback(async (prose: string, opts?: { sourceFormat?: 'screenplay'; wow?: boolean }) => {
+  const runBraindumpExtraction = useCallback(async (prose: string, opts?: { sourceFormat?: 'screenplay'; layout?: 'typed'; wow?: boolean }) => {
     if (!auth || !storyId) return;
     const braindumpId = `bd_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     // Large screenplay imports (> ~25pp) run the windowed backend path — multi-
     // minute, window-by-window. beginBraindumpRun marks it so the fast give-up
     // timers + edge belt don't resolve it early.
-    const isWindowed = opts?.sourceFormat === 'screenplay' && prose.length > 40000;
+    const isWindowed = opts?.sourceFormat === 'screenplay' && prose.length > WINDOWED_SCRIPT_CHARS;
     beginBraindumpRun(braindumpId, prose.length, isWindowed);
     try {
       await enqueueExtractionJob(
@@ -4636,6 +4701,7 @@ export default function FreeformCorkboard() {
           braindumpId,
           prose,
           ...(opts?.sourceFormat ? { sourceFormat: opts.sourceFormat } : {}),
+          ...(opts?.layout ? { layout: opts.layout } : {}),
           ...(() => {
             if (opts?.sourceFormat) return {};
             const it = dockIntentRef.current;
@@ -4701,30 +4767,46 @@ export default function FreeformCorkboard() {
   const handleScriptFile = useCallback(async (file: File) => {
     if (!auth || !storyId) return;
     if (braindumpPhase === 'submitting' || braindumpPhase === 'extracting') return;
-    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
-    if (!isPdf) {
+    const name = file.name.toLowerCase();
+    const isPdf = file.type === 'application/pdf' || name.endsWith('.pdf');
+    // Final Draft's and Fade In's own files: typed paragraphs, so nothing
+    // is guessed from layout.
+    const isFdx = name.endsWith('.fdx');
+    const isFadeIn = name.endsWith('.fadein');
+    const isNative = isFdx || isFadeIn;
+    const kind = isFdx ? 'Final Draft file' : isFadeIn ? 'Fade In file' : 'PDF';
+    if (!isPdf && !isNative) {
       setBraindumpPhase('error');
-      setBraindumpMsg('Drop a PDF screenplay.');
+      setBraindumpMsg('Drop a PDF, Final Draft (.fdx) or Fade In (.fadein) screenplay.');
       return;
     }
     setBraindumpOpen(false);
     setBraindumpPhase('submitting');
     setBraindumpMsg(`Reading ${file.name}…`);
     try {
-      const { parsePdfToText } = await import('../../lib/pdfText');
-      const text = await parsePdfToText(file, (p, total) =>
-        setBraindumpMsg(`Reading ${file.name}… page ${p}/${total}`),
-      );
+      let text: string;
+      if (isNative) {
+        const { fdxToBlocks, fadeInFileToBlocks, blocksToIndentedText } = await import('../../lib/screenplayExport');
+        const blocks = isFdx ? fdxToBlocks(await file.text()) : await fadeInFileToBlocks(await file.arrayBuffer());
+        text = blocksToIndentedText(blocks);
+      } else {
+        const { parsePdfToText } = await import('../../lib/pdfText');
+        text = await parsePdfToText(file, (p, total) =>
+          setBraindumpMsg(`Reading ${file.name}… page ${p}/${total}`),
+        );
+      }
       const prose = text.trim();
       if (prose.length < 40) {
         setBraindumpPhase('error');
-        setBraindumpMsg('Could not read text from that PDF (is it a scanned image?).');
+        setBraindumpMsg(isNative
+          ? `That ${kind} has no script text in it.`
+          : 'Could not read text from that PDF (is it a scanned image?).');
         return;
       }
-      await runBraindumpExtraction(prose, { sourceFormat: 'screenplay' });
+      await runBraindumpExtraction(prose, { sourceFormat: 'screenplay', ...(isNative ? { layout: 'typed' as const } : {}) });
     } catch (err: any) {
       setBraindumpPhase('error');
-      setBraindumpMsg(`Could not read that PDF: ${err?.message ?? String(err)}`);
+      setBraindumpMsg(`Could not read that ${kind}: ${err?.message ?? String(err)}`);
     }
   }, [auth, storyId, braindumpPhase, runBraindumpExtraction]);
 
@@ -6096,6 +6178,22 @@ export default function FreeformCorkboard() {
           // Liveness: a phase ping proves the socket is alive, so the windowed
           // stability belt must NOT resolve on it (braindump_complete will).
           wsActivityRef.current = Date.now();
+          // The SERVER decides windowed (its own length cutoff). A phase ping
+          // on a run the board treated as single-pass means the board guessed
+          // wrong: switch the meter and the watcher over now, so the elapsed
+          // ticker runs and the single-pass deadline cannot close it early.
+          if (!windowedRunRef.current) {
+            const id = inflightBraindumpRef.current;
+            const run = getActiveRun(storyId!);
+            const startAt = run?.braindumpId === id ? run.startedAt : Date.now();
+            markWindowed(true);
+            windowedStartRef.current = startAt;
+            winLastAliveRef.current = cardCountAtSubmitRef.current;
+            winLastGrowthRef.current = Date.now();
+            if (runPollRef.current) { window.clearInterval(runPollRef.current); runPollRef.current = null; }
+            patchActiveRun(storyId!, id, { windowed: true });
+            watchRunRef.current(id, true, startAt, run?.proseLength ?? 0, true);
+          }
           if (msg.phase && ['reading', 'structuring', 'processing', 'wiring'].includes(msg.phase)) {
             bumpWinPhase(msg.phase as WinPhase);
           }
@@ -6157,8 +6255,9 @@ export default function FreeformCorkboard() {
         if (windowedRunRef.current) relayoutWindowedRef.current = true; // snap into the clean layout
         else if (noSavedLayoutAtSubmitRef.current) relayoutFirstDumpRef.current = true; // first-dump rule
         noSavedLayoutAtSubmitRef.current = false;
+        if (msg.braindumpId) clearActiveRun(storyId!, String(msg.braindumpId));
         inflightBraindumpRef.current = null;
-        windowedRunRef.current = false; // windowed run resolved
+        markWindowed(false); // windowed run resolved
         resetWinMeter();
         refreshArcSuggestionsRef.current(); // arcs were written just before this WS
         refreshStagedQuestionsRef.current(); // strip rows persisted just before this WS
@@ -6282,6 +6381,66 @@ export default function FreeformCorkboard() {
         return;
       }
     });
+
+    // RESUME (Ben, 2026-10-02: "when i have an import going and i flip
+    // screens, it seems to drop it"). The board's run state died with the
+    // last mount; the story session kept tracking the run. Still going: put
+    // the meter back exactly where it is and start watching again. Finished
+    // while away: land it the way a live braindump_complete would (receipt,
+    // relayout, refetches) so the writer still sees what the dump did.
+    const run = getActiveRun(storyId);
+    if (run && !inflightBraindumpRef.current) {
+      const snap = run.snapshot ? {
+        beforeIds: new Set(run.snapshot.beforeIds),
+        beforeInfoIds: new Set(run.snapshot.beforeInfoIds),
+        beforeChars: new Map(run.snapshot.beforeChars),
+      } : null;
+      if (run.completed) {
+        const c = run.completed.counts ?? {};
+        const total = (c.characters ?? 0) + (c.events ?? 0) + (c.locations ?? 0) + (c.relationships ?? 0);
+        const staged = run.completed.staged;
+        clearActiveRun(storyId, run.braindumpId);
+        setBraindumpPhase('done');
+        setBraindumpMsg(total === 0
+          ? 'Extraction returned no new entities.'
+          : `Done. Extracted ${c.characters ?? 0} char · ${c.events ?? 0} event · ${c.locations ?? 0} loc.${staged > 0 ? ` ${staged === 1 ? '1 card is' : `${staged} cards are`} waiting for you in the panel.` : ''}`);
+        if (run.windowed) relayoutWindowedRef.current = true;
+        else if (run.noSavedLayoutAtSubmit) relayoutFirstDumpRef.current = true;
+        dumpReceiptRef.current = snap ? { ...snap, staged, at: new Date(run.completed.at).toISOString() } : null;
+        refreshArcSuggestionsRef.current();
+        refreshStagedQuestionsRef.current();
+        void refreshBraindumpsRef.current();
+        refreshEntitiesRef.current();
+      } else {
+        inflightBraindumpRef.current = run.braindumpId;
+        markWindowed(run.windowed);
+        dumpSnapshotRef.current = snap;
+        edgeCountAtSubmitRef.current = run.edgeCountAtSubmit;
+        cardCountAtSubmitRef.current = run.cardCountAtSubmit;
+        noSavedLayoutAtSubmitRef.current = run.noSavedLayoutAtSubmit;
+        deltaEdgesRef.current = 0;
+        beginWriteSettling();
+        resetWinMeter();
+        if (run.windowed) {
+          windowedStartRef.current = run.startedAt;
+          winLastAliveRef.current = run.cardCountAtSubmit;
+          winLastGrowthRef.current = Date.now();
+          bumpWinPhase((['reading', 'structuring', 'processing', 'wiring'].includes(run.winPhase ?? '') ? run.winPhase : 'reading') as WinPhase);
+          if (run.winProg) setWinProg(run.winProg);
+        }
+        if (run.deltaApplied && !run.windowed) {
+          // The done-split already happened: the cards are on the board and
+          // the write is finishing behind them.
+          setBraindumpPhase('done');
+          setBraindumpMsg('On your board. Saving in the background…');
+        } else {
+          setBraindumpPhase('extracting');
+          setBraindumpMsg(run.msg);
+        }
+        watchRunRef.current(run.braindumpId, run.windowed, run.startedAt, run.proseLength, true);
+        refreshEntitiesRef.current();
+      }
+    }
 
     return () => {
       cancelled = true;
@@ -6787,7 +6946,7 @@ export default function FreeformCorkboard() {
           }
           onClick={() => setBraindumpOpen((v) => !v)}
           active={braindumpOpen}
-          accent="#ff6b35"
+          accent={dark ? '#ff6b35' : '#d9480f'}
           prominent
           title="Dump an idea; extraction turns it into cards (⌘↵ to process)"
         />
@@ -6808,12 +6967,12 @@ export default function FreeformCorkboard() {
             </svg>
           }
           onClick={() => scriptInputRef.current?.click()}
-          title="Import a PDF screenplay; its text is extracted into cards (or drop one anywhere on the board)"
+          title="Import a screenplay (PDF, Final Draft or Fade In); it is read into cards (or drop one anywhere on the board)"
         />
         <input
           ref={scriptInputRef}
           type="file"
-          accept="application/pdf,.pdf"
+          accept="application/pdf,.pdf,.fdx,.fadein"
           style={{ display: 'none' }}
           onChange={(e) => {
             const f = e.target.files?.[0];
@@ -6830,7 +6989,7 @@ export default function FreeformCorkboard() {
           tourId="toolbar-views"
           onClick={() => switchView('master')}
           active={viewMode === 'master'}
-          accent={viewMode === 'master' ? '#ea580c' : undefined}
+          accent={viewMode === 'master' && dark ? '#ea580c' : undefined}
           title="The full free-form board with your stored layout"
         />
         <ToolbarButton
@@ -6838,7 +6997,7 @@ export default function FreeformCorkboard() {
           icon="◎"
           onClick={() => switchView('characters')}
           active={viewMode === 'characters'}
-          accent={viewMode === 'characters' ? '#ea580c' : undefined}
+          accent={viewMode === 'characters' && dark ? '#ea580c' : undefined}
           title="Splay the characters out to read their relationships; events step aside"
         />
         {/* "Beats" is the writer-facing name (the beat cards: scenes in story
@@ -6857,7 +7016,7 @@ export default function FreeformCorkboard() {
           }
           onClick={() => switchView('throughline')}
           active={viewMode === 'throughline'}
-          accent={viewMode === 'throughline' ? '#ea580c' : undefined}
+          accent={viewMode === 'throughline' && dark ? '#ea580c' : undefined}
           title="Your beats: every scene as a card, in story order"
         />
         {/* Throughline sub-layout — column (spine + threads) | grid (the
@@ -6928,7 +7087,7 @@ export default function FreeformCorkboard() {
             }
             onClick={() => setHideSequences((v) => !v)}
             active={hideSequences}
-            accent={hideSequences ? '#ea580c' : undefined}
+            accent={hideSequences && dark ? '#ea580c' : undefined}
             title="Hide the sequence containers to see just the event scenes"
           />
         )}
@@ -6995,7 +7154,7 @@ export default function FreeformCorkboard() {
           onClick={() => { panelAutoRef.current = false; setRightPanelOpen(true); }}
           accent={
             stagedRows.length > 0
-              ? '#ff8c42'
+              ? (dark ? '#ff8c42' : '#c2410c')
               : arcSuggestions.length > 0
                 ? getEntityColor('arc')
                 : undefined
@@ -7198,7 +7357,7 @@ export default function FreeformCorkboard() {
               style={{
                 border: 'none', cursor: 'pointer', borderRadius: 7,
                 padding: '5px 9px', minWidth: 40,
-                background: active ? '#ff6b35' : 'transparent',
+                background: active ? (dark ? '#ff6b35' : '#1d2230') : 'transparent',
                 color: active ? '#fff' : dark ? 'rgba(255,255,255,0.72)' : '#333',
                 fontWeight: active ? 800 : 600,
               }}
@@ -7288,7 +7447,9 @@ export default function FreeformCorkboard() {
           // white veil over the Shell's cream wash.
           backgroundImage: dark
             ? 'radial-gradient(circle, rgba(255,107,53,0.18) 1px, transparent 1px)'
-            : 'radial-gradient(circle, rgba(234,88,12,0.16) 1px, transparent 1.4px)',
+            // Warm NEUTRAL dots on the cream board — orange is reserved for the
+            // create actions, so the grid stops competing with them.
+            : 'radial-gradient(circle, rgba(70,55,35,0.14) 1px, transparent 1.4px)',
           backgroundSize: dark ? '40px 40px' : '26px 26px',
           backgroundPosition: '8px 8px',
           backgroundColor: dark ? 'transparent' : 'rgba(255,255,255,0.6)',
@@ -8403,7 +8564,7 @@ export default function FreeformCorkboard() {
               Drop your screenplay
             </div>
             <div style={{ fontSize: 12.5, color: dark ? '#9a9aa4' : '#777', maxWidth: 280, lineHeight: 1.5 }}>
-              We’ll read the PDF and extract its scenes, characters, and locations into cards.
+              We’ll read the PDF, Final Draft or Fade In file and extract its scenes, characters, and locations into cards.
             </div>
           </div>
         </div>

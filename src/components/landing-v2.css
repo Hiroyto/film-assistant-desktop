@@ -2364,3 +2364,16 @@
     animation: none;
   }
 }
+
+/* Balanced wrap: the held-together headline orphaned its last word. */
+.philosophy-headline {
+  text-wrap: balance;
+}
+
+/* Freshness dot inline in running copy (ALWAYS UP TO DATE row). */
+.ld-navdot.ld-navdot-inline {
+  display: inline-block;
+  vertical-align: 1px;
+  margin: 0 2px;
+  box-shadow: 0 0 0 3px rgba(141, 191, 126, 0.18);
+}

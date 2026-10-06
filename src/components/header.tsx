@@ -5,13 +5,11 @@ import type { WithAuthenticatorProps } from '@aws-amplify/ui-react';
 import { withAuthenticator } from '@aws-amplify/ui-react';
 import '@aws-amplify/ui-react/styles.css';
 import { Button } from '@radix-ui/themes';
-import { Component1Icon, ChevronRightIcon } from '@radix-ui/react-icons';
+import { Component1Icon } from '@radix-ui/react-icons';
 
 import config from '../aws-exports';
 import './header.css';
 import { UserContext } from '../App';
-import { useAIModel, useSelectedModelId } from './AIModelContext';
-import { ModelSelector } from './ModelSelector';
 import whiteOverlay from './Head-color-white.png';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -30,6 +28,10 @@ type NavItem = {
   adminOnly?: boolean;
 };
 
+
+// The token counter is hidden (Ben, 2026-10-03). Flip to bring it back; its
+// state and history still track underneath.
+const SHOW_TOKEN_COUNTER = false;
 
 const NAV_ITEMS: NavItem[] = [
   { label: 'App', to: '/dashboard', section: 'app' },
@@ -104,8 +106,6 @@ export function Header({
 
   const [showHistory, setShowHistory] = useState(false);
 
-  const { setModelOverride } = useAIModel();
-  const selectedModelId = useSelectedModelId();
 
   const internalIsScrolled = useScrollBehavior();
   const isScrolled =
@@ -118,10 +118,6 @@ export function Header({
     token?.payload['cognito:groups'].includes('admin');
 
   const isInApp = APP_ROUTES.includes(location.pathname);
-
-  const handleModelChange = (modelId: string) => {
-    setModelOverride(modelId === 'default' ? null : modelId);
-  };
 
   const isLinkActive = (item: NavItem) => {
     if (item.section === 'app') return isInApp;
@@ -203,10 +199,9 @@ export function Header({
               />
             </div>
 
-            <nav
-              className={`nav-section ${isInApp ? 'collapsed' : 'expanded'
-                }`}
-            >
+            {/* Always expanded (Ben, 2026-10-03): the links sit in plain
+                view on every page instead of folding behind an arrow. */}
+            <nav className="nav-section expanded">
               {NAV_ITEMS.map(item => {
                 if (item.adminOnly && !isAdmin) return null;
 
@@ -222,23 +217,12 @@ export function Header({
                 );
               })}
 
-              {isInApp && (
-                <span className="nav-expand-arrow">
-                  <ChevronRightIcon />
-                </span>
-              )}
             </nav>
           </div>
 
           {/* ================= RIGHT ================= */}
           <div className="header-right">
-            <ModelSelector
-              selectedModel={selectedModelId}
-              onModelChange={handleModelChange}
-            />
-
-            <div className="w-px h-7 bg-white/10 mx-1" />
-
+            {SHOW_TOKEN_COUNTER && (
             <div
               className="token-counter"
               onMouseEnter={() => setShowHistory(true)}
@@ -299,6 +283,7 @@ export function Header({
                 Tokens Remaining
               </span>
             </div>
+            )}
 
             <Button
               variant="ghost"

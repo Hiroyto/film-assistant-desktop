@@ -3028,7 +3028,7 @@ export function EventSheet({
       ),
     },
     {
-      id: 'cast', label: 'Cast', summary: `${castIds.length}`, accent: getEntityColor('character'), defaultW: 1, defaultExpanded: castIds.length > 0,
+      id: 'cast', label: 'Characters', summary: `${castIds.length}`, accent: getEntityColor('character'), defaultW: 1, defaultExpanded: castIds.length > 0,
       hint: 'Characters involved in this scene, including its subjects.',
       // Orbit satellites: each cast member is a node you can open, so the
       // sheet walks the graph instead of dead-ending on a chip.
@@ -3080,7 +3080,7 @@ export function EventSheet({
         <EdgeChips
           accent={getEntityColor('character')}
           addLabel="character"
-          emptyHint="no cast yet"
+          emptyHint="no characters yet"
           items={castIds.map((id) => ({ id, label: resolveName(id) }))}
           candidates={characterCandidates(new Set(castIds))}
           onAdd={(id) => tagEventInvolvesCharacter({ eventId: entity.id, characterId: id, projectId }, auth.token).then(() => onEntitiesChanged())}

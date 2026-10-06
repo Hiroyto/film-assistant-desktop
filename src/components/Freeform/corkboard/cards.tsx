@@ -1,8 +1,8 @@
 // components/Freeform/corkboard/cards.tsx — split out of freeform-corkboard.tsx (FIL-496).
 import React, { useState, useEffect, useRef } from 'react';
-import { getEntityColor, hexToRgba } from '../../../components/Freeform/entityColors';
+import { getEntityColor, hexToRgba, entityColorForMode } from '../../../components/Freeform/entityColors';
 import InternIcon from '../../../components/Freeform/InternIcon';
-import { PEER_BLUE } from '../../../components/Freeform/tokens';
+import { PEER_BLUE, PEER_BLUE_INK } from '../../../components/Freeform/tokens';
 import { type EntityType } from '../../../components/Freeform/types';
 import { type ArcKind, type NarrativeStatus, type PersistedQuestion, type ProjectEntity } from '../../../lib/freeformApi';
 import { ARC_BALL_H, ARC_BALL_W, ARC_DOT, BALL_TRANSITION_MS, CHAR_PILL_H, CHAR_PILL_W, COLLAPSED_H, COLLAPSED_W, EVENT_CARD_W, EXPANDED_W, REL_BALL_COLOR, REL_COLLAPSED_H, REL_COLLAPSED_W, type Pos } from './constants';
@@ -62,7 +62,7 @@ export function AskPeerButton({
         background: disabled
           ? dark ? '#202025' : '#eee'
           : `linear-gradient(135deg, ${hexToRgba(PEER_BLUE, dark ? 0.22 : 0.16)}, ${hexToRgba(PEER_BLUE, dark ? 0.1 : 0.07)})`,
-        color: disabled ? (dark ? '#5c5c66' : '#999') : dark ? liftColor(PEER_BLUE, 0.25) : '#1e7d99',
+        color: disabled ? (dark ? '#5c5c66' : '#999') : dark ? liftColor(PEER_BLUE, 0.25) : PEER_BLUE_INK,
         cursor: disabled ? 'not-allowed' : 'pointer',
         fontFamily: 'system-ui, sans-serif',
         boxShadow: disabled
@@ -215,7 +215,9 @@ export function CardBox({
   const dark = useThemeMode() === 'dark';
   // Dark accents are LIFTED toward white — the light palette reads muddy on
   // the near-black stage; lifted hues pop cleanly (the reference's look).
-  const accent = dark ? liftColor(color, 0.3) : color;
+  // Light accents are SHADED instead: teal/amber/green sit under 3:1 on the
+  // cream board, so the light stage swaps in ENTITY_COLORS_LIGHT for those.
+  const accent = dark ? liftColor(color, 0.3) : entityColorForMode(color, 'light');
   // Link-handle hover — drives the orb's bloom (glow + scale).
   const [handleHover, setHandleHover] = useState(false);
   // "Still wiring this up" cue — pulse an accent ring while extraction generates
@@ -487,7 +489,7 @@ export function CardBox({
                 padding: '6px 13px', borderRadius: 999,
                 border: `1px solid ${hexToRgba(color, 0.5)}`,
                 background: `linear-gradient(135deg, ${hexToRgba(color, dark ? 0.16 : 0.12)}, ${hexToRgba(color, dark ? 0.07 : 0.05)})`,
-                color: dark ? liftColor(color, 0.3) : color,
+                color: dark ? liftColor(color, 0.3) : entityColorForMode(color, 'light'),
                 cursor: 'pointer', fontFamily: 'system-ui, sans-serif',
                 transition: 'box-shadow 160ms ease-out',
               }}
@@ -529,10 +531,10 @@ export function CardBox({
           onMouseEnter={() => setHandleHover(true)}
           onMouseLeave={() => setHandleHover(false)}
           title={type === 'character'
-            ? 'Drag to connect: to another character (relationship), to an event (adds to cast)'
+            ? 'Drag to connect: to another character (relationship), to an event (adds them to the scene)'
             : type === 'sequence'
             ? 'Drag to connect: to a scene or a sequence (it follows this sequence in the story)'
-            : 'Drag to connect: to an event (PRECEDES / Alt=CAUSES), an arc (EVOKES), a character (cast), or a sequence (member)'}
+            : 'Drag to connect: to an event (PRECEDES / Alt=CAUSES), an arc (EVOKES), a character (in the scene), or a sequence (member)'}
           style={{
             position: 'absolute',
             right: isCharPill ? 9 : 6,
@@ -1293,7 +1295,7 @@ export function ExpandedBody({
           Occurs-in, throughline, sub-events, and the origin quote all live on
           the full sheet; the spine already draws the throughline on the board. */}
       {type === 'event' && (signal.involvesCharNames?.length ?? 0) > 0 && (
-        <Section label="Cast">{signal.involvesCharNames!.join(' · ')}</Section>
+        <Section label="Characters">{signal.involvesCharNames!.join(' · ')}</Section>
       )}
 
       {/* Location: appears in events */}
