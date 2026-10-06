@@ -5,3 +5,5 @@ export * from './model/session';
 export * from './model/passwordPolicy';
 export * from './model/resendThrottle';
 export { getMfaConfigured } from './model/mfa';
+export * from './model/googleOAuth';
+export * from './model/googleSignIn';
