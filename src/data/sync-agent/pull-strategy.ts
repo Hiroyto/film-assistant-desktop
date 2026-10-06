@@ -3,8 +3,9 @@
 // reconnect. Usa version-reconcile para decidir e transforms para normalizar.
 import { mapStoryToRow, normalizeCharacters, RawStory } from './transforms';
 import { decidePullAction, isPullConflict } from './version-reconcile';
-import { storyRepo, characterRepo } from '../local-db/repositories';
+import { storyRepo, characterRepo, syncQueueRepo } from '../local-db/repositories';
 import { emit } from './events';
+import type { StoryRow } from '../local-db/rows';
 
 export interface PullDeps {
   userId: string;
@@ -21,6 +22,19 @@ export interface PullReport {
   applied: number;
   skipped: number;
   conflicts: number;
+}
+
+/**
+ * Folga após o último save local dentro da qual uma mutação pode ainda não ter
+ * entrado na fila (o saveStory enfileira com debounce de 10 s). Fora dela, fila
+ * vazia para a story significa "tudo o que havia local já foi entregue".
+ */
+export const LOCAL_SETTLE_MS = 60_000;
+
+async function isLocalDelivered(local: StoryRow, nowIso: string): Promise<boolean> {
+  const age = (Date.parse(nowIso) || 0) - (Date.parse(local.updated_at) || 0);
+  if (age < LOCAL_SETTLE_MS) return false;
+  return (await syncQueueRepo.countOpenForStory(local.story_id)) === 0;
 }
 
 /** Executa um ciclo de pull. Aplica deltas; encaminha conflitos para resolução. */
@@ -52,7 +66,14 @@ export async function runPull(deps: PullDeps): Promise<PullReport> {
     };
 
     // Conflito multi-device: edição local pendente + remoto avançou (AD-02).
-    if (isPullConflict(localState, remoteState)) {
+    // "Pendente" pelos timestamps (updated_at > synced_at) é só uma aproximação:
+    // o push antigo nunca gravava synced_at/version de volta, então toda story
+    // já salva parecia pendente para sempre e, com o backend incrementando a
+    // version a cada save, o pull de cada boot acusava o mesmo conflito. A fila
+    // é a resposta exata: sem entry aberta desta story (e fora da janela de
+    // debounce), tudo o que havia local foi entregue e o remoto é o superconjunto —
+    // aplicar é o certo, conflito não.
+    if (isPullConflict(localState, remoteState) && !(local && (await isLocalDelivered(local, now())))) {
       conflicts++;
       emit('sync.conflict', { entityType: 'story', entityId: remoteRow.story_id });
       deps.onConflict?.(remoteRow.story_id);

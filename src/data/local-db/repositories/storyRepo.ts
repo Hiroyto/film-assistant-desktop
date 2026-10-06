@@ -51,3 +51,13 @@ export async function softDelete(storyId: string, at: string): Promise<void> {
 export async function markSynced(storyId: string, at: string, version: number): Promise<void> {
   await run('UPDATE stories SET synced_at = ?, version = ? WHERE story_id = ?', [at, version, storyId]);
 }
+
+/**
+ * Só a version (optimistic lock), sem tocar synced_at: os pushes de characters e
+ * de screenplay incrementam a version da story no backend sem que o CONTEÚDO da
+ * story tenha sido sincronizado. Sem isto o pull seguinte vê remote.version >
+ * local.version e, se houver uma edição local pendente, acusa conflito à toa.
+ */
+export async function setVersion(storyId: string, version: number): Promise<void> {
+  await run('UPDATE stories SET version = ? WHERE story_id = ?', [version, storyId]);
+}

@@ -67,6 +67,24 @@ export async function depth(): Promise<number> {
 }
 
 /**
+ * Entries ainda ABERTAS (qualquer status — sucesso é apagado) que tocam uma
+ * story: a própria ('story', id puro ou "<storyId>:<segment>" do save-scenes),
+ * characters e screenplay (ambos keyed pelo storyId). É a resposta exata para
+ * "há mutação local desta story ainda não entregue?" — os timestamps
+ * synced_at/updated_at só aproximam isso (ver pull-strategy).
+ */
+export async function countOpenForStory(storyId: string): Promise<number> {
+  const row = await get<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM sync_queue
+       WHERE status != 'succeeded'
+         AND entity_type IN ('story','character','screenplay')
+         AND (entity_id = ? OR substr(entity_id, 1, ?) = ?)`,
+    [storyId, storyId.length + 1, `${storyId}:`],
+  );
+  return row?.n ?? 0;
+}
+
+/**
  * Re-arma entries que DESISTIRAM (status='failed', next_attempt_at=NULL — que o
  * listProcessable ignora, pois `NULL <= now` é falso) para reprocessamento
  * imediato: volta a 'pending' com next_attempt_at=now e zera attempts. Usado só

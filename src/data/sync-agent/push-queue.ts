@@ -1,8 +1,9 @@
 // push-queue — worker que drena a sync_queue para o backend AWS (data_migration_plan
 // §Ongoing push). Idempotência (COD-008) via `requestId` no BODY (não no header
 // X-Request-Id — ver nota de CORS abaixo) e política de backoff (idempotency.ts).
-// 409 -> conflict; 5xx/network -> backoff; sucesso -> remove.
-import { syncQueueRepo } from '../local-db/repositories';
+// 409 -> conflict; 5xx/network -> backoff; sucesso -> remove + write-back de
+// synced_at/version na story local (recordStorySynced — é o que o pull lê).
+import { storyRepo, syncQueueRepo } from '../local-db/repositories';
 import { safeApiCall } from '../../models/apiHelpers';
 import { nextAttemptAt, shouldGiveUp } from './idempotency';
 import { emit } from './events';
@@ -100,6 +101,7 @@ async function pushOne(
 
   if (res.success) {
     await syncQueueRepo.markSucceeded(row.id);
+    await recordStorySynced(row, res.data, now);
     emit('sync.entry.succeeded', { entryId: row.id, entityType: row.entity_type });
     return;
   }
@@ -122,6 +124,79 @@ async function pushOne(
     giveUp ? 'failed' : 'pending',
   );
   emit('sync.entry.failed', { entryId: row.id, reason: res.error ?? 'unknown', attempts });
+}
+
+// --- Write-back do sync na story -------------------------------------------
+// O pull acusa conflito por (updated_at > synced_at) E (remote.version >
+// local.version). O backend incrementa `version` em TODO save (também em
+// update-characters e save-screenplay). Sem gravar synced_at/version de volta
+// depois do push, toda story já salva ficava "pendente" para sempre e uma
+// version atrás — e o pull de cada boot acusava o mesmo conflito sem nada novo.
+
+/** Entries que tocam uma story: 'story' (id puro ou "<storyId>:<segment>", do save-scenes), characters e screenplay (keyed pelo storyId). */
+const STORY_SCOPED: ReadonlySet<SyncEntityType> = new Set(['story', 'character', 'screenplay']);
+
+export function storyIdOfEntry(row: Pick<SyncQueueRow, 'entity_type' | 'entity_id'>): string | null {
+  if (!STORY_SCOPED.has(row.entity_type)) return null;
+  const id = String(row.entity_id ?? '').split(':')[0].trim();
+  return id || null;
+}
+
+/**
+ * `works[storyId].version` da resposta do /works (toda operação devolve o mapa
+ * `works` inteiro). Tolerante ao envelope da API Gateway: `{ body: "<json>" }`,
+ * `{ body: {...} }` ou o próprio body. null quando não dá para saber.
+ */
+export function versionFromWorksResponse(data: unknown, storyId: string): number | null {
+  let body: unknown = data;
+  if (body && typeof body === 'object' && 'body' in (body as Record<string, unknown>)) {
+    body = (body as Record<string, unknown>).body;
+  }
+  if (typeof body === 'string') {
+    try {
+      body = JSON.parse(body);
+    } catch {
+      return null;
+    }
+  }
+  if (!body || typeof body !== 'object') return null;
+  const works = (body as Record<string, unknown>).works;
+  const story = works && typeof works === 'object' ? (works as Record<string, unknown>)[storyId] : undefined;
+  const raw = story && typeof story === 'object' ? (story as Record<string, unknown>).version : undefined;
+  const n = typeof raw === 'number' ? raw : typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : NaN;
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/**
+ * Após um push bem-sucedido, grava na story local o que o backend passou a ter:
+ *   - 'story' (save / save-scenes): synced_at = created_at da entry (o momento em
+ *     que o payload foi capturado — um save local posterior continua pendente) e
+ *     version = a devolvida pelo backend;
+ *   - 'character' / 'screenplay': só a version (o conteúdo da story não mudou).
+ * Sem a version na resposta, aplica a regra da Lambda: local + 1. Falha aqui NÃO
+ * re-enfileira (o backend já tem a mutation): no pior caso o pull seguinte vê um
+ * conflito a mais.
+ */
+async function recordStorySynced(row: SyncQueueRow, data: unknown, now: () => string): Promise<void> {
+  if (row.operation === 'delete') return;
+  const storyId = storyIdOfEntry(row);
+  if (!storyId) return;
+  try {
+    let version = versionFromWorksResponse(data, storyId);
+    if (version == null) {
+      const local = await storyRepo.getStory(storyId);
+      if (!local) return;
+      version = local.version + 1;
+    }
+    if (row.entity_type === 'story') {
+      const at = Number.isFinite(Date.parse(row.created_at)) ? row.created_at : now();
+      await storyRepo.markSynced(storyId, at, version);
+    } else {
+      await storyRepo.setVersion(storyId, version);
+    }
+  } catch (e) {
+    console.warn('[push-queue] write-back de synced_at/version falhou', { storyId, entityType: row.entity_type }, e);
+  }
 }
 
 async function refreshState(): Promise<void> {
