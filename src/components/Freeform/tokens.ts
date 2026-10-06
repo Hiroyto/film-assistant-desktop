@@ -21,9 +21,26 @@ export const ENTITY_COLORS: Record<EntityType, string> = {
   sequence: '#22c55e', // green — a movement/container spanning scenes
 };
 
+// Light-mode variants for the hues that wash out on the cream board. The base
+// palette was tuned for the dark stage: teal, amber and green land between
+// 1.5:1 and 2.3:1 against white, under the 3:1 floor for non-text UI (dots,
+// pill borders, card accents). Only the failing hues are overridden; blue,
+// violet, rose and grey already read on both stages. Resolve through
+// getEntityColor(type, 'light') / entityColorForMode(hex, 'light').
+export const ENTITY_COLORS_LIGHT: Partial<Record<EntityType, string>> = {
+  character: '#b7791f', // amber, 3.6:1
+  location: '#0d9488', // teal, 3.7:1
+  sequence: '#15803d', // green, 5.0:1
+};
+
 export const PEER_BLUE = '#54bfdb';
 export const PEER_BLUE_DARK = '#47a8c7';
 export const PEER_BLUE_LIGHT = '#7dd3f0';
+// Light-mode INK for the peer: #54bfdb is 2.1:1 on white, so text, icons and
+// chips that read as "peer" on the cream stage use this (it clears 4.5:1 on white and on the cream note panel). The Script
+// page's toolbar already carried it as --tb-peer; freeform-script.tsx keeps a
+// local copy (same convention as PEER_BLUE there) — keep in sync.
+export const PEER_BLUE_INK = '#0e7490';
 
 // ===========================================
 // Peer surface language (shared with the script side's note surfaces —

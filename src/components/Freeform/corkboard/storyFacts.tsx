@@ -26,6 +26,8 @@ import { NOTE_FONT_SERIF } from '../tokens';
 import type { StoryFact, StoryFactKind } from '../../../lib/freeformApi';
 
 const ORANGE = '#ff8c42';
+// Light counterpart: #ff8c42 is 2.3:1 on white; #c2410c holds 5.2:1 as text and under white.
+const ORANGE_LIGHT = '#c2410c';
 const KIND_LABEL: Record<StoryFactKind, string> = {
   format: 'Format', genre: 'Genre', setting: 'Setting', period: 'Period', tone: 'Tone', world: 'World', other: 'Other',
 };
@@ -60,7 +62,7 @@ function KindPicker({ value, onChange, dark }: { value: StoryFactKind; onChange:
         style={{
           display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 600,
           padding: '5px 8px 5px 10px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
-          border: `1px solid ${dark ? '#2e2e36' : '#e4e4ea'}`, background: dark ? '#1a1a1e' : '#fff', color: ink,
+          border: `1px solid ${dark ? '#2e2e36' : '#e6dfd2'}`, background: dark ? '#1a1a1e' : '#fff', color: ink,
           minWidth: 78, justifyContent: 'space-between',
         }}
       >
@@ -72,7 +74,7 @@ function KindPicker({ value, onChange, dark }: { value: StoryFactKind; onChange:
           role="listbox"
           style={{
             position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 210, minWidth: 130,
-            background: dark ? '#1a1a1e' : '#fff', border: dark ? '1px solid #2a2a30' : '1px solid #e3e5ea',
+            background: dark ? '#1a1a1e' : '#fff', border: dark ? '1px solid #2a2a30' : '1px solid #e6dfd2',
             borderRadius: 8, boxShadow: '0 8px 24px rgba(15,18,30,0.12)', padding: 5, fontFamily: 'system-ui, sans-serif',
           }}
         >
@@ -86,9 +88,9 @@ function KindPicker({ value, onChange, dark }: { value: StoryFactKind; onChange:
               style={{
                 display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, width: '100%', textAlign: 'left',
                 background: 'transparent', border: 'none', padding: '7px 10px', fontSize: 12, fontWeight: 500,
-                color: k === value ? ORANGE : ink, cursor: 'pointer', borderRadius: 6, fontFamily: 'inherit',
+                color: k === value ? (dark ? ORANGE : ORANGE_LIGHT) : ink, cursor: 'pointer', borderRadius: 6, fontFamily: 'inherit',
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = dark ? '#26262c' : '#f4f5f7')}
+              onMouseEnter={(e) => (e.currentTarget.style.background = dark ? '#26262c' : '#f7f3ea')}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
             >
               {KIND_LABEL[k]}
@@ -142,12 +144,12 @@ export function StoryFactsStrip({
   }, [open]);
 
   const ink = dark ? '#dcdce2' : '#2a2a30';
-  const quiet = dark ? '#82828c' : '#8a8a94';
-  const hair = dark ? '#2e2e36' : '#e4e4ea';
+  const quiet = dark ? '#82828c' : '#736b5e';
+  const hair = dark ? '#2e2e36' : '#e6dfd2';
   const chip: React.CSSProperties = {
     display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 500,
     padding: '2px 9px', borderRadius: 999, whiteSpace: 'nowrap', cursor: 'pointer',
-    border: `1px solid ${dark ? '#34343c' : '#d8d8e0'}`, color: dark ? '#b4b4be' : '#55555e',
+    border: `1px solid ${dark ? '#34343c' : '#d3cab8'}`, color: dark ? '#b4b4be' : '#55555e',
     background: dark ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.7)', fontFamily: 'inherit', lineHeight: 1.5,
   };
 
@@ -177,13 +179,13 @@ export function StoryFactsStrip({
         placeholder="A period piece, set in 1962"
         style={{ flex: 1, minWidth: 0, fontSize: 12.5, padding: '5px 8px', borderRadius: 6, border: `1px solid ${hair}`, background: dark ? '#1a1a1e' : '#fff', color: ink, outline: 'none', fontFamily: NOTE_FONT_SERIF }}
       />
-      <button onClick={commit} style={{ fontSize: 11, fontWeight: 600, padding: '5px 10px', borderRadius: 6, border: 'none', background: ORANGE, color: '#fff', cursor: 'pointer', fontFamily: 'inherit' }}>Save</button>
+      <button onClick={commit} style={{ fontSize: 11, fontWeight: 600, padding: '5px 10px', borderRadius: 6, border: 'none', background: dark ? ORANGE : ORANGE_LIGHT, color: '#fff', cursor: 'pointer', fontFamily: 'inherit' }}>Save</button>
     </div>
   );
 
   return (
     <div ref={wrapRef} data-tour="story-facts" style={{ position: 'relative', zIndex: open ? 200 : 'auto', display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, alignSelf: 'center' }}>
-      <span style={{ width: 1, height: 16, background: dark ? '#34343c' : '#d8d8e0', margin: '0 2px', flexShrink: 0 }} />
+      <span style={{ width: 1, height: 16, background: dark ? '#34343c' : '#d3cab8', margin: '0 2px', flexShrink: 0 }} />
       {facts.length === 0 ? (
         canEdit && (
           // The board's own tooltip, never the browser's `title`: a native
@@ -215,7 +217,7 @@ export function StoryFactsStrip({
         <Tip text={pending === 1 ? 'A braindump describes this story differently. Open to choose.' : `${pending} things a braindump describes differently. Open to choose.`}>
           <button
             onClick={onOpenQuestions}
-            style={{ ...chip, color: ORANGE, borderColor: 'rgba(255,140,66,0.5)', background: 'rgba(255,140,66,0.1)', fontWeight: 700 }}
+            style={{ ...chip, color: dark ? ORANGE : ORANGE_LIGHT, borderColor: dark ? 'rgba(255,140,66,0.5)' : 'rgba(194,65,12,0.45)', background: dark ? 'rgba(255,140,66,0.1)' : 'rgba(194,65,12,0.08)', fontWeight: 700 }}
           >
             ? {pending}
           </button>

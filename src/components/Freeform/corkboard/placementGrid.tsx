@@ -935,7 +935,7 @@ export function PlacementGrid({
           backgroundColor: dark ? '#0a0a0b' : '#fdfaf3',
           backgroundImage: dark
             ? 'radial-gradient(circle, rgba(255,107,53,0.18) 1px, transparent 1px)'
-            : 'radial-gradient(circle, rgba(234,88,12,0.16) 1px, transparent 1.4px)',
+            : 'radial-gradient(circle, rgba(70,55,35,0.14) 1px, transparent 1.4px)',
           backgroundSize: dark ? '40px 40px' : '26px 26px',
           backgroundPosition: '8px 8px',
           opacity: settled && !closing ? 1 : 0,

@@ -171,25 +171,31 @@ export function ToolbarButton({
     : tinted
     ? hexToRgba(accent!, active || hover ? (dark ? 0.22 : 0.16) : dark ? 0.14 : 0.1)
     : active
-    ? dark ? '#26262c' : '#eef1f6'
+    ? dark ? '#26262c' : '#ebe4d6'
     : hover
-    ? dark ? '#222227' : '#f4f5f7'
+    ? dark ? '#222227' : '#f7f3ea'
     : dark ? '#1a1a1e' : '#fff';
   const border = disabled
-    ? dark ? '#26262a' : '#ececec'
+    ? dark ? '#26262a' : '#ebe5d9'
     : solid
     ? accent!
     : tinted
     ? hexToRgba(accent!, 0.55)
-    : active || hover
-    ? dark ? '#3c3c44' : '#c9cdd6'
-    : dark ? '#2a2a30' : '#e3e5ea';
+    : active
+    ? dark ? '#3c3c44' : '#b5a98f'
+    : hover
+    ? dark ? '#3c3c44' : '#cfc6b6'
+    : dark ? '#2a2a30' : '#e6dfd2';
   const color = disabled
     ? dark ? '#55555c' : '#c0c0c0'
     : solid
     ? '#fff'
     : tinted
     ? accent!
+    // Light's selected state is NEUTRAL (ink on a warm fill) rather than an
+    // orange tint, so orange stays the color of the two create actions only.
+    : active
+    ? dark ? '#c8c8d0' : '#1d2230'
     : dark ? '#c8c8d0' : '#3d4250';
   const btn = (
     <button
@@ -413,11 +419,11 @@ export function BraindumpDock({
           }}
         >
           {text.trim() && (
-            <span style={{ fontSize: 11.5, fontWeight: 600, color: '#ff8c42', whiteSpace: 'nowrap' }}>
+            <span style={{ fontSize: 11.5, fontWeight: 600, color: dark ? '#ff8c42' : '#c2410c', whiteSpace: 'nowrap' }}>
               {text.trim().split(/\s+/).length} words
             </span>
           )}
-          <span style={{ fontSize: 11, color: phase === 'error' ? '#ef4444' : dark ? '#7a7a84' : '#9a9aa4', lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ fontSize: 11, color: phase === 'error' ? '#ef4444' : dark ? '#7a7a84' : '#736b5e', lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {message ?? ''}
           </span>
         </div>
@@ -425,7 +431,7 @@ export function BraindumpDock({
             chips (Placement Control v1c) + the action button. */}
         <div style={{ position: 'absolute', bottom: 16, right: 16, zIndex: 2, display: 'flex', alignItems: 'center', gap: 10 }}>
         {showIntent && intent && onIntentChange && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: dark ? '#8a8a94' : '#9a9aa4', fontFamily: 'system-ui, sans-serif' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: dark ? '#8a8a94' : '#736b5e', fontFamily: 'system-ui, sans-serif' }}>
             <IntentChoice
               label="auto"
               tip="The system places this dump's new cards where they fit. Anything it can't place with confidence waits for you in the panel."
@@ -438,7 +444,7 @@ export function BraindumpDock({
                 style={{
                   display: 'inline-flex', alignItems: 'center', gap: 6,
                   padding: '2px 8px', borderRadius: 999,
-                  border: '1px solid #ff8c42', color: '#ff8c42', fontWeight: 600,
+                  border: `1px solid ${dark ? '#ff8c42' : '#c2410c'}`, color: dark ? '#ff8c42' : '#c2410c', fontWeight: 600,
                   maxWidth: 240,
                 }}
               >
@@ -480,9 +486,11 @@ export function BraindumpDock({
               height: 34, padding: '0 18px', fontSize: 12.5, fontWeight: 600,
               border: 'none', borderRadius: 12,
               background: canSubmit
-                ? 'linear-gradient(135deg, #ff6b35 0%, #ff8c42 100%)'
-                : dark ? '#222227' : '#e8eaef',
-              color: canSubmit ? '#fff' : dark ? '#6a6a74' : '#9aa0ad',
+                ? dark
+                  ? 'linear-gradient(135deg, #ff6b35 0%, #ff8c42 100%)'
+                  : 'linear-gradient(135deg, #d9480f 0%, #ea580c 100%)'
+                : dark ? '#222227' : '#ece6da',
+              color: canSubmit ? '#fff' : dark ? '#6a6a74' : '#9a9082',
               cursor: canSubmit ? 'pointer' : 'not-allowed',
               fontFamily: 'inherit',
               boxShadow: canSubmit ? '0 4px 12px rgba(255,107,53,0.3)' : 'none',
@@ -513,9 +521,9 @@ function IntentChoice({ label, tip, active, dark, onClick }: {
       onClick={onClick}
       style={{
         padding: '2px 8px', borderRadius: 999, fontSize: 11.5, fontFamily: 'inherit',
-        border: `1px solid ${active ? '#ff8c42' : dark ? '#33333a' : '#ddd'}`,
-        background: active ? 'rgba(255,140,66,0.12)' : 'transparent',
-        color: active ? '#ff8c42' : dark ? '#8a8a94' : '#9a9aa4',
+        border: `1px solid ${active ? (dark ? '#ff8c42' : '#c2410c') : dark ? '#33333a' : '#d9d0c0'}`,
+        background: active ? (dark ? 'rgba(255,140,66,0.12)' : 'rgba(194,65,12,0.10)') : 'transparent',
+        color: active ? (dark ? '#ff8c42' : '#c2410c') : dark ? '#8a8a94' : '#736b5e',
         fontWeight: active ? 600 : 400, cursor: 'pointer',
         transition: 'color 120ms, border-color 120ms, background 120ms',
       }}

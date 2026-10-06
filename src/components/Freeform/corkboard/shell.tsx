@@ -334,7 +334,7 @@ export function Shell({
             fontSize: 12,
             fontWeight: 600,
             textDecoration: 'none',
-            color: dark ? '#787882' : '#9a9aa4',
+            color: dark ? '#787882' : '#736b5e',
           }}
         >
           ← Stories
@@ -354,7 +354,7 @@ export function Shell({
               padding: '0 4px', minWidth: 160, maxWidth: 520,
               background: dark ? '#1a1a1e' : '#fff',
               color: dark ? '#ededf1' : '#1d2230',
-              border: `1px solid ${dark ? '#3a3a42' : '#cbd5e1'}`,
+              border: `1px solid ${dark ? '#3a3a42' : '#cfc6b6'}`,
               borderRadius: 6, outline: 'none', fontFamily: 'inherit',
             }}
           />
@@ -396,7 +396,7 @@ export function Shell({
               padding: 0,
               cursor: 'pointer',
               fontFamily: 'inherit',
-              color: '#ff8c42',
+              color: dark ? '#ff8c42' : '#c2410c',
               fontSize: 13,
               fontWeight: 700,
               whiteSpace: 'nowrap',
@@ -455,7 +455,7 @@ export function DemoTabStrip({ activeProjectId }: { activeProjectId?: string }) 
               <span
                 style={{
                   fontSize: 9,
-                  color: active ? 'rgba(255,255,255,0.75)' : '#999',
+                  color: active ? 'rgba(255,255,255,0.75)' : dark ? '#999' : '#736b5e',
                   letterSpacing: 0.2,
                 }}
               >
@@ -469,7 +469,7 @@ export function DemoTabStrip({ activeProjectId }: { activeProjectId?: string }) 
         <code
           style={{
             fontSize: 10.5,
-            color: dark ? '#7a7a84' : '#a89f8e',
+            color: dark ? '#7a7a84' : '#736b5e',
             marginLeft: 8,
             padding: '2px 7px',
             background: dark ? 'rgba(255,107,53,0.08)' : 'rgba(234,88,12,0.06)',
@@ -571,7 +571,7 @@ export function CorkboardLoading({
       <div style={{ fontSize: 14.5, fontWeight: 600, color: dark ? '#d4d4dc' : '#3d4250', letterSpacing: 0.2 }}>
         {label}
       </div>
-      <div style={{ fontSize: 12, color: dark ? '#6e6e78' : '#9a9aa4', maxWidth: 280, lineHeight: 1.5 }}>
+      <div style={{ fontSize: 12, color: dark ? '#6e6e78' : '#736b5e', maxWidth: 280, lineHeight: 1.5 }}>
         {sub}
       </div>
     </div>

@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { type ChatTurn } from '../../../components/Freeform/ChatContinuation';
 import { getEntityColor, hexToRgba } from '../../../components/Freeform/entityColors';
 import InternIcon from '../../../components/Freeform/InternIcon';
-import { NOTE_FONT_SANS, NOTE_FONT_SERIF, noteSurface, PEER_BLUE } from '../../../components/Freeform/tokens';
+import { NOTE_FONT_SANS, NOTE_FONT_SERIF, noteSurface, PEER_BLUE, PEER_BLUE_INK } from '../../../components/Freeform/tokens';
 import { type EntityType, type PeerCardState, type PeerQuestion } from '../../../components/Freeform/types';
 import { buildSlice, checkSceneStaleness, closePeerThread, createWriterQuestion, enqueuePeerFirstPass, enqueueSceneExtraction, getSlicePriors, listCardQuestions, peerContinue, saveCardResponseDraft, startPeerThread, submitCardResponse, updateQuestionStatus as updateQuestionStatusApi, type GraphSlice, type ListProjectEntitiesResponse, type PersistedQuestion, type ProjectEntity } from '../../../lib/freeformApi';
 import { buildLocalSlice, mergePriorsIntoSlice, diffSlices } from '../../../lib/localSlice';
@@ -1775,7 +1775,7 @@ export function QuestionComposer({
                 pointerEvents: 'none', maxWidth: '52%',
               }}
             >
-              <span style={{ fontSize: 10.5, fontWeight: 600, color: dark ? liftColor(PEER_BLUE, 0.2) : '#2b95b3', whiteSpace: 'nowrap' }}>
+              <span style={{ fontSize: 10.5, fontWeight: 600, color: dark ? liftColor(PEER_BLUE, 0.2) : PEER_BLUE_INK, whiteSpace: 'nowrap' }}>
                 {draft.trim().split(/\s+/).length} words
               </span>
               <span style={{ fontSize: 10.5, color: status === 'error' ? '#ef4444' : dark ? '#7a7a84' : '#9a9aa4', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
