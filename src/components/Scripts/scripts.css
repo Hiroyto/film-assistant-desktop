@@ -416,7 +416,10 @@
 }
 
 .screenplay-content-area.light-theme .ProseMirror p[data-line-type="scene"]::after {
-  background-color: rgba(255, 102, 0, 0.1);
+  /* The scene-id chip is TEXT on paper: 80% #ff6600 sits near 2.9:1; the app's
+     light accent holds 5.2:1. The caret keeps the bright orange (not text). */
+  color: #c2410c !important;
+  background-color: rgba(194, 65, 12, 0.08);
 }
 
 .screenplay-content-area.light-theme .ProseMirror p + p {
@@ -436,6 +439,27 @@
 
 .screenplay-content-area.light-theme .ProseMirror * {
   caret-color: #ff6600;
+}
+
+/* Element toolbar in light. The bar sits OUTSIDE .screenplay-content-area, so
+   tools/toolbar.tsx puts .light-theme on the bar itself. Solid colors instead
+   of opacity: 0.6 / 0.4 opacity left the labels at 2.4:1 / 1.8:1 on the cream
+   stage and the active orange at 2.2:1; these hold 4.4–5.3:1. The white
+   hairline and black top shadow were dark-mode leftovers. Dark is untouched. */
+.screenplay-toolbar.light-theme {
+  border-bottom-color: #e3dbcb;
+  box-shadow: none;
+}
+.screenplay-toolbar.light-theme .toolbar-button {
+  color: #736b5e;
+}
+.screenplay-toolbar.light-theme .toolbar-button:hover {
+  background: rgba(194, 65, 12, 0.06);
+  color: #2c2c28;
+}
+.screenplay-toolbar.light-theme .toolbar-button.active {
+  background: rgba(194, 65, 12, 0.10);
+  color: #c2410c;
 }
 
 /* ===== 7. FULLSCREEN DARK THEME ===== */

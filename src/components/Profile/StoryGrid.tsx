@@ -3,6 +3,7 @@ import StoryCard from './StoryCard';
 import { Story } from './StoryCard.types';
 import { ChevronsRightLeft } from 'lucide-react';
 import { resolveStoryWorkflow } from '../../lib/storyWorkflows';
+import { sortStoriesByLastUpdate } from './sortStoriesByLastUpdate';
 
 interface StoryGridProps {
     works?: Record<string, Story>; // 👈 agora pode ser undefined
@@ -88,8 +89,8 @@ const StoryGrid: React.FC<StoryGridProps> = ({
                 gap-6
             "
         >
-            {Object.keys(works).map((storyId) => {
-                const story = works[storyId];
+            {/* Sempre do último update para o mais antigo (Home e Profile). */}
+            {sortStoriesByLastUpdate(works).map(([storyId, story]) => {
                 const displayData = getStoryDisplayData(story);
                 if (!displayData) return null;
 
