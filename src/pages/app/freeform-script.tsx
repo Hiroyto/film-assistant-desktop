@@ -65,7 +65,8 @@ import { useTour, type TourStep } from '../../components/Tour/TourProvider';
 import { ArcSheet, CharacterSheet, EventSheet, LocationSheet, RelationshipSheet, SequenceSheet } from '../../components/Freeform/corkboard/sheets';
 import { ThemeCtx } from '../../components/Freeform/corkboard/theme';
 import { loadStoredGraph, saveStoredGraph } from '../../lib/localGraphStore';
-import { scriptTextToHtml } from '../../lib/screenplayParse';
+import { scriptTextToHtml, isTypedLayout } from '../../lib/screenplayParse';
+import type { ExportBlock } from '../../lib/screenplayExport';
 import { acquireStorySession, queueEditGlobal, pulseExtractionGlobal } from '../../lib/storySession';
 import InternIcon from '../../components/Freeform/InternIcon';
 import { PlacementGrid, type GridPick } from '../../components/Freeform/corkboard/placementGrid';
@@ -81,8 +82,14 @@ import '../../components/Scripts/filmassistant-screenplay.css';
 const escapeHtml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-export function importedTextToHtml(text: string): string {
-  return scriptTextToHtml(text);
+// Focus mode's fold: one duration and curve for every piece that moves.
+const FOCUS_MS = 320;
+const FOCUS_EASE = 'cubic-bezier(0.32,0.72,0,1)';
+// Popups that own Esc while open; focus mode's Esc waits for them to close.
+const FOCUS_ESC_POPUPS = '.slugline-dropdown, .character-dropdown, .transition-dropdown, [data-ff-popup]';
+
+export function importedTextToHtml(text: string, opts: { typed?: boolean } = {}): string {
+  return scriptTextToHtml(text, opts.typed ? { typed: true } : {});
 }
 
 // Freeform-only paragraph attribute: the outline title as a PLACEHOLDER hint
@@ -284,6 +291,9 @@ const NOTE_TIER_COLORS: Record<string, string> = {
   concept: '#d4af37',   // gold (rarely rendered; folds into the Structure pass)
 };
 const PEER_BLUE = '#54bfdb'; // the peer persona color (matches the board's InternIcon glasses)
+// Light-mode ink for the same persona (tokens.PEER_BLUE_INK — keep in sync): the
+// bright blue is 2.1:1 on the cream stage; this clears 4.5:1 on white and on the cream note panel.
+const PEER_BLUE_INK = '#0e7490';
 // Note chrome color = the TIER (a stable identity). Intent-gap is a STATE shown
 // separately (a mark / an accent), never by recoloring the whole note — that was
 // making every gap note orange and erasing tier identity.
@@ -465,7 +475,30 @@ export default function FreeformScript() {
   const [sceneCount, setSceneCount] = useState(0);
   const [characters, setCharacters] = useState<any[]>([]);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  // FOCUS MODE (the toolbar arrows; Philip 2026-09-22 found the old
+  // fullscreen button did nothing visible): a script-only view. The bar, the
+  // outline rail, the formatting toolbar and the margin notes fold away and
+  // one collapse button stays in the corner; Esc comes back.
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // Chrome is clipped while folded AND while it unfolds, so nothing paints
+  // over the page mid-animation; released when the unfold transition ends.
+  const [chromeClipped, setChromeClipped] = useState(false);
+  useEffect(() => { if (isFullscreen) setChromeClipped(true); }, [isFullscreen]);
+  useEffect(() => {
+    if (!isFullscreen) return;
+    // Capture phase on window, ahead of the editor: ProseMirror claims EVERY
+    // Esc while it has focus (preventDefault in its key capture), so waiting
+    // for an unhandled Esc never fired. An open popup keeps its Esc (the
+    // slugline / cue / transition suggestions, the format palette); otherwise
+    // Esc leaves the script-only view.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (document.querySelector(FOCUS_ESC_POPUPS)) return;
+      setIsFullscreen(false);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [isFullscreen]);
   const [saveState, setSaveState] = useState<'idle' | 'dirty' | 'saving' | 'saved' | 'error'>('idle');
   // Background-work indicator: TRUE while a scratch generation is in flight
   // (real signal, guard-tracked) or within the optimistic window after a
@@ -486,6 +519,12 @@ export default function FreeformScript() {
   const [statusById, setStatusById] = useState<Map<string, SceneStatus>>(new Map());
   const statusByIdRef = useRef(statusById);
   statusByIdRef.current = statusById;
+  // Saved scenes the SERVER says are behind their pages at load (ledger diff,
+  // stale === true). The session baseline can't see edits made in an earlier
+  // session (e.g. while sync was paused by usage limits, FIL-663/FIL-636),
+  // so Sync board re-extracts these explicitly. Imported spans that were
+  // never saved as pages are NOT in here: the import already built them.
+  const serverStaleRef = useRef<Set<string>>(new Set());
   const [activeSceneId, setActiveSceneId] = useState<string | null>(null);
   const navOpenRef = useRef<boolean>(true);
   const [navOpen, setNavOpen] = useState<boolean>(() => {
@@ -567,6 +606,7 @@ export default function FreeformScript() {
   // Peer discoverability (Marko 2026-08-23): the toolbar chip's scope menu +
   // the one-shot margin invitation on a board with no peer history.
   const [peerMenuOpen, setPeerMenuOpen] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [inviteDismissed, setInviteDismissed] = useState<boolean>(() => {
     try { return localStorage.getItem(`ff-peer-invite-${storyId}`) === '1'; } catch { return true; }
   });
@@ -611,8 +651,8 @@ export default function FreeformScript() {
           placement: 'side',
           onEnter: () => setNavOpen(true),
           content: body(
-            'Your outline came with you.',
-            'Every scene from your board is a row here, in story order, grouped by sequence. The dots track what is written, what changed since the engine last read it, and what is still empty. An empty sequence keeps a + Scene slot. Click a row to write into that scene.',
+            'Your outline evolves with your writing.',
+            'Every scene from your board is a row here, in story order, grouped by sequence. The dots track what is written, what changed since FilmAssistant last read it, and what is still empty. An empty sequence keeps a + Scene slot. Click a row to write into that scene.',
           ),
         },
         {
@@ -620,8 +660,8 @@ export default function FreeformScript() {
           selector: '.ff-script-host .paginated-page-sheet',
           placement: 'side',
           content: body(
-            'Now just write.',
-            'Write into a scene you picked from the outline and it belongs to that scene. Keep writing past the last scene and the engine carves new scenes out of your pages and places them on the board.',
+            'Just write!',
+            'Write into a scene you picked from the outline and it belongs to that scene. Keep writing past the last scene and FilmAssistant carves new scenes out of your pages and places them on the board.',
           ),
         },
         {
@@ -629,8 +669,8 @@ export default function FreeformScript() {
           selector: '[data-tour="script-new-scene"]',
           placement: 'side',
           content: body(
-            'Or declare one first.',
-            'New scene mints a card, lets you place it on the board, and opens it here to write into. Inside an empty sequence, + Scene does the same without the placement step.',
+            'Or declare a new scene first.',
+            'A new scene creates a card and lets you place it on the board, opening it here for you to continue writing. Inside an empty sequence, + Scene does the same without the placement step.',
           ),
         },
         ...(readTarget
@@ -643,7 +683,7 @@ export default function FreeformScript() {
               content: body(
                 'The peer reads pages.',
                 <>
-                  Hover a written scene and hit{' '}
+                  Hover over a written scene and hit{' '}
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: PEER_BLUE, fontWeight: 600, verticalAlign: 'middle' }}>
                     <InternIcon size={11} />Read
                   </span>{' '}
@@ -666,14 +706,14 @@ export default function FreeformScript() {
           selector: '[data-tour="script-automerge"]',
           content: body(
             'Auto-merge keeps the board current.',
-            'On by default: what you write applies to the board on its own, and the board lists every change on its receipt when you go back. Turn it off and changes that need your call wait as questions instead.',
+            'On by default: what you write applies to the board on its own, and the board lists every change on its breakdown when you go back. Turn it off and changes that need your call wait as questions instead.',
           ),
         },
         {
           id: 'script-sync',
           selector: '[data-tour="script-sync"]',
           content: body(
-            'Sync when you want it now.',
+            'Sync whenever you want to.',
             'Your pages work themselves into the outline as you pause. Sync board does it immediately.',
           ),
         },
@@ -683,7 +723,7 @@ export default function FreeformScript() {
           nextLabel: "You're set →",
           content: body(
             'Back to the board.',
-            'When your pages leave a question for you, the count grows out of this button and takes you straight to it on the board.',
+            'When questions are left for you, the button count increases. Click it to go straight to them on your board.',
           ),
         },
       ];
@@ -1267,6 +1307,9 @@ export default function FreeformScript() {
         }
         setNavSections(sections);
         setStatusById(statuses);
+        serverStaleRef.current = new Set(
+          [...staleByEvent].filter(([id, stale]) => stale && savedByEvent.has(id)).map(([id]) => id),
+        );
 
         const baseline = new Map<string, string>();
         const parts: string[] = [];
@@ -1289,7 +1332,9 @@ export default function FreeformScript() {
             const start = parseInt(String(ev.src_start), 10);
             const end = parseInt(String(ev.src_end), 10);
             if (prose && Number.isFinite(start) && Number.isFinite(end) && end > start) {
-              const converted = importedTextToHtml(prose.slice(start, Math.min(end, prose.length)));
+              // An FDX / Fade In import's prose is in the typed layout: read
+              // its columns as the stated types, as the server sweep does.
+              const converted = importedTextToHtml(prose.slice(start, Math.min(end, prose.length)), { typed: isTypedLayout(prose) });
               if (converted) {
                 regionHtml = tagFirstParagraph(converted, ev.id);
                 persisted = ''; // imported content is dirty against '' → first save persists it
@@ -1413,6 +1458,25 @@ export default function FreeformScript() {
   // settled snapshot is per mount. A scene STARTED from the panel after load
   // is not the settled last scene, so typing into it binds normally (the
   // §0a chosen-region act).
+  // Export (Philip, 2026-09-22: a writer must always be able to take the
+  // script out). The whole document as the writer sees it, every editor in
+  // order, typed by its line type; empty paragraphs (skeleton anchors) drop.
+  const exportScript = useCallback(async (format: 'pdf' | 'fdx') => {
+    setExportMenuOpen(false);
+    const blocks: ExportBlock[] = [];
+    for (const ed of getAllEditorsRef.current?.() ?? []) {
+      ed.state.doc.forEach((node: any) => {
+        const text = String(node.textContent ?? '').trim();
+        if (text) blocks.push({ type: (node.attrs?.lineType ?? 'description') as ExportBlock['type'], text });
+      });
+    }
+    if (!blocks.length) return;
+    const title = blocks.find((b) => b.type === 'title')?.text ?? 'screenplay';
+    const mod = await import('../../lib/screenplayExport');
+    if (format === 'pdf') await mod.exportScreenplayPdf(blocks, title);
+    else mod.exportScreenplayFdx(blocks, title);
+  }, []);
+
   type WalkBlock = { regionId: string | null; blockId: string; html: string; text: string };
   const walkDocument = useCallback((): WalkBlock[] => {
     const editors = getAllEditorsRef.current?.() ?? [];
@@ -2239,6 +2303,9 @@ export default function FreeformScript() {
       }, 45000);
     }).catch((e) => {
       console.warn('[freeform-script] scene extraction enqueue failed', e);
+      // Still behind its pages (e.g. refused by a usage limit): keep it for
+      // the next Sync board.
+      if (opts?.manual) serverStaleRef.current.add(eventId);
       setReviewingScenes((cur) => { const next = new Map(cur); next.delete(eventId); return next; });
       extractBaselineRef.current.set(eventId, base); // retry on next exit
       pendingScenesRef.current = Math.max(0, pendingScenesRef.current - 1);
@@ -2941,9 +3008,20 @@ export default function FreeformScript() {
     console.info('[freeform-script] syncNow');
     void runSave();
     // Check EVERY region against the extraction baseline, not just pending ones.
+    // Scenes the server marked stale at load go through as manual (writer
+    // intent: skip the session baseline + delta floor; the backend hash still
+    // dedups a true no-op). Each changed scene extracts once, from its
+    // current pages.
     const texts = collectRegionTexts();
+    const serverStale = serverStaleRef.current;
     for (const [eventId] of texts) {
-      if (baselineRef.current.has(eventId)) fireExtract(eventId);
+      if (!baselineRef.current.has(eventId)) continue;
+      if (serverStale.has(eventId)) {
+        serverStale.delete(eventId); // re-added by fireExtract if the enqueue fails
+        fireExtract(eventId, { manual: true });
+      } else {
+        fireExtract(eventId);
+      }
     }
     fireExtract(SCRATCH, { hard: true });
   }, [runSave, collectRegionTexts, fireExtract]);
@@ -3582,9 +3660,22 @@ export default function FreeformScript() {
       style={{
         display: 'flex', flexDirection: 'column',
         height: '100vh', background: theme === 'dark' ? '#0a0a0b' : '#faf6ee',
-        ...(isFullscreen ? { position: 'fixed', inset: 0, zIndex: 1000 } : {}),
-      }}
+        // Page-level accent tokens read by the injected CSS below (.ff-nav-handle).
+        // Light uses the deeper orange: #ff8c42 is 2.3:1 on the cream stage.
+        ...(theme === 'dark'
+          ? { '--ff-acc': '#ff8c42', '--ff-acc-bd': 'rgba(255,140,66,0.55)', '--ff-acc-bg': 'rgba(255,140,66,0.08)' }
+          : { '--ff-acc': '#c2410c', '--ff-acc-bd': 'rgba(194,65,12,0.5)', '--ff-acc-bg': 'rgba(194,65,12,0.07)' }),
+      } as React.CSSProperties}
     >
+      {/* FOCUS (script-only view): the bar folds away by animating its grid
+          row to 0fr; clipped only while folded or moving, so its menus can
+          still drop below it. */}
+      <div
+        style={{ display: 'grid', gridTemplateRows: isFullscreen ? '0fr' : '1fr', transition: `grid-template-rows ${FOCUS_MS}ms ${FOCUS_EASE}`, flexShrink: 0, position: 'relative', zIndex: 20 }}
+        onTransitionEnd={(e) => { if (e.target === e.currentTarget) setChromeClipped(isFullscreen); }}
+        aria-hidden={isFullscreen || undefined}
+      >
+      <div style={{ minHeight: 0, overflow: chromeClipped ? 'hidden' : 'visible', opacity: isFullscreen ? 0 : 1, transition: `opacity ${FOCUS_MS - 80}ms ease` }}>
       {/* The freeform bar — this is the part that differs from the outline
           workflow's page (no beat sidebar, no outline chrome). */}
       <div style={{
@@ -3595,8 +3686,15 @@ export default function FreeformScript() {
         // Toolbar theme tokens: the .ff-tb-* classes (injected <style> below)
         // read these, so hover/active states stay in CSS and both themes work.
         ...(theme === 'dark'
-          ? { '--tb-hair': '#26262c', '--tb-mut': '#8a8a93', '--tb-txt': '#c9c9d1', '--tb-hov': 'rgba(255,255,255,0.055)', '--tb-peer': '#54bfdb', '--tb-peer-bg': 'rgba(84,191,219,0.13)', '--tb-peer-bg-h': 'rgba(84,191,219,0.2)' }
-          : { '--tb-hair': '#e3dbcb', '--tb-mut': '#8a8578', '--tb-txt': '#4a4a45', '--tb-hov': 'rgba(0,0,0,0.045)', '--tb-peer': '#0f7f9f', '--tb-peer-bg': 'rgba(15,127,159,0.10)', '--tb-peer-bg-h': 'rgba(15,127,159,0.16)' }),
+          ? { '--tb-hair': '#26262c', '--tb-mut': '#8a8a93', '--tb-txt': '#c9c9d1', '--tb-hov': 'rgba(255,255,255,0.055)', '--tb-peer': PEER_BLUE, '--tb-peer-bg': 'rgba(84,191,219,0.13)', '--tb-peer-bg-h': 'rgba(84,191,219,0.2)',
+              '--tb-sync': '#ff8c42', '--tb-sync-bg': 'rgba(255,107,53,0.12)', '--tb-sync-bd': 'rgba(255,140,66,0.5)', '--tb-sync-bg-h': 'rgba(255,107,53,0.2)', '--tb-sync-bd-h': 'rgba(255,140,66,0.8)',
+              '--tb-q-bd': 'rgba(255,140,66,0.4)', '--tb-q-bg': 'rgba(255,140,66,0.16)', '--tb-q-bg-h': 'rgba(255,140,66,0.28)' }
+          // Light: --tb-mut was #8a8578 (3.7:1); the warm quiet holds 5.3:1 for the
+          // 11.5px chrome text. The sync/board orange is the deeper #c2410c (4.8:1
+          // on its tint) — #ff8c42 sat at 2.1:1 there. Peer text uses the ink blue.
+          : { '--tb-hair': '#e3dbcb', '--tb-mut': '#736b5e', '--tb-txt': '#4a4a45', '--tb-hov': 'rgba(0,0,0,0.045)', '--tb-peer': PEER_BLUE_INK, '--tb-peer-bg': 'rgba(15,127,159,0.10)', '--tb-peer-bg-h': 'rgba(15,127,159,0.16)',
+              '--tb-sync': '#c2410c', '--tb-sync-bg': 'rgba(217,72,15,0.10)', '--tb-sync-bd': 'rgba(194,65,12,0.45)', '--tb-sync-bg-h': 'rgba(217,72,15,0.18)', '--tb-sync-bd-h': 'rgba(194,65,12,0.8)',
+              '--tb-q-bd': 'rgba(194,65,12,0.4)', '--tb-q-bg': 'rgba(194,65,12,0.12)', '--tb-q-bg-h': 'rgba(194,65,12,0.2)' }),
       } as React.CSSProperties}>
         <span data-tour="script-board" className={`ff-board-wrap${pendingQuestions > 0 ? ' has-q' : ''}`}>
         <a
@@ -3615,7 +3713,7 @@ export default function FreeformScript() {
             // wipe-right in): navigation fires while the screen is covered.
             playPageWipe('left', () => routerNavigate(`/freeform/${storyId}`));
           }}
-          style={{ color: '#ff8c42', textDecoration: 'none', fontSize: 13, fontWeight: 700 }}
+          style={{ color: 'var(--tb-sync)', textDecoration: 'none', fontSize: 13, fontWeight: 700 }}
         >
           ← Board
         </a>
@@ -3646,7 +3744,7 @@ export default function FreeformScript() {
         )}
         </span>
         <span style={{ color: theme === 'dark' ? '#e6e6ea' : '#1a1a1a', fontSize: 14, fontWeight: 700 }}>Script</span>
-        <span style={{ color: '#6b6b74', fontSize: 12 }}>
+        <span style={{ color: theme === 'dark' ? '#6b6b74' : 'var(--tb-mut)', fontSize: 12 }}>
           {sceneCount} scene{sceneCount === 1 ? '' : 's'} from your outline
         </span>
         <div style={{ flex: 1 }} />
@@ -3665,6 +3763,41 @@ export default function FreeformScript() {
               {statusLabel}
             </span>
           )}
+          <span style={{ position: 'relative', display: 'inline-flex' }}>
+            <button
+              className="ff-tb-btn ff-tb-ghost"
+              onClick={() => setExportMenuOpen((v) => !v)}
+              title="Download the script as a PDF or a Final Draft file"
+            >
+              Export
+            </button>
+            {exportMenuOpen && (
+              <>
+                <div onClick={() => setExportMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 1200 }} />
+                <div style={{
+                  position: 'absolute', top: 32, right: 0, width: 220, zIndex: 1201, padding: 6,
+                  background: theme === 'dark' ? '#1a1a1e' : '#fffdf7', borderRadius: 11,
+                  border: `1px solid ${theme === 'dark' ? '#2e2e35' : '#e3dbcb'}`,
+                  boxShadow: '0 14px 40px rgba(0,0,0,0.4)',
+                }}>
+                  {([['pdf', 'PDF', 'Industry format, ready to send'], ['fdx', 'Final Draft (.fdx)', 'Opens in Final Draft and Fade In']] as const).map(([fmt, label, sub]) => (
+                    <button
+                      key={fmt}
+                      className="ff-peer-menu-item"
+                      onClick={() => void exportScript(fmt)}
+                      style={{
+                        display: 'block', width: '100%', textAlign: 'left', padding: '8px 10px', borderRadius: 7,
+                        border: 'none', background: 'transparent', cursor: 'pointer', fontFamily: 'system-ui, sans-serif',
+                      }}
+                    >
+                      <div style={{ fontSize: 12.5, fontWeight: 600, color: theme === 'dark' ? '#e6e6ea' : '#2c2c28' }}>{label}</div>
+                      <div style={{ fontSize: 11, color: theme === 'dark' ? '#8a8a93' : '#8a8578', marginTop: 2 }}>{sub}</div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </span>
           <button
             className="ff-tb-btn ff-tb-ghost"
             onClick={toggleManualOnly}
@@ -3687,7 +3820,7 @@ export default function FreeformScript() {
             data-tour="script-automerge"
             className="ff-tb-btn ff-tb-ghost"
             onClick={toggleJustWrite}
-            style={justWrite ? { color: PEER_BLUE } : undefined}
+            style={justWrite ? { color: 'var(--tb-peer)' } : undefined}
           >
             {justWrite ? 'Auto-merge on' : 'Auto-merge off'}
           </button>
@@ -3699,7 +3832,7 @@ export default function FreeformScript() {
               is the invitation and opens the scope menu; warm it carries the
               count and the Notes/Review segments as before. */}
           <div data-tour="script-peer-seg" style={{ position: 'relative', display: 'inline-flex' }}>
-          <div className="ff-tb-seg" style={{ borderColor: 'rgba(84,191,219,0.4)', borderRadius: 999 }}>
+          <div className="ff-tb-seg" style={{ borderColor: theme === 'dark' ? 'rgba(84,191,219,0.4)' : 'rgba(15,127,159,0.4)', borderRadius: 999 }}>
             <HoverTip
               text="Coverage across the scenes you have written: where your pages do what the card says they are meant to do, and where they come apart. Read one scene, its sequence, or the whole draft."
               placement="bottom-left"
@@ -3711,10 +3844,12 @@ export default function FreeformScript() {
               className="ff-tb-btn"
               onClick={() => setPeerMenuOpen((v) => !v)}
               style={{
-                display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 700, color: '#54bfdb',
+                display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 700, color: 'var(--tb-peer)',
                 height: '100%', padding: '0 12px', borderRadius: 0, border: 'none',
-                background: 'linear-gradient(135deg, rgba(84,191,219,0.20), rgba(84,191,219,0.08))',
-                boxShadow: notesVisible ? 'inset -1px 0 0 rgba(84,191,219,0.4)' : 'none',
+                background: theme === 'dark'
+                  ? 'linear-gradient(135deg, rgba(84,191,219,0.20), rgba(84,191,219,0.08))'
+                  : 'linear-gradient(135deg, rgba(15,127,159,0.14), rgba(15,127,159,0.05))',
+                boxShadow: notesVisible ? `inset -1px 0 0 ${theme === 'dark' ? 'rgba(84,191,219,0.4)' : 'rgba(15,127,159,0.4)'}` : 'none',
               }}
             >
               <span style={{ display: 'inline-flex', opacity: 0.9 }}><InternIcon size={12} /></span>
@@ -3753,8 +3888,8 @@ export default function FreeformScript() {
                 color: enabled ? (theme === 'dark' ? '#e6e6ea' : '#2c2c28') : (theme === 'dark' ? '#5c5c66' : '#b0a996'),
                 cursor: enabled ? 'pointer' : 'default',
               });
-              const scope: React.CSSProperties = { marginLeft: 'auto', fontFamily: 'ui-monospace, monospace', fontSize: 10.5, fontWeight: 500, color: theme === 'dark' ? '#6b6b74' : '#9a9488', maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
-              const gl = <span style={{ display: 'inline-flex', color: '#54bfdb', flexShrink: 0 }}><InternIcon size={12} /></span>;
+              const scope: React.CSSProperties = { marginLeft: 'auto', fontFamily: 'ui-monospace, monospace', fontSize: 10.5, fontWeight: 500, color: theme === 'dark' ? '#6b6b74' : '#736b5e', maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+              const gl = <span style={{ display: 'inline-flex', color: theme === 'dark' ? PEER_BLUE : PEER_BLUE_INK, flexShrink: 0 }}><InternIcon size={12} /></span>;
               return (
                 <>
                   {/* click-away backdrop */}
@@ -3763,9 +3898,9 @@ export default function FreeformScript() {
                     position: 'absolute', top: 32, right: 0, width: 296, zIndex: 1201, padding: 8,
                     background: theme === 'dark' ? '#1a1a1e' : '#fffdf7', borderRadius: 11,
                     border: `1px solid ${theme === 'dark' ? '#2e2e35' : '#e3dbcb'}`,
-                    boxShadow: '0 14px 40px rgba(0,0,0,0.4)',
+                    boxShadow: theme === 'dark' ? '0 14px 40px rgba(0,0,0,0.4)' : '0 14px 40px rgba(60,40,10,0.14)',
                   }}>
-                    <div style={{ padding: '6px 10px 10px', fontSize: 12, lineHeight: 1.55, color: theme === 'dark' ? '#8a8a93' : '#8a8578' }}>
+                    <div style={{ padding: '6px 10px 10px', fontSize: 12, lineHeight: 1.55, color: theme === 'dark' ? '#8a8a93' : '#736b5e' }}>
                       The peer reads your pages and measures them against what each scene is <b style={{ color: theme === 'dark' ? '#e6e6ea' : '#2c2c28', fontWeight: 600 }}>meant to do</b>. Notes land in the margin.
                     </div>
                     <button
@@ -3800,8 +3935,8 @@ export default function FreeformScript() {
           </div>
           <HoverTip
             text={bgBusy
-              ? 'Working your pages into the outline. Cards, cast and facts are being updated from what you have written.'
-              : 'Save now and work these pages into the outline: scene cards, cast and facts update from what you have written. Happens on its own as you write; this does it immediately.'}
+              ? 'Working your pages into the outline. Cards, characters and facts are being updated from what you have written.'
+              : 'Save now and work these pages into the outline: scene cards, characters and facts update from what you have written. Happens on its own as you write; this does it immediately.'}
             placement="bottom-left"
             accent="#ff8c42"
             width={240}
@@ -3815,7 +3950,7 @@ export default function FreeformScript() {
               <span
                 style={{
                   width: 11, height: 11, borderRadius: '50%', flexShrink: 0,
-                  border: '2px solid rgba(255,140,66,0.3)', borderTopColor: '#ff8c42',
+                  border: `2px solid ${theme === 'dark' ? 'rgba(255,140,66,0.3)' : 'rgba(194,65,12,0.3)'}`, borderTopColor: 'var(--tb-sync)',
                   display: 'inline-block', animation: 'ffspin 0.9s linear infinite',
                 }}
               />
@@ -3825,12 +3960,41 @@ export default function FreeformScript() {
           </HoverTip>
         </div>
       </div>
+      </div></div>
+
+      {/* Focus mode's only chrome: the way back, in the corner. Fades in as
+          the rest folds away. */}
+      <button
+        onClick={() => setIsFullscreen(false)}
+        title="Back to the full view (Esc)"
+        aria-label="Exit script-only view"
+        tabIndex={isFullscreen ? 0 : -1}
+        style={{
+          position: 'fixed', top: 14, right: 18, zIndex: 1200, width: 34, height: 34, borderRadius: 9,
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+          border: `1px solid ${theme === 'dark' ? '#2a2a30' : '#e3dbcb'}`,
+          background: theme === 'dark' ? 'rgba(19,19,22,0.92)' : 'rgba(255,253,247,0.92)',
+          color: theme === 'dark' ? '#a9a9b2' : '#6f6a5e',
+          boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+          opacity: isFullscreen ? 1 : 0, transform: isFullscreen ? 'scale(1)' : 'scale(0.9)',
+          pointerEvents: isFullscreen ? 'auto' : 'none',
+          transition: `opacity 200ms ease ${isFullscreen ? FOCUS_MS - 120 : 0}ms, transform 200ms ${FOCUS_EASE} ${isFullscreen ? FOCUS_MS - 120 : 0}ms`,
+        }}
+      >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d="M4 14h6v6" /><path d="M20 10h-6V4" /><path d="M14 10l7-7" /><path d="M3 21l7-7" />
+        </svg>
+      </button>
 
       {/* Body: left navigator (the outline, in shell form) + the editor. */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', position: 'relative' }}>
+        {/* FOCUS (script-only view): the outline rail folds to nothing by
+            animating its grid column, so the page slides over. */}
+        <div style={{ display: 'grid', gridTemplateColumns: isFullscreen ? '0fr' : '1fr', transition: `grid-template-columns ${FOCUS_MS}ms ${FOCUS_EASE}`, flexShrink: 0 }}>
+        <div style={{ minWidth: 0, display: 'flex', overflow: chromeClipped ? 'hidden' : 'visible', opacity: isFullscreen ? 0 : 1, transition: `opacity ${FOCUS_MS - 80}ms ease` }}>
         {/* Outline handle, collapsed state: a slim tab on the body's left edge. */}
         {!navOpen && (
-          <button onClick={toggleNav} title="Show the outline panel" className="ff-nav-handle" style={{ position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)', zIndex: 30, width: 17, height: 54, borderRadius: '0 9px 9px 0', border: `1px solid ${theme === 'dark' ? '#26262c' : '#e3dbcb'}`, borderLeft: 'none', background: theme === 'dark' ? '#131316' : '#fbf8f1', color: theme === 'dark' ? '#8a8a93' : '#8a8578', fontSize: 13, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: '2px 0 10px rgba(0,0,0,0.18)' }}>›</button>
+          <button onClick={toggleNav} title="Show the outline panel" className="ff-nav-handle" style={{ position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)', zIndex: 30, width: 17, height: 54, borderRadius: '0 9px 9px 0', border: `1px solid ${theme === 'dark' ? '#26262c' : '#e3dbcb'}`, borderLeft: 'none', background: theme === 'dark' ? '#131316' : '#fbf8f1', color: theme === 'dark' ? '#8a8a93' : '#736b5e', fontSize: 13, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: theme === 'dark' ? '2px 0 10px rgba(0,0,0,0.18)' : '2px 0 10px rgba(60,40,10,0.10)' }}>›</button>
         )}
         {/* Navigator rail — sequences as sections, scenes as rows. Shell, not
             pages: this is where scene-level graph state lives (status now;
@@ -3838,7 +4002,7 @@ export default function FreeformScript() {
         {navOpen && (
           <div data-tour="script-nav" style={{ width: navWidth, flexShrink: 0, position: 'relative', borderRight: `1px solid ${theme === 'dark' ? '#1f1f24' : '#e8e0d2'}`, background: theme === 'dark' ? '#0e0e10' : '#fbf8f1', fontFamily: 'system-ui, sans-serif' }}>
           {/* Outline handle, open state: rides the panel's right edge. */}
-          <button onClick={toggleNav} title="Hide the outline panel" className="ff-nav-handle" style={{ position: 'absolute', right: -12, top: '50%', transform: 'translateY(-50%)', zIndex: 30, width: 17, height: 54, borderRadius: 9, border: `1px solid ${theme === 'dark' ? '#26262c' : '#e3dbcb'}`, background: theme === 'dark' ? '#131316' : '#fbf8f1', color: theme === 'dark' ? '#8a8a93' : '#8a8578', fontSize: 13, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: '0 2px 10px rgba(0,0,0,0.22)' }}>‹</button>
+          <button onClick={toggleNav} title="Hide the outline panel" className="ff-nav-handle" style={{ position: 'absolute', right: -12, top: '50%', transform: 'translateY(-50%)', zIndex: 30, width: 17, height: 54, borderRadius: 9, border: `1px solid ${theme === 'dark' ? '#26262c' : '#e3dbcb'}`, background: theme === 'dark' ? '#131316' : '#fbf8f1', color: theme === 'dark' ? '#8a8a93' : '#736b5e', fontSize: 13, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: theme === 'dark' ? '0 2px 10px rgba(0,0,0,0.22)' : '0 2px 10px rgba(60,40,10,0.10)' }}>‹</button>
           <div style={{ position: 'absolute', inset: 0, overflowY: 'auto', padding: '10px 0 40px' }}>
             {/* Mode C — the draft read: the whole story with the peer. The
                 read-through register: the few big notes, or a clean bill. */}
@@ -4149,6 +4313,7 @@ export default function FreeformScript() {
           />
           </div>
         )}
+        </div></div>
 
         {/* THE screenwriting editor, lifted whole. ff-script-host scopes
             freeform-only overrides: the outline's scene-id badge (::after on
@@ -4172,15 +4337,15 @@ export default function FreeformScript() {
           @keyframes ffblink { 50% { opacity: 0.25; } }
           @keyframes ffqmorph { from { max-width: 0; opacity: 0; padding-left: 0; padding-right: 0; } to { max-width: 160px; opacity: 1; padding-left: 9px; padding-right: 9px; } }
           .ff-board-wrap { display: inline-flex; align-items: stretch; height: 24px; border-radius: 999px; overflow: hidden; border: 1px solid transparent; margin-left: -10px; transition: border-color 200ms ease-out; }
-          .ff-board-wrap.has-q { border-color: rgba(255,140,66,0.5); }
+          .ff-board-wrap.has-q { border-color: var(--tb-sync-bd); }
           .ff-board-link { display: inline-flex; align-items: center; padding: 0 10px; }
           .ff-board-wrap.has-q .ff-board-link:hover { background: rgba(255,140,66,0.1); }
-          .ff-board-q { display: inline-flex; align-items: center; height: 100%; margin: 0; padding: 0 9px; border: none; border-left: 1px solid rgba(255,140,66,0.4); border-radius: 0; overflow: hidden; max-width: 160px; cursor: pointer; font-family: inherit; font-size: 11.5px; font-weight: 700; color: #ff8c42; background: rgba(255,140,66,0.16); animation: ffqmorph 320ms cubic-bezier(0.32,0.72,0,1) both; }
-          .ff-board-q:hover { background: rgba(255,140,66,0.28); }
+          .ff-board-q { display: inline-flex; align-items: center; height: 100%; margin: 0; padding: 0 9px; border: none; border-left: 1px solid var(--tb-q-bd); border-radius: 0; overflow: hidden; max-width: 160px; cursor: pointer; font-family: inherit; font-size: 11.5px; font-weight: 700; color: var(--tb-sync); background: var(--tb-q-bg); animation: ffqmorph 320ms cubic-bezier(0.32,0.72,0,1) both; }
+          .ff-board-q:hover { background: var(--tb-q-bg-h); }
           @keyframes ffslidein { from { opacity: 0; transform: translateX(22px); } to { opacity: 1; transform: translateX(0); } }
           @keyframes ffcardin { from { opacity: 0; transform: translateX(-8px) scale(0.98); } to { opacity: 1; transform: none; } }
           .ff-nav-handle { transition: color 160ms, border-color 160ms, background 160ms, transform 160ms; }
-          .ff-nav-handle:hover { color: #ff8c42 !important; border-color: rgba(255,140,66,0.55) !important; background: rgba(255,140,66,0.08) !important; }
+          .ff-nav-handle:hover { color: var(--ff-acc) !important; border-color: var(--ff-acc-bd) !important; background: var(--ff-acc-bg) !important; }
           @keyframes ffcardout { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateX(-6px) scale(0.985); } }
           /* Pins ride inside the scroll container: make it the positioning
              context so the markers scroll natively with the pages (no shake).
@@ -4262,8 +4427,8 @@ export default function FreeformScript() {
           .ff-tb-seg-btn.on:hover { background: var(--tb-peer-bg-h); color: var(--tb-peer); }
           .ff-tb-count { font-size: 10px; font-weight: 700; line-height: 1; padding: 3px 5px; border-radius: 5px; font-variant-numeric: tabular-nums; background: var(--tb-hov); color: var(--tb-mut); }
           .ff-tb-seg-btn.on .ff-tb-count { background: var(--tb-peer-bg-h); color: var(--tb-peer); }
-          .ff-tb-sync { border: 1px solid rgba(255,140,66,0.5); background: rgba(255,107,53,0.12); color: #ff8c42; padding: 0 12px; }
-          .ff-tb-sync:hover { border-color: rgba(255,140,66,0.8); background: rgba(255,107,53,0.2); }
+          .ff-tb-sync { border: 1px solid var(--tb-sync-bd); background: var(--tb-sync-bg); color: var(--tb-sync); padding: 0 12px; }
+          .ff-tb-sync:hover { border-color: var(--tb-sync-bd-h); background: var(--tb-sync-bg-h); }
           /* Review DOCKET (the .ff-rv-* family). Theme values ride the --rv-*
              vars set inline on the panel root; hover states live here. */
           .ff-rv-row { display: flex; align-items: center; gap: 10px; padding: 10px 8px; cursor: pointer; transition: background 140ms; }
@@ -4286,7 +4451,7 @@ export default function FreeformScript() {
           .ff-rv-reopen { opacity: 0; transition: opacity 140ms; }
           .ff-rv-row:hover .ff-rv-reopen { opacity: 1; }
         `}</style>
-        <div className="ff-script-host" style={{ flex: 1, minHeight: 0, minWidth: 0, marginRight: reviewOpen ? 484 : 0, transition: 'margin-right 240ms cubic-bezier(0.32,0.72,0,1)' }}>
+        <div className="ff-script-host" style={{ flex: 1, minHeight: 0, minWidth: 0, marginRight: reviewOpen && !isFullscreen ? 484 : 0, transition: 'margin-right 240ms cubic-bezier(0.32,0.72,0,1)' }}>
           <ScriptEditor
             key={`${storyId ?? ''}:${reloadTick}`}
             onEditorReady={handleEditorReady}
@@ -4294,6 +4459,8 @@ export default function FreeformScript() {
             onThemeToggle={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
             isGenerating={false}
             isFullscreen={isFullscreen}
+            focusMode={isFullscreen}
+            hideSaveButton
             onFullscreen={() => setIsFullscreen(true)}
             onMinimize={() => setIsFullscreen(false)}
             onScenePositionsUpdate={() => {}}
@@ -4350,13 +4517,13 @@ export default function FreeformScript() {
           <span style={{ display: 'flex', alignItems: 'center', gap: 7, color: '#54bfdb', fontSize: 11.5, fontWeight: 700 }}>
             <InternIcon size={13} />The peer can read this
           </span>
-          <span style={{ color: theme === 'dark' ? '#8a8a93' : '#8a8578', fontSize: 11, lineHeight: 1.5 }}>
+          <span style={{ color: theme === 'dark' ? '#8a8a93' : '#736b5e', fontSize: 11, lineHeight: 1.5 }}>
             It measures your pages against what the scene is meant to do. Notes land right here.
           </span>
         </div>,
         canvasEl,
       )}
-      {(notesOpen || (reviewOpen && openNoteId != null)) && notesLoaded && allNotes.length > 0 && canvasEl && createPortal(
+      {!isFullscreen && (notesOpen || (reviewOpen && openNoteId != null)) && notesLoaded && allNotes.length > 0 && canvasEl && createPortal(
         (() => {
           const dark = theme === 'dark';
           const s = noteSurface(dark);
@@ -4477,14 +4644,14 @@ export default function FreeformScript() {
           : draftVerdict ? draftVerdict
           : (notesError || 'No notes yet. Use the peer button on a scene in the outline to read it.');
         return (
-          <div style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 870, maxWidth: 300, padding: '9px 12px', borderRadius: 9, fontFamily: 'system-ui, sans-serif', fontSize: 12, lineHeight: 1.45, display: 'flex', alignItems: 'center', gap: 8, background: dark ? 'rgba(20,20,23,0.96)' : 'rgba(255,255,255,0.98)', border: `1px solid ${notesError ? 'rgba(245,158,11,0.5)' : cleanBill ? 'rgba(84,191,219,0.5)' : (dark ? '#26262c' : '#e8e0d2')}`, boxShadow: '0 8px 26px rgba(0,0,0,0.28)', color: notesError ? '#f59e0b' : cleanBill ? PEER_BLUE : (dark ? '#c9c9d1' : '#555') }}>
+          <div style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 870, maxWidth: 300, padding: '9px 12px', borderRadius: 9, fontFamily: 'system-ui, sans-serif', fontSize: 12, lineHeight: 1.45, display: 'flex', alignItems: 'center', gap: 8, background: dark ? 'rgba(20,20,23,0.96)' : 'rgba(255,255,255,0.98)', border: `1px solid ${notesError ? 'rgba(245,158,11,0.5)' : cleanBill ? (dark ? 'rgba(84,191,219,0.5)' : 'rgba(15,127,159,0.5)') : (dark ? '#26262c' : '#e8e0d2')}`, boxShadow: dark ? '0 8px 26px rgba(0,0,0,0.28)' : '0 8px 26px rgba(60,40,10,0.12)', color: notesError ? '#f59e0b' : cleanBill ? (dark ? PEER_BLUE : PEER_BLUE_INK) : (dark ? '#c9c9d1' : '#555') }}>
             {spinning && <span style={{ width: 11, height: 11, borderRadius: '50%', border: '2px solid rgba(96,165,250,0.3)', borderTopColor: '#60a5fa', display: 'inline-block', animation: 'ffspin 0.9s linear infinite', flexShrink: 0 }} />}
             <span>{msg}</span>
             {dismissible && (
               <button
                 onClick={() => { if (cleanBill) setDraftVerdict(''); else setStatusToastDismissed(true); }}
                 title="Dismiss"
-                style={{ border: 'none', background: 'transparent', color: cleanBill ? PEER_BLUE : (dark ? '#9a9aa4' : '#999'), fontSize: 13, fontWeight: 700, cursor: 'pointer', padding: '0 2px', flexShrink: 0, marginLeft: 'auto' }}
+                style={{ border: 'none', background: 'transparent', color: cleanBill ? (dark ? PEER_BLUE : PEER_BLUE_INK) : (dark ? '#9a9aa4' : '#736b5e'), fontSize: 13, fontWeight: 700, cursor: 'pointer', padding: '0 2px', flexShrink: 0, marginLeft: 'auto' }}
               >×</button>
             )}
           </div>
@@ -4494,7 +4661,7 @@ export default function FreeformScript() {
       {/* Step 8 — PASSES (§4b): the "Review with the peer" session. Work the
           notes down one altitude at a time, big-picture first (Jack Epps Jr's
           Pass Method): Structure -> Character -> Scene -> Dialogue. */}
-      {reviewOpen && (() => {
+      {reviewOpen && !isFullscreen && (() => {
         const dark = theme === 'dark';
         const s = noteSurface(dark);
         // DOCKET entries: active notes + this session's settled rows (struck,
@@ -5070,7 +5237,7 @@ export default function FreeformScript() {
               )}
               {cast.length > 0 && (
                 <div style={{ marginBottom: 10 }}>
-                  <div style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5, color: dark ? '#6b6b74' : '#999', marginBottom: 4 }}>Cast</div>
+                  <div style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5, color: dark ? '#6b6b74' : '#999', marginBottom: 4 }}>Characters</div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
                     {cast.map((c) => (
                       <span key={c.id} style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 999, background: dark ? 'rgba(212,175,55,0.12)' : 'rgba(180,140,20,0.10)', color: dark ? '#d4af37' : '#8a6d1a', border: `1px solid ${dark ? 'rgba(212,175,55,0.35)' : 'rgba(180,140,20,0.3)'}` }}>

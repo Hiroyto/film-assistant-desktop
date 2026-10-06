@@ -56,7 +56,12 @@
 export type ScriptLineType =
   | 'title' | 'scene' | 'description' | 'character' | 'dialogue' | 'parenthetical' | 'transition';
 
-export interface PdfTextItem { str: string; x: number; y: number; w: number }
+export interface PdfTextItem {
+  str: string; x: number; y: number; w: number;
+  /** The paragraph this run belongs to, from a TAGGED PDF's structure tree
+   *  (pdfText.ts). Absent on untagged PDFs. */
+  para?: string;
+}
 export interface PdfPageItems { width: number; height: number; items: PdfTextItem[] }
 
 export interface ScriptBlock {
@@ -79,6 +84,10 @@ export interface ClassifyOptions {
   /** Column roles read from the whole document (documentRoles), handed to a
    *  slice too short to find its own. null = treat as flat text. */
   roles?: IndentRoles | null;
+  /** The text is in the TYPED layout (an FDX / Fade In import): every
+   *  element sits on its own exact column, so the columns ARE the types and
+   *  nothing is guessed. See classifyTypedText. */
+  typed?: boolean;
 }
 
 // ---- shared grammar --------------------------------------------------------
@@ -111,7 +120,7 @@ const isCapsish = (t: string) => {
 
 // ---- Layer 0: positioned items -> physical lines -> indented text ----------
 
-interface PhysicalLine { text: string; x: number; y: number; page: number }
+interface PhysicalLine { text: string; x: number; y: number; page: number; para?: string; /** right edge of the last run */ right: number }
 
 /** Group a page's items into physical lines by y (screenplay PDFs are a single
  *  column, so same-baseline items are one line), items joined in x order. */
@@ -130,8 +139,9 @@ export function linesFromPdfPages(pages: PdfPageItems[]): { lines: PhysicalLine[
       rows.get(key)!.push(it);
     }
     const charW = median(widths) || 7.2;
-    for (const [y, items] of rows) {
-      items.sort((a, b) => a.x - b.x);
+    for (const [y, row] of rows) {
+      row.sort((a, b) => a.x - b.x);
+      const items = stripMarginMarks(row, page.width, median(widths) || 7.2);
       let text = '';
       let cursor: number | null = null;
       let prev: PdfTextItem | null = null;
@@ -149,17 +159,26 @@ export function linesFromPdfPages(pages: PdfPageItems[]): { lines: PhysicalLine[
       if (!t) continue;
       const x = items[0].x;
       // Positional page furniture: bare numbers / CONTINUED in the top or
-      // bottom margin bands never reach the text.
+      // bottom margin bands never reach the text, scene numbers and all
+      // ("12 CONTINUED: 12" heads a shooting script's page).
       const topBand = y > page.height * 0.93;
       const bottomBand = y < page.height * 0.06;
-      if ((topBand || bottomBand) && PAGE_ARTIFACT.test(t)) continue;
-      lines.push({ text: t, x, y, page: pi });
+      const bare = t.replace(/^\d{1,4}[A-Z]{0,2}\.?\s+/, '').replace(/(\s+\d{1,4}[A-Z]{0,2}\.?)+\s*$/, '');
+      if ((topBand || bottomBand) && (PAGE_ARTIFACT.test(t) || PAGE_ARTIFACT.test(bare))) continue;
+      if (/^\(?CONTINUED\)?:?$/i.test(bare)) continue;
+      const para = items.find((it) => it.para)?.para;
+      const right = Math.max(...items.map((it) => it.x + (it.w || it.str.length * charW)));
+      lines.push({ text: t, x, y, page: pi, right, ...(para ? { para } : {}) });
     }
   });
   // Reading order: page, then top-to-bottom (pdf y origin is bottom-left).
   lines.sort((a, b) => a.page - b.page || b.y - a.y);
   const charWidth = median(widths) || 7.2;
-  const leftMargin = lines.length ? Math.min(...lines.map((l) => l.x)) : 0;
+  // The body's left edge: the leftmost x a real share of lines sit on, not
+  // the leftmost mark on the page. One stray margin mark (a scene number on
+  // a heading with no INT/EXT, a revision letter) used to become the edge and
+  // shift every column for the whole document. Lines left of it clamp to 0.
+  const leftMargin = bodyLeftEdge(lines.map((l) => l.x));
   const gaps: number[] = [];
   for (let i = 1; i < lines.length; i++) {
     if (lines[i].page !== lines[i - 1].page) continue;
@@ -167,6 +186,48 @@ export function linesFromPdfPages(pages: PdfPageItems[]): { lines: PhysicalLine[
     if (g > 0.5) gaps.push(g);
   }
   return { lines, charWidth, leftMargin, lineGap: baseGap(gaps) || 12 };
+}
+
+// SCENE NUMBERS (2026-10-02, Ben's Final Draft PDF of Heads and Tails came
+// in with every slugline as "1 EXT. STREET - NIGHT 1 1"): Final Draft prints
+// a slugline's number in BOTH margins. Kept, they hid every slugline from the
+// scene matchers (all anchored at INT/EXT) and the left-margin number became
+// the page's left edge, shifting every column. Scene numbers ride only on
+// sluglines, so they are stripped only where what is left is one; revision
+// asterisks in the right margin go everywhere.
+const SCENE_NO = /^\d{1,4}[A-Z]{0,2}\.?$/;
+
+function stripMarginMarks(items: PdfTextItem[], pageWidth: number, charW: number): PdfTextItem[] {
+  let body = items;
+  while (body.length > 1 && /^\*+$/.test(body[body.length - 1].str.trim()) && body[body.length - 1].x > pageWidth * 0.75) {
+    body = body.slice(0, -1);
+  }
+  // A margin number stands APART from the heading (Final Draft prints them
+  // half an inch out); a number the writer typed ("EXT. HIGHWAY 61") sits
+  // one space from its words and stays.
+  const apart = (a: PdfTextItem, b: PdfTextItem) => b.x - (a.x + (a.w || a.str.length * charW)) >= charW * 2.5;
+  let lead = 0;
+  while (lead < body.length - 1 && SCENE_NO.test(body[lead].str.trim()) && apart(body[lead], body[lead + 1])) lead++;
+  // The right margin may carry the number twice: the RUN of numbers must
+  // stand apart from the heading's last word.
+  let tail = body.length;
+  while (tail - 1 > lead && SCENE_NO.test(body[tail - 1].str.trim())) tail--;
+  if (tail < body.length && !apart(body[tail - 1], body[tail])) tail = body.length;
+  if (lead === 0 && tail === body.length) return body;
+  const rest = body.slice(lead, tail).map((it) => it.str).join(' ').trim();
+  return SLUG_LINE.test(rest) ? body.slice(lead, tail) : body;
+}
+
+function bodyLeftEdge(xs: number[]): number {
+  if (!xs.length) return 0;
+  const sorted = [...xs].sort((a, b) => a - b);
+  const floor = Math.max(3, Math.ceil(xs.length * 0.05));
+  for (let i = 0; i < sorted.length; i++) {
+    let n = 0;
+    for (let j = i; j < sorted.length && sorted[j] - sorted[i] <= 2; j++) n++;
+    if (n >= floor) return sorted[i];
+  }
+  return sorted[0];
 }
 
 /** The SINGLE-line spacing: the smallest COMMON vertical gap, not the
@@ -192,24 +253,116 @@ function baseGap(gaps: number[]): number {
   return base ? base.center : median(gaps);
 }
 
+/** A vertical gap that opens a new paragraph. Not "a whole blank line": only
+ *  Final Draft-style PDFs space paragraphs by a full line. Word and Docs
+ *  space them by paragraph spacing (Word's default is ~1.5x the line pitch),
+ *  and the old 1.7x cutoff fused every action paragraph on the page into one
+ *  block (Paul, 2026-09-23, a Word-made pilot). Lines inside a paragraph sit
+ *  on the base pitch within a point or two, so anything 30% and 3pt past it
+ *  is a paragraph break. */
+const isParagraphGap = (gap: number, lineGap: number) =>
+  gap > lineGap * 1.3 && gap - lineGap >= 3;
+
 /** The canonical text: each physical line indented by its column (leading
  *  spaces = x offset in character cells), vertical gaps become blank lines.
  *  This is the ONE text braindump prose, source spans, and the classifier
  *  share; the layout signal survives flattening because it IS the text. */
 export function pdfPagesToIndentedText(pages: PdfPageItems[]): string {
   const { lines, charWidth, leftMargin, lineGap } = linesFromPdfPages(pages);
+  const indentOf = (l: PhysicalLine) => Math.max(0, Math.min(60, Math.round((l.x - leftMargin) / charWidth)));
+  const useTags = trustParagraphTags(lines, indentOf, lineGap);
+  const colRight = columnRightEdges(lines, indentOf);
   const out: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
     if (i > 0) {
       const prev = lines[i - 1];
+      // PAGE BREAKS (2026-10-02, the import eval: a speech that ran over a
+      // page came back as two). A Final Draft speech split carries (MORE) at
+      // the foot and CUE (CONT'D) at the head: drop both, the speech goes on.
+      if (prev.page !== l.page && MORE_LINE.test(prev.text) && CONTD_CUE.test(l.text)) {
+        if (out.length && MORE_LINE.test(out[out.length - 1].trim())) out.pop();
+        continue;
+      }
       const gap = prev.page === l.page ? prev.y - l.y : Infinity;
-      if (gap > lineGap * 1.7) out.push('');
+      if (prev.page !== l.page && continuesOverPage(prev, l, indentOf)) { /* one paragraph */ }
+      else if (isParagraphGap(gap, lineGap)) out.push('');
+      // A TAGGED PDF names its paragraphs: a new one in the SAME column is a
+      // break geometry may not see (a Docs script typed with no paragraph
+      // spacing). Only within a column: a column change already separates
+      // cue, wryly and speech, and a blank inside a speech would end it.
+      else if (useTags && l.para && prev.para && l.para !== prev.para && Math.abs(indentOf(l) - indentOf(prev)) <= 1) out.push('');
+      // WRAP INVARIANT, for untagged PDFs with no paragraph spacing (a Docs
+      // script typed with one Enter per paragraph): word wrap only breaks a
+      // line when the next word does not fit, so a line that stops short
+      // with room for the next line's first word ended its paragraph.
+      else if ((!useTags || !l.para || !prev.para) && prev.page === l.page && endsShort(prev, l, indentOf, colRight, charWidth)) out.push('');
     }
-    const indent = Math.max(0, Math.min(60, Math.round((l.x - leftMargin) / charWidth)));
-    out.push(' '.repeat(indent) + l.text);
+    out.push(' '.repeat(indentOf(l)) + l.text);
   }
   return out.join('\n').trim();
+}
+
+/** Each column's wrap edge: the 90th-percentile right edge of its lines
+ *  (a column needs 6 lines before it has an edge worth trusting). */
+function columnRightEdges(lines: PhysicalLine[], indentOf: (l: PhysicalLine) => number): Map<number, number> {
+  const byCol = new Map<number, number[]>();
+  for (const l of lines) {
+    const c = indentOf(l);
+    if (!byCol.has(c)) byCol.set(c, []);
+    byCol.get(c)!.push(l.right);
+  }
+  const out = new Map<number, number>();
+  for (const [c, rs] of byCol) {
+    if (rs.length < 6) continue;
+    const sorted = [...rs].sort((a, b) => a - b);
+    out.set(c, sorted[Math.floor(sorted.length * 0.9)]);
+  }
+  return out;
+}
+
+function endsShort(prev: PhysicalLine, l: PhysicalLine, indentOf: (l: PhysicalLine) => number, colRight: Map<number, number>, charWidth: number): boolean {
+  if (indentOf(prev) !== indentOf(l)) return false;
+  const edge = colRight.get(indentOf(prev));
+  if (edge === undefined) return false;
+  const firstWord = l.text.split(/\s+/)[0] ?? '';
+  // Room left on the line > a space + the next word, with half a cell slack.
+  return edge - prev.right > (firstWord.length + 1.5) * charWidth;
+}
+
+const MORE_LINE = /^\(\s*MORE\s*\)$/i;
+const CONTD_CUE = /^[A-Z0-9 .'’\-#&]+(\s*\([^)]{1,24}\))*\s*\(\s*CONT['’]?D\s*\)\s*$/;
+
+/** Does a paragraph run on from the foot of one page to the head of the
+ *  next? Word and Docs break paragraphs anywhere, mid-sentence. Tags cannot
+ *  say (pdf.js builds the structure tree per page, so one paragraph has a
+ *  different key on each side); a line that stops mid-sentence with the next
+ *  line in the same column is one paragraph. Final Draft only breaks action
+ *  at a sentence end and speech with (MORE), so its pages never trip this. */
+function continuesOverPage(prev: PhysicalLine, l: PhysicalLine, indentOf: (l: PhysicalLine) => number): boolean {
+  return Math.abs(indentOf(prev) - indentOf(l)) <= 1 && !/([.!?]["'”’)\]]*|:|--|—)$/.test(prev.text);
+}
+
+/** Are this PDF's paragraph tags worth believing? Most lines must carry one,
+ *  and they must not split ordinary wrapped lines: a generator that tags
+ *  every LINE as a paragraph would shred each action block. The test pairs
+ *  are lines that geometry says continue a paragraph after a near-full line
+ *  in the same column; if the tags break most of them, they are noise. */
+function trustParagraphTags(lines: PhysicalLine[], indentOf: (l: PhysicalLine) => number, lineGap: number): boolean {
+  if (!lines.length || lines.filter((l) => l.para).length < lines.length * 0.8) return false;
+  const widest = new Map<number, number>();
+  for (const l of lines) widest.set(indentOf(l), Math.max(widest.get(indentOf(l)) ?? 0, l.text.length));
+  let pairs = 0;
+  let split = 0;
+  for (let i = 1; i < lines.length; i++) {
+    const a = lines[i - 1];
+    const b = lines[i];
+    if (a.page !== b.page || indentOf(a) !== indentOf(b) || isParagraphGap(a.y - b.y, lineGap)) continue;
+    if (a.text.length < (widest.get(indentOf(a)) ?? 0) * 0.8) continue;
+    pairs++;
+    if (a.para !== b.para) split++;
+  }
+  return pairs < 5 || split / pairs <= 0.5;
 }
 
 function median(xs: number[]): number {
@@ -619,6 +772,60 @@ export function classifyParagraphs(texts: string[], opts: { inScript?: boolean }
 const escapeHtml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+// ---- typed layout (FDX / Fade In imports) -----------------------------------
+
+/** Exact columns of the TYPED layout. A Final Draft or Fade In file states
+ *  every element's type, so the import text gives each type a column of its
+ *  own and the classifier reads them back instead of guessing (guessing cost
+ *  title-case cues, outlines and non-INT/EXT headings, 2026-10-02: 24 of
+ *  Ben's FDX files). Action sits ONE column right of sluglines: invisible to
+ *  every layout reader (indent clusters bucket within 2), decisive here.
+ *  MIRROR: freeform-workflow-app/lib/screenplay-parse.mjs. */
+export const TYPED_COLUMNS: Record<ScriptLineType, number> = {
+  scene: 0, description: 1, dialogue: 10, parenthetical: 16, character: 22, title: 30, transition: 45,
+};
+
+/** Typed-layout text -> blocks. A block is a run of lines on one column; a
+ *  blank line or a column change starts the next. The text's FIRST line has
+ *  always lost its indent (the import trims its text, the window splitter
+ *  trims each window), so it reads from content: a slugline is a scene, a
+ *  line heading a title page is title, anything else action. */
+export function classifyTypedText(text: string): ScriptBlock[] {
+  const byCol = new Map<number, ScriptLineType>(
+    (Object.entries(TYPED_COLUMNS) as Array<[ScriptLineType, number]>).map(([t, c]) => [c, t]),
+  );
+  const lines = toLines(text);
+  const firstIdx = lines.findIndex((l) => !l.blank);
+  const blocks: ScriptBlock[] = [];
+  let cur: ScriptBlock | null = null;
+  lines.forEach((l, i) => {
+    if (l.blank) { cur = null; return; }
+    let type = byCol.get(l.indent) ?? 'description';
+    if (i === firstIdx && l.indent === 0 && !SLUG_LINE.test(l.text)) {
+      const next = lines.slice(i + 1).find((x) => !x.blank);
+      type = next && byCol.get(next.indent) === 'title' ? 'title' : 'description';
+    }
+    // Title lines are one block each (the title page is laid out per line).
+    if (cur && cur.type === type && type !== 'title') { cur.text += ' ' + l.text; return; }
+    cur = { type, text: l.text };
+    blocks.push(cur);
+  });
+  return blocks;
+}
+
+/** Does this text use the TYPED layout? For readers that hold the stored
+ *  prose but not the job's layout flag (the script view's span fallback,
+ *  when the server's page write did not land). The signature no PDF makes:
+ *  sluglines at column 0 and action exactly ONE column right of them (Layer 0
+ *  puts both at the same x). */
+export function isTypedLayout(text: string): boolean {
+  const lines = toLines(text).slice(1).filter((l) => !l.blank); // line one is trimmed
+  const slugAt0 = lines.filter((l) => l.indent === 0 && SLUG_LINE.test(l.text)).length;
+  const at1 = lines.filter((l) => l.indent === 1).length;
+  const actionAt0 = lines.filter((l) => l.indent === 0 && !SLUG_LINE.test(l.text)).length;
+  return slugAt0 >= 1 && at1 >= 2 && at1 > actionAt0 * 4;
+}
+
 export function scriptBlocksToHtml(blocks: ScriptBlock[]): string {
   return blocks
     .map((b) => `<p data-line-type="${b.type}">${escapeHtml(b.text)}</p>`)
@@ -632,7 +839,7 @@ export function scriptParseResidue(blocks: ScriptBlock[]): { blocks: number; unc
 }
 
 export function scriptTextToHtml(text: string, opts: ClassifyOptions = {}): string {
-  const blocks = repairScriptBlocks(classifyScriptText(text, opts));
+  const blocks = opts.typed ? classifyTypedText(text) : repairScriptBlocks(classifyScriptText(text, opts));
   const residue = scriptParseResidue(blocks);
   if (residue.uncertain > 0) {
     // eslint-disable-next-line no-console

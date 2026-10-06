@@ -216,6 +216,11 @@ export interface ExtractBraindumpJobFields {
   /** Set to 'screenplay' for PDF/script imports so the backend applies the
    *  screenplay-specific segmentation prompt. Omitted for prose braindumps. */
   sourceFormat?: 'screenplay';
+  /** 'typed' = the prose is in the TYPED layout (an FDX / Fade In import,
+   *  screenplayParse TYPED_COLUMNS): the server writes pages from the
+   *  columns as stated types, no guessing. Omitted = layout read from the
+   *  text (PDF imports). */
+  layout?: 'typed';
   /** Placement Control v1c — the dock intent. `{ targetId }` places this
    *  dump's new cards at the target (inside a Sequence / after an Event);
    *  'aside' parks them all in the strip. Omitted = the system decides. */

@@ -166,7 +166,10 @@ const Toolbar: React.FC<ToolbarProps> = ({
 
   return (
     <>
-      <div className="screenplay-toolbar">
+      {/* Light carries its own theme class: this bar sits OUTSIDE the
+          .screenplay-content-area that ScriptEditor themes, and the light rules
+          in scripts.css key off it (solid colors instead of opacity). */}
+      <div className={`screenplay-toolbar${editorTheme === "light" ? " light-theme" : ""}`}>
         <div className="toolbar-group">
           {formatOptions.map(({ type, label }, index) => {
             const isActive = activeLineType === type;
@@ -176,7 +179,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
                 className={`toolbar-button${isActive ? " active" : ""}`}
                 onClick={() => applyFormat(type)}
                 title={`${label} (Ctrl+K, ${index + 1})`}
-                style={isActive ? { opacity: 1, fontWeight: 600 } : { opacity: 0.6 }}
+                style={isActive ? { opacity: 1, fontWeight: 600 } : editorTheme === "light" ? undefined : { opacity: 0.6 }}
               >
                 <span style={{ fontSize: 12 }}>{label}</span>
               </div>
@@ -188,7 +191,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
             className="toolbar-button"
             onClick={() => setPaletteOpen(p => !p)}
             title="Format palette (Ctrl+K)"
-            style={{ opacity: 0.4, fontSize: 11, letterSpacing: "0.05em" }}
+            style={{ opacity: editorTheme === "light" ? 1 : 0.4, fontSize: 11, letterSpacing: "0.05em" }}
           >
             <span style={{ fontSize: 11 }}>⌘K</span>
           </div>
@@ -210,18 +213,20 @@ const Toolbar: React.FC<ToolbarProps> = ({
               </div>
             )
             : onFullscreen && (
-              <div className="toolbar-button" onClick={onFullscreen} title="Enter Fullscreen">
+              <div className="toolbar-button" onClick={onFullscreen} title="Script only (Esc to return)">
                 <Maximize2 size={18} />
               </div>
             )}
 
-          <div
-            className="toolbar-button"
-            onClick={onSave}
-            title="Save Script (Ctrl+S)"
-          >
-            <Save size={18} />
-          </div>
+          {onSave && (
+            <div
+              className="toolbar-button"
+              onClick={onSave}
+              title="Save Script (Ctrl+S)"
+            >
+              <Save size={18} />
+            </div>
+          )}
         </div>
       </div>
 
@@ -229,6 +234,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
       {paletteOpen && (
         <div
           ref={paletteRef}
+          data-ff-popup="format-palette"
           style={{
             position: "fixed",
             top: "50%",

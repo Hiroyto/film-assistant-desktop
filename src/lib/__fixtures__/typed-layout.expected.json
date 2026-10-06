@@ -1,0 +1,90 @@
+[
+ {
+  "type": "title",
+  "text": "TIDE GAUGE"
+ },
+ {
+  "type": "title",
+  "text": "Written by"
+ },
+ {
+  "type": "title",
+  "text": "A. Writer"
+ },
+ {
+  "type": "title",
+  "text": "writer@example.com"
+ },
+ {
+  "type": "scene",
+  "text": "EXT. HARBOUR WALL - DAWN"
+ },
+ {
+  "type": "description",
+  "text": "Gulls wheel over a slate sea. The tide is out and the boats lie on their sides in the mud, keels to the sky, ropes slack."
+ },
+ {
+  "type": "description",
+  "text": "1) Mara walks the wall"
+ },
+ {
+  "type": "description",
+  "text": "a) she does not look at the boats"
+ },
+ {
+  "type": "character",
+  "text": "BOY"
+ },
+ {
+  "type": "parenthetical",
+  "text": "(calling)"
+ },
+ {
+  "type": "dialogue",
+  "text": "You missed the tide again!"
+ },
+ {
+  "type": "character",
+  "text": "MARA"
+ },
+ {
+  "type": "dialogue",
+  "text": "It missed me."
+ },
+ {
+  "type": "dialogue",
+  "text": "It always does."
+ },
+ {
+  "type": "description",
+  "text": "CLOSE ON THE GAUGE"
+ },
+ {
+  "type": "transition",
+  "text": "CUT TO:"
+ },
+ {
+  "type": "scene",
+  "text": "OPENING SCENE"
+ },
+ {
+  "type": "description",
+  "text": "Nets hang like weather."
+ },
+ {
+  "type": "character",
+  "text": "MARA (V.O.)"
+ },
+ {
+  "type": "parenthetical",
+  "text": "(quiet)"
+ },
+ {
+  "type": "parenthetical",
+  "text": "(beat)"
+ },
+ {
+  "type": "dialogue",
+  "text": "Forty years."
+ }
+]

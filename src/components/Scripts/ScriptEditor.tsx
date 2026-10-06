@@ -58,6 +58,12 @@ interface ScriptEditorProps {
   onScenePositionsUpdate: (positions: ScenePosition[]) => void;
   /** Called when the user explicitly triggers a save (toolbar button / Ctrl+S) */
   onSave?: () => void;
+  /** Script-only view: the formatting toolbar folds away with the rest of
+   *  the page chrome (the freeform script page's focus mode). Keyboard
+   *  shortcuts still set element types. */
+  focusMode?: boolean;
+  /** No Save button in the toolbar (the page autosaves; Ctrl+S still works). */
+  hideSaveButton?: boolean;
   /**
    * Ref forwarded from Scripts.tsx so it can call getAllHTML() to collect
    * every page's content when saving — not just the active page.
@@ -153,7 +159,7 @@ const ScriptEditor: React.FC<ScriptEditorProps> = ({
   onFullscreen, onMinimize, onScenePositionsUpdate, characters,
   onAddCharacter, onUpdateCharacter, onDeleteCharacter,
   token, storyData, storyId, setUser, onSave, initialContent, isSceneDirty, getSceneTaggedContent, markSceneExtracted, getAllHTMLRef, getAllEditorsRef, onImportExport, charactersOpen,
-  showAIRail = true, extraExtensions
+  showAIRail = true, extraExtensions, focusMode = false, hideSaveButton = false
 }) => {
   const [activeEditor, setActiveEditor] = useState<Editor | null>(null);
   const [, setEditorVersion] = useState(0);
@@ -476,13 +482,23 @@ const ScriptEditor: React.FC<ScriptEditorProps> = ({
       `}</style>
 
       <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, minHeight: 0, height: "100%" }}>
-        <div className="screenplay-toolbar-area" style={{ flexShrink: 0, minWidth: 0, overflow: "hidden" }}>
-          <div style={{ width: "100%", overflow: "hidden" }}>
+        {/* Folds by animating its grid row to 0fr, so the page below glides
+            up instead of jumping. */}
+        <div
+          className="screenplay-toolbar-area"
+          style={{
+            flexShrink: 0, minWidth: 0, overflow: "hidden", display: "grid",
+            gridTemplateRows: focusMode ? "0fr" : "1fr", opacity: focusMode ? 0 : 1,
+            transition: "grid-template-rows 320ms cubic-bezier(0.32,0.72,0,1), opacity 220ms ease",
+          }}
+          aria-hidden={focusMode || undefined}
+        >
+          <div style={{ width: "100%", overflow: "hidden", minHeight: 0 }}>
             <Toolbar
               editor={activeEditor} onFullscreen={onFullscreen} onMinimize={onMinimize}
               isFullscreen={isFullscreen} editorTheme={editorTheme} onThemeToggle={onThemeToggle}
               characters={characters} onAddCharacter={onAddCharacter}
-              onUpdateCharacter={onUpdateCharacter} onDeleteCharacter={onDeleteCharacter} onSave={onSave}
+              onUpdateCharacter={onUpdateCharacter} onDeleteCharacter={onDeleteCharacter} onSave={hideSaveButton ? undefined : onSave}
             />
           </div>
         </div>

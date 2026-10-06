@@ -21,6 +21,8 @@ import {
   scriptTextToHtml,
   classifyParagraphs,
   documentRoles,
+  classifyTypedText,
+  isTypedLayout,
   type PdfPageItems,
   type ScriptBlock,
 } from './screenplayParse';
@@ -460,5 +462,210 @@ describe('html output', () => {
     expect(html).toContain('data-line-type="description"');
     expect(html).toContain('<p data-line-type="character">BOB</p>');
     expect(html).toContain('<p data-line-type="dialogue">Hello.</p>');
+  });
+});
+
+// Paul, 2026-09-23: a Word-made PDF spaces paragraphs by paragraph spacing
+// (~1.5x the line pitch), not a whole blank line. The old 1.7x cutoff fused
+// every action paragraph on the page into one block. Synthetic page, Word
+// geometry: Courier 12pt at 1.08 spacing (14.7pt pitch) plus 8pt after.
+describe('paragraph spacing (Word / Docs PDFs)', () => {
+  const PITCH = 14.7;
+  const PARA = PITCH + 8;
+  const ACTION_X = 72, DIALOGUE_X = 144, CUE_X = 252;
+  const CW = 7.2;
+  const rows: Array<[number, string] | null> = [
+    [ACTION_X, 'EXT. HARBOUR WALL - DAWN'],
+    null,
+    [ACTION_X, 'Gulls wheel over a slate sea. The tide is out and the'],
+    [ACTION_X, 'boats lie on their sides in the mud.'],
+    null,
+    [ACTION_X, 'MARA, 30s, walks the wall with a bucket of bait.'],
+    null,
+    [ACTION_X, 'A BOY on the slipway waves. She does not wave back.'],
+    null,
+    [CUE_X, 'BOY'],
+    [DIALOGUE_X, 'You missed the tide again.'],
+    null,
+    [ACTION_X, 'She keeps walking.'],
+  ];
+  const items: PdfPageItems['items'] = [];
+  let y = 720;
+  for (const r of rows) {
+    if (r === null) { y -= PARA - PITCH; continue; }
+    items.push({ str: r[1], x: r[0], y, w: r[1].length * CW });
+    y -= PITCH;
+  }
+  // Enough lines that the base pitch is unambiguous (real pages are long).
+  for (let i = 0; i < 6; i++) {
+    items.push({ str: `Line ${i} of a long closing paragraph that wraps on.`, x: ACTION_X, y, w: 50 * CW });
+    y -= PITCH;
+  }
+  const blocks = parse(pdfPagesToIndentedText([{ width: 612, height: 792, items }]));
+  const actions = blocks.filter((b) => b.type === 'description').map((b) => b.text);
+
+  it('each action paragraph stays its own block', () => {
+    expect(actions[0]).toBe('Gulls wheel over a slate sea. The tide is out and the boats lie on their sides in the mud.');
+    expect(actions[1]).toBe('MARA, 30s, walks the wall with a bucket of bait.');
+    expect(actions[2]).toBe('A BOY on the slipway waves. She does not wave back.');
+  });
+
+  it('wrapped lines inside a paragraph are not split', () => {
+    expect(actions.some((t) => t.startsWith('She keeps walking.'))).toBe(true);
+    expect(actions.every((t) => !/^boats lie/.test(t))).toBe(true);
+  });
+
+  it('speech still reads as speech', () => {
+    const i = blocks.findIndex((b) => b.type === 'character' && b.text === 'BOY');
+    expect(blocks[i + 1]).toEqual({ type: 'dialogue', text: 'You missed the tide again.' });
+  });
+});
+
+// Typed layout (FDX / Fade In imports). The SAME fixture + expectation as the
+// server eval (tools/screenplay-parse-eval.mjs): written by blocksToIndentedText.
+describe('typed layout (layout: typed)', () => {
+  const text = fixture('typed-layout.txt');
+  const want = JSON.parse(fixture('typed-layout.expected.json')) as ScriptBlock[];
+  const pairs = (bs: ScriptBlock[]) => bs.map((b) => [b.type, b.text]);
+
+  it('every stated type reads back exactly', () => {
+    expect(pairs(classifyTypedText(text))).toEqual(pairs(want));
+  });
+
+  it('a trimmed first line (title page) still reads back', () => {
+    expect(pairs(classifyTypedText(text.trim()))).toEqual(pairs(want));
+  });
+
+  it('the typed layout is recognisable from the text; PDF text is not', () => {
+    expect(isTypedLayout(text)).toBe(true);
+    for (const f of ['shawshank-24pp-indented.txt', 'pilot-scene1-indented.txt', 'shawshank-24pp-flat.txt', 'tide-gauge-flat.txt']) {
+      expect(isTypedLayout(fixture(f))).toBe(false);
+    }
+    expect(isTypedLayout(pdfPagesToIndentedText(JSON.parse(fixture('test2-pdf-items.json'))))).toBe(false);
+  });
+
+  it('a trimmed opening action line stays action', () => {
+    const b = classifyTypedText('A phone rings.\n\nEXT. ROAD - NIGHT');
+    expect(b.map((x) => x.type)).toEqual(['description', 'scene']);
+  });
+
+  it('layout readers still see one action column (sluglines + action)', () => {
+    const roles = documentRoles(text);
+    expect(roles?.action?.[0]).toBeLessThanOrEqual(0);
+    expect(roles?.action?.[1]).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// Layer 0 paragraph signals beyond spacing (2026-10-02, the PDF import eval
+// over Ben's FDX scripts printed five ways). Synthetic pages, Courier 12pt.
+describe('Layer 0: tags, page breaks, the wrap invariant', () => {
+  const CW = 7.2;
+  type Row = [x: number, text: string, para?: string];
+  // Rows top-down at a fixed pitch; null = a page break.
+  const pages = (rows: Array<Row | null>, pitch = 13.8): PdfPageItems[] => {
+    const out: PdfPageItems[] = [{ width: 612, height: 792, items: [] }];
+    let y = 700;
+    for (const r of rows) {
+      if (r === null) { out.push({ width: 612, height: 792, items: [] }); y = 700; continue; }
+      out[out.length - 1].items.push({ str: r[1], x: r[0], y, w: r[1].length * CW, ...(r[2] ? { para: r[2] } : {}) });
+      y -= pitch;
+    }
+    return out;
+  };
+  const A = 72, D = 144, C = 252;
+  const action = (t: string) => parse(t).filter((b) => b.type === 'description').map((b) => b.text);
+  // Long enough lines that the wrap edge is known (a column needs 6 lines).
+  // One real paragraph: six full-width wrapped lines and a short last line.
+  const filler: Row[] = [
+    ...Array.from({ length: 6 }, (_, i) => [A, `Filler line ${i} runs right out to the full width of the column`, 'f'] as Row),
+    [A, 'and stops.', 'f'],
+  ];
+  const slug: Row = [A, 'INT. LOFT - NIGHT', 's'];
+  const speech: Row[] = [[C, 'MARA', 'c1'], [D, 'Not today.', 'd1'], [C, 'BOY', 'c2'], [D, 'Then when?', 'd2']];
+
+  it('untagged, no spacing: a line that stops short ended its paragraph', () => {
+    const rows: Row[] = [slug, ...filler.map((r) => [r[0], r[1]] as Row), [A, 'Rain on the roof.'], [A, 'A kettle starts to sing.'], ...speech.map((r) => [r[0], r[1]] as Row)];
+    const acts = action(pdfPagesToIndentedText(pages(rows)));
+    expect(acts).toContain('Rain on the roof.');
+    expect(acts).toContain('A kettle starts to sing.');
+  });
+
+  it('tagged, no spacing: a new paragraph tag in the same column is a break', () => {
+    const rows: Row[] = [slug, ...filler, [A, 'Rain on the roof and the gutters overflowing as the wind', 'p1'], [A, 'picks up.', 'p1'], [A, 'A kettle starts to sing.', 'p2'], ...speech];
+    const acts = action(pdfPagesToIndentedText(pages(rows)));
+    expect(acts).toContain('Rain on the roof and the gutters overflowing as the wind picks up.');
+    expect(acts).toContain('A kettle starts to sing.');
+  });
+
+  it('tags that mark every LINE as a paragraph are ignored', () => {
+    const wrapped: Row[] = Array.from({ length: 8 }, (_, i) => [A, `Wrapped line number ${i} of one long paragraph of action that`, `L${i}`]);
+    const rows: Row[] = [slug, ...wrapped, [A, 'ends here.', 'L9'], ...speech];
+    const acts = action(pdfPagesToIndentedText(pages(rows)));
+    expect(acts.some((t) => t.startsWith('Wrapped line number 0') && t.endsWith('ends here.'))).toBe(true);
+  });
+
+  it('a paragraph that runs over a page mid-sentence stays one paragraph', () => {
+    const rows: Array<Row | null> = [slug, ...filler, [A, 'The storm keeps coming and the lights in the harbour go'], null, [A, 'out one by one.'], ...speech];
+    expect(action(pdfPagesToIndentedText(pages(rows)))).toContain('The storm keeps coming and the lights in the harbour go out one by one.');
+  });
+
+  it("a Final Draft (MORE) / CUE (CONT'D) split rejoins into one speech", () => {
+    const rows: Array<Row | null> = [slug, [A, 'She turns.'], [C, 'MARA'], [D, 'I read the gauge every day.'], [C, '(MORE)'], null, [C, "MARA (CONT'D)"], [D, 'Nobody else did.'], [C, 'BOY'], [D, 'I know.']];
+    const b = parse(pdfPagesToIndentedText(pages(rows, 12)));
+    expect(b.filter((x) => x.type === 'character').map((x) => x.text)).toEqual(['MARA', 'BOY']);
+    expect(b.find((x) => x.type === 'dialogue')?.text).toBe('I read the gauge every day. Nobody else did.');
+  });
+});
+
+// Ben, 2026-10-02: a Final Draft PDF with scene numbers on came in with every
+// slugline as "1 EXT. STREET - NIGHT 1 1": zero sluglines matched, zero scene
+// spans, no script pages, half the scenes extracted.
+describe('Layer 0: scene numbers in the margins', () => {
+  const CW = 7.2;
+  const row = (y: number, ...runs: Array<[number, string]>) => runs.map(([x, str]) => ({ str, x, y, w: str.length * CW }));
+  const page: PdfPageItems = {
+    width: 612, height: 792,
+    items: [
+      ...row(720, [54, '1'], [108, 'EXT. STREET - NIGHT'], [540, '1'], [548, '1']),
+      ...row(696, [108, 'A grey car idles at the end of the empty street.']),
+      ...row(672, [266, 'DRIVER']),
+      ...row(660, [180, 'Get in.']),
+      ...row(636, [54, '2A'], [108, 'INT. CAR - CONTINUOUS'], [540, '2A']),
+      ...row(612, [108, 'He gets in.'], [560, '*']),
+      ...row(588, [266, 'GIRL']),
+      ...row(576, [180, 'Thanks.']),
+      ...row(552, [54, '3'], [108, '12 ANGRY MEN PLAYS ON THE RADIO.']),
+    ],
+  };
+  const text = pdfPagesToIndentedText([page]);
+  const b = parse(text);
+
+  it('numbers come off sluglines, which then read as scenes', () => {
+    expect(b.filter((x) => x.type === 'scene').map((x) => x.text)).toEqual(['EXT. STREET - NIGHT', 'INT. CAR - CONTINUOUS']);
+  });
+
+  it('the margin numbers do not move the page edge: action stays at column 0', () => {
+    expect(text.split('\n').find((l) => l.includes('A grey car'))).toMatch(/^A grey car/);
+  });
+
+  it('revision asterisks go; numbers that are not on a slugline stay', () => {
+    expect(b.some((x) => x.text.includes('*'))).toBe(false);
+    expect(text).toContain('12 ANGRY MEN');
+  });
+
+  it('speech still reads as speech', () => {
+    expect(b.filter((x) => x.type === 'character').map((x) => x.text)).toEqual(['DRIVER', 'GIRL']);
+  });
+
+  it('a number the writer typed into a slugline stays (EXT. HIGHWAY 61)', () => {
+    const p2: PdfPageItems = { width: 612, height: 792, items: [
+      ...row(720, [108, 'EXT.'], [144, 'HIGHWAY'], [201.6, '61']),
+      ...row(696, [108, 'Trucks pass.']),
+      ...row(672, [266, 'DRIVER']),
+      ...row(660, [180, 'Go.']),
+      ...row(636, [266, 'GIRL']),
+      ...row(624, [180, 'Now.']),
+    ] };
+    expect(parse(pdfPagesToIndentedText([p2])).find((x) => x.type === 'scene')?.text).toBe('EXT. HIGHWAY 61');
   });
 });

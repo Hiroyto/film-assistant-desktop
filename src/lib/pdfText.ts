@@ -14,6 +14,28 @@
 // survives because it is the text.
 import { pdfPagesToIndentedText, type PdfPageItems } from './screenplayParse';
 
+// Structure roles that are one paragraph of text. A TAGGED PDF (Google Docs,
+// Word, Chrome print) marks every paragraph in its structure tree; geometry
+// cannot see a paragraph break with zero spacing, the tags can.
+const PARA_ROLES = new Set(['P', 'H', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'LBody', 'Lbl', 'Caption', 'Title', 'BlockQuote']);
+
+/** Marked-content id -> paragraph key, from the page's structure tree. */
+function paragraphOfContent(tree: any, pageIndex: number): Map<string, string> {
+  const out = new Map<string, string>();
+  let n = 0;
+  const walk = (node: any, para: string | null) => {
+    if (!node) return;
+    if (node.type === 'content' && node.id) {
+      if (para) out.set(node.id, para);
+      return;
+    }
+    const here = node.role && PARA_ROLES.has(node.role) ? `${pageIndex}:${n++}` : para;
+    for (const c of node.children ?? []) walk(c, here);
+  };
+  walk(tree, null);
+  return out;
+}
+
 export async function parsePdfToText(
   file: File,
   onProgress?: (page: number, total: number) => void,
@@ -33,23 +55,39 @@ export async function parsePdfToText(
   // pdf.js ≥ 6.2.108 (GHSA de execução de JS via PDF malicioso corrigido) e sem o
   // antigo caminho de `new Function` para fontes (isEvalSupported foi removido).
   const pdf = await pdfjs.getDocument({ data: new Uint8Array(buf) }).promise;
+  return pdfPagesToIndentedText(await pagesFromPdf(pdf, onProgress));
+}
 
+/** Positioned items per page, each run tagged with its paragraph when the
+ *  PDF carries a structure tree. Separate from the file read so the import
+ *  eval runs this exact code on pdf.js's node build. */
+export async function pagesFromPdf(
+  pdf: { numPages: number; getPage: (i: number) => Promise<any> },
+  onProgress?: (page: number, total: number) => void,
+): Promise<PdfPageItems[]> {
   const pages: PdfPageItems[] = [];
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const vp = page.getViewport({ scale: 1 });
-    const content = await page.getTextContent();
-    pages.push({
-      width: vp.width,
-      height: vp.height,
-      items: content.items.flatMap((it) => {
-        if (!('str' in it)) return [];
-        const item = it as { str: string; width: number; transform: number[] };
-        return [{ str: item.str, x: item.transform[4], y: item.transform[5], w: item.width }];
-      }),
-    });
+    const content = await page.getTextContent({ includeMarkedContent: true });
+    // Untagged PDFs (Final Draft, most screenplay apps, our own export) have
+    // no tree; their items simply carry no paragraph and geometry decides.
+    let paraOf = new Map<string, string>();
+    try { paraOf = paragraphOfContent(await page.getStructTree(), i); } catch { /* untagged */ }
+    const open: Array<string | null> = [];
+    const items: PdfPageItems['items'] = [];
+    for (const it of content.items as any[]) {
+      if (it.type === 'beginMarkedContentProps' || it.type === 'beginMarkedContent') {
+        open.push(it.id ? paraOf.get(it.id) ?? null : null);
+        continue;
+      }
+      if (it.type === 'endMarkedContent') { open.pop(); continue; }
+      if (!('str' in it)) continue;
+      const para = [...open].reverse().find((x) => x) ?? undefined;
+      items.push({ str: it.str, x: it.transform[4], y: it.transform[5], w: it.width, ...(para ? { para } : {}) });
+    }
+    pages.push({ width: vp.width, height: vp.height, items });
     onProgress?.(i, pdf.numPages);
   }
-
-  return pdfPagesToIndentedText(pages);
+  return pages;
 }
