@@ -124,6 +124,10 @@ module.exports = {
     // .ico no Windows e .icns no macOS. Gerado de src/assets/images/head-only.png.
     icon: path.join(__dirname, 'build-resources', 'icon'),
     asar: true,
+    // filmassistant:// no macOS: app.setAsDefaultProtocolClient só vale para o app
+    // EMPACOTADO se o scheme estiver no Info.plist (CFBundleURLTypes). Sem isto os
+    // deep links (Stripe, Google sign-in) não voltam no .app. Windows registra em runtime.
+    protocols: [{ name: 'Film Assistant', schemes: ['filmassistant'] }],
     // Empacota: shell compilado (shell/dist) + build do renderer (build/) + manifesto.
     // Ignora fontes TS, node_modules de dev, specs e o legado de referência.
     ignore: ignorePath,

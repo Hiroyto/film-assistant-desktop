@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import ConfirmCodeModal from "./ConfirmCodeModal"
 import { resendSignUpCode, getCurrentUser } from "aws-amplify/auth";
 import { signInUser } from "../../features/auth/model/useAuth";
+import GoogleSignInButton from "./GoogleSignInButton";
 
 interface LoginFormProps {
     onSwitch: () => void;
@@ -145,6 +146,9 @@ export default function LoginForm({ onSwitch, onSuccess, onForgotPassword }: Log
                 <span className="text-gray-400 text-sm px-2">or</span>
                 <div className="flex-grow h-px bg-[rgba(255,255,255,0.15)]" />
             </div>
+
+            {/* Some sozinho quando o build não tem o Hosted UI configurado. */}
+            <GoogleSignInButton className="mb-3" />
 
             <button onClick={onSwitch} className="w-full py-2 rounded-lg border border-[rgba(255,255,255,0.2)] bg-[rgba(255,255,255,0.05)] text-white hover:bg-[rgba(255,255,255,0.1)] hover:-translate-y-[2px] hover:shadow-[0_6px_16px_rgba(255,255,255,0.05)] transition">
                 Create an account

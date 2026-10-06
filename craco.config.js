@@ -1,33 +1,15 @@
 const { copyPdfWorker } = require('./scripts/copy-pdf-worker');
+const { buildDesktopCsp } = require('./scripts/desktop-csp');
 
 const isProd = process.env.NODE_ENV === 'production';
 // Setado pelos scripts desktop:* (package.json). Ausente no build da web.
 const isDesktopBuild = process.env.DESKTOP_BUILD === '1';
 
-// Content-Security-Policy do renderer DESKTOP, entregue por <meta http-equiv> —
-// a única forma que vale para páginas file:// (build empacotado). Só código do
-// próprio app executa (script-src 'self'): nada de gtag/getterms/CDN dentro do
-// shell, onde um script remoto teria acesso a window.electronAPI.
-//   - connect-src: API Gateway + WebSocket + Cognito (*.amazonaws.com), GitHub
-//     (releases/download buttons), Sentry (crash reports, se DSN configurado).
-//   - style/font: Google Fonts + Adobe Typekit (CSS/fontes apenas, sem script).
-//   - dev (craco start): webpack/react-refresh precisam de eval + HMR via ws.
-const desktopCsp = [
-  "default-src 'self'",
-  `script-src 'self'${isProd ? '' : " 'unsafe-eval' 'unsafe-inline'"}`,
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://use.typekit.net",
-  "font-src 'self' data: https://fonts.gstatic.com https://use.typekit.net",
-  "img-src 'self' data: blob: https://*.amazonaws.com https://p.typekit.net",
-  "media-src 'self' data: blob: https://*.amazonaws.com",
-  `connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://api.github.com https://github.com https://*.sentry.io${
-    isProd ? '' : ' ws://localhost:* http://localhost:* ws://127.0.0.1:* http://127.0.0.1:*'
-  }`,
-  "worker-src 'self' blob:",
-  "object-src 'none'",
-  "base-uri 'self'",
-  "form-action 'self'",
-  "frame-src 'none'",
-].join('; ');
+// A CSP do renderer DESKTOP vive em scripts/desktop-csp.js (com teste em
+// src/features/auth/desktopCsp.test.ts). Ela é montada DENTRO de
+// webpack.configure, não aqui no topo: o craco avalia este arquivo antes de o
+// CRA carregar o .env, e a CSP precisa do REACT_APP_COGNITO_OAUTH_DOMAIN para
+// liberar o endpoint de token do Hosted UI (login com Google).
 
 module.exports = {
   babel: {
@@ -50,7 +32,7 @@ module.exports = {
         // é `options.meta` que o compile lê.
         const meta = {
           ...(html.options.meta || {}),
-          'content-security-policy': { 'http-equiv': 'Content-Security-Policy', content: desktopCsp },
+          'content-security-policy': { 'http-equiv': 'Content-Security-Policy', content: buildDesktopCsp({ isProd }) },
         };
         html.options.meta = meta;
         html.userOptions.meta = meta;

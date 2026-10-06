@@ -33,3 +33,13 @@ incrementalmente (consolidação da camada redundante de Login é refactor de UI
 
 `configureApi({ getFreshToken })` (chamado por `startSession`) faz o `safeApiCall`
 (Tarefa 05) refrescar o token JIT e re-tentar em 401 — sem mudança nos call sites.
+
+## Login com Google (desktop + web)
+
+| Arquivo | Papel |
+|---|---|
+| `model/googleOAuth.ts` | primitivas puras do code flow + PKCE contra o Hosted UI do Cognito (URL, callback, troca do code, pedido pendente). |
+| `model/googleSignIn.ts` | web: `signInWithRedirect`; desktop: navegador do sistema + deep link `filmassistant://auth/callback` + injeção dos tokens no Amplify (`tokenOrchestrator.setTokens`) + Hub `signInWithRedirect`/`signedIn`. |
+| `../../components/Login/GoogleSignInButton.tsx` | botão dos modais; some sem `REACT_APP_COGNITO_OAUTH_DOMAIN`. |
+
+Configuração do console (Google + Cognito), vinculação de contas e teste manual: `GOOGLE-SIGN-IN.md` na raiz.

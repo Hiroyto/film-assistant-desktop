@@ -9,19 +9,49 @@
 //   REACT_APP_AWS_REGION             (default: us-east-1)
 //   REACT_APP_COGNITO_POOL_ID        (obrigatória)
 //   REACT_APP_COGNITO_APP_CLIENT_ID  (obrigatória)
+//   REACT_APP_COGNITO_OAUTH_DOMAIN           (opcional — liga o "Continue with Google")
+//   REACT_APP_COGNITO_OAUTH_REDIRECT_SIGNIN  (opcional, web; URLs separadas por vírgula)
+//   REACT_APP_COGNITO_OAUTH_REDIRECT_SIGNOUT (opcional, web; idem)
 
 const region = process.env.REACT_APP_AWS_REGION || 'us-east-1';
+
+// --- Google sign-in (Cognito Hosted UI, authorization code + PKCE) — ver GOOGLE-SIGN-IN.md
+// Sem REACT_APP_COGNITO_OAUTH_DOMAIN o bloco fica vazio, o botão não aparece e
+// nada muda. As listas de redirect valem para a WEB (signInWithRedirect do
+// Amplify, mesma origem). O desktop não usa o redirect do Amplify: o fluxo PKCE
+// próprio (features/auth/model/googleSignIn.ts) volta por filmassistant://auth/callback;
+// a URL entra na lista só para documentar o que o app client precisa aceitar.
+const oauthDomain = (process.env.REACT_APP_COGNITO_OAUTH_DOMAIN || '')
+    .trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+const webOrigin = typeof window !== 'undefined' && window.location && /^https?:$/.test(window.location.protocol)
+    ? `${window.location.origin}/`
+    : '';
+const DESKTOP_OAUTH_REDIRECT = 'filmassistant://auth/callback';
+const redirectSignIn = [process.env.REACT_APP_COGNITO_OAUTH_REDIRECT_SIGNIN || webOrigin, DESKTOP_OAUTH_REDIRECT]
+    .filter(Boolean).join(',');
+const redirectSignOut = [process.env.REACT_APP_COGNITO_OAUTH_REDIRECT_SIGNOUT || webOrigin, DESKTOP_OAUTH_REDIRECT]
+    .filter(Boolean).join(',');
+const oauth = oauthDomain
+    ? {
+        domain: oauthDomain,
+        // aws.cognito.signin.user.admin: fetchUserAttributes/GetUser exigem esse escopo.
+        scope: ['openid', 'email', 'profile', 'aws.cognito.signin.user.admin'],
+        redirectSignIn,
+        redirectSignOut,
+        responseType: 'code',
+    }
+    : {};
 
 const awsmobile = {
     "aws_project_region": region,
     "aws_cognito_region": region,
     "aws_user_pools_id": process.env.REACT_APP_COGNITO_POOL_ID,
     "aws_user_pools_web_client_id": process.env.REACT_APP_COGNITO_APP_CLIENT_ID,
-    "oauth": {},
+    "oauth": oauth,
     "aws_cognito_username_attributes": [
         "EMAIL"
     ],
-    "aws_cognito_social_providers": [],
+    "aws_cognito_social_providers": oauthDomain ? ["GOOGLE"] : [],
     "aws_cognito_signup_attributes": [
         "PREFERRED_USERNAME",
         "EMAIL"
