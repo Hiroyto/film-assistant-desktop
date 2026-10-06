@@ -89,6 +89,7 @@ const IGNORED = [
   /^\/parity(\/|$)/,        // snapshots do teste de paridade web/desktop
   /^\/test-results(\/|$)/,
   /^\/backend-tests(\/|$)/,
+  /^\/backend(\/|$)/,        // fontes de Lambdas com deploy manual — nunca runtime do app
   /^\/package-lock\.web\.json$/,
   /^\/shell\/src\//,
   /^\/shell\/tsconfig\.json$/,
