@@ -210,6 +210,12 @@ jobs:
           # dados MOCK. NÃO é segredo (path público no bundle) → usa `vars`. Defina
           # a Variable REACT_APP_FREEFORM_API_PATH = freeform (aba "Variables").
           REACT_APP_FREEFORM_API_PATH: ${{ vars.REACT_APP_FREEFORM_API_PATH }}
+          # Login com Google (opcional): domínio do Hosted UI do Cognito. Entra no
+          # bundle (o botão "Continue with Google" só aparece com ele) e na CSP do
+          # desktop (connect-src da troca do code). Sem a Variable o botão some e
+          # nada mais muda. As listas de redirect NÃO são necessárias aqui: o
+          # desktop volta sempre por filmassistant://auth/callback. Ver GOOGLE-SIGN-IN.md.
+          REACT_APP_COGNITO_OAUTH_DOMAIN: ${{ vars.REACT_APP_COGNITO_OAUTH_DOMAIN }}
           # Forge precisa do owner/name explícitos (forge.config.js). Aponta para ESTE repo.
           GITHUB_REPO_OWNER: ${{ github.repository_owner }}
           GITHUB_REPO_NAME: ${{ github.event.repository.name }}
