@@ -52,9 +52,9 @@ interface Props {
 }
 
 /** Abre o seletor de .fdx e liga o cowork na story vinculada. Chamado pelo
- *  link do empty state do board (no lugar do import de PDF); em board que já
- *  tem cards, a entrada é o menu File → Open Screenplay (.fdx)…, que vai
- *  direto ao openFdxSync (FdxCoworkPanel). */
+ *  botão "Cowork with a .fdx" do empty state do board (ao lado do import
+ *  one-shot); em board que já tem cards, a entrada é o menu File → Open
+ *  Screenplay (.fdx)…, que vai direto ao openFdxSync (FdxCoworkPanel). */
 export async function startFdxCowork(): Promise<void> {
   try {
     await flushPushNow(); // o freeform nega escrita de story ainda não registrada no /works

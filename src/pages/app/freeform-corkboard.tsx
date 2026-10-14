@@ -7474,19 +7474,20 @@ export default function FreeformCorkboard() {
           braindumpPhase !== 'submitting' &&
           braindumpPhase !== 'extracting' &&
           !braindumpOpen && (
-            // Desktop: the .fdx cowork takes the screenplay link (same gate
-            // that mounts FdxCoworkControl, which binds the engine). PDF
-            // import stays on the toolbar's Import and on drop.
+            // "Already have a screenplay?" — two doors: the one-shot import
+            // (the toolbar's same file input: PDF/.fdx/.fadein read into cards
+            // once) everywhere, plus the .fdx cowork on desktop (same gate that
+            // mounts FdxCoworkControl, which binds the engine).
             <BoardEmptyState
               onBraindump={() => setBraindumpOpen(true)}
               onCreate={openCreateModal}
+              onImport={() => scriptInputRef.current?.click()}
               {...(isDesktop() && auth && storyId
                 ? {
-                    onImport: () => void startFdxCowork(),
-                    importLabel: 'Already have a screenplay? Open the .fdx',
-                    importTitle: "Watch a Final Draft (.fdx) screenplay: every save becomes a per-scene save + extraction on this board, like the script editor's auto-sync",
+                    onCowork: () => void startFdxCowork(),
+                    coworkTitle: "Watch a Final Draft (.fdx) screenplay: every save becomes a per-scene save + extraction on this board, like the script editor's auto-sync",
                   }
-                : { onImport: () => scriptInputRef.current?.click() })}
+                : {})}
             />
           )}
         {/* SVG overlay — PRECEDES + structural connectors. Sits behind cards
