@@ -48,6 +48,16 @@ describe('worksFromLocal (B2 — works do SQLite)', () => {
     expect(w.characters.Bia.locked).toBe(false);
   });
 
+  it('expõe workflow:"freeform" quando a linha diz corkboard — e omite quando não', async () => {
+    const works = await worksFromLocal('u1', {
+      listActiveStories: async () => [storyRow({ workflow: 'freeform' }), storyRow({ story_id: 'story_2' })],
+      listByStory: async () => [],
+    });
+    // É o que resolveStoryWorkflow lê para rotear ao corkboard e badgear "Corkboard".
+    expect(works['story_1'].workflow).toBe('freeform');
+    expect('workflow' in works['story_2']).toBe(false);
+  });
+
   it('retorna {} quando não há stories (caller cai p/ backend)', async () => {
     const works = await worksFromLocal('u1', {
       listActiveStories: async () => [],

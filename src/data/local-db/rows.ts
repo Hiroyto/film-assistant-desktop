@@ -53,6 +53,14 @@ export interface StoryRow {
   segments_json: string;      // JSON { "S1": { "S": "...", "scenes": [...] }, ... }
   version: number;            // optimistic lock
   status: 'active' | 'soft_deleted';
+  /**
+   * Pathway da story: 'freeform' = corkboard. NULL = outline (default) ou
+   * desconhecido. Só o positivo é persistido e ele é PEGAJOSO (upsertStory nunca
+   * rebaixa para NULL): uma story nunca converte de corkboard para outline, então
+   * um record sem o campo é campo perdido, não conversão (ver lib/storyWorkflows).
+   * Opcional no tipo porque fixtures e linhas lidas antes da v2 podem não trazê-lo.
+   */
+  workflow?: 'freeform' | null;
   created_at: string;
   updated_at: string;
   synced_at: string | null;
@@ -135,4 +143,4 @@ export interface SettingRow {
 }
 
 /** Versão atual do schema (deve bater com o maior migrations/v<n>.sql). */
-export const CURRENT_SCHEMA_VERSION = 1 as const;
+export const CURRENT_SCHEMA_VERSION = 2 as const;

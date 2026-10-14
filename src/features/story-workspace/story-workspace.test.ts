@@ -5,6 +5,7 @@ import {
   parseSegments,
   rowToCanonical,
   canonicalToRow,
+  canonicalToWire,
   updateScalarField,
   updateSegmentOutline,
 } from './model/storySerialization';
@@ -93,7 +94,29 @@ describe('outlineEstimate (BR-MIGRAR-050)', () => {
   });
 });
 
+describe('workflow (corkboard) na serialização', () => {
+  it('round-trip preserva a coluna e só o positivo chega ao wire', () => {
+    const story: CanonicalStory = { ...storyWithSceneInS5(), workflow: 'freeform' };
+    const row: StoryRow = { ...canonicalToRow(story, NOW), user_id: 'u1' };
+    expect(row.workflow).toBe('freeform');
+    expect(rowToCanonical(row, []).workflow).toBe('freeform');
+    expect(canonicalToWire(story).workflow).toBe('freeform');
+    // outline/desconhecido: nada no wire (o default do backend não é reafirmado)
+    expect('workflow' in canonicalToWire(storyWithSceneInS5())).toBe(false);
+    expect(canonicalToRow(storyWithSceneInS5(), NOW).workflow).toBeNull();
+  });
+});
+
 describe('saveStory payload (A1 — contrato da Lambda /works)', () => {
+  it('story de corkboard (coluna local) manda workflow:"freeform"; outline não manda nada', async () => {
+    (enqueueMutation as jest.Mock).mockClear();
+    await saveStory({ ...storyWithSceneInS5(), workflow: 'freeform' }, 'user-42', { forceImmediate: true });
+    await saveStory(storyWithSceneInS5(), 'user-42', { forceImmediate: true });
+    const calls = (enqueueMutation as jest.Mock).mock.calls;
+    expect(calls[0][0].payload.workflow).toBe('freeform');
+    expect('workflow' in calls[1][0].payload).toBe(false);
+  });
+
   it('enfileira com event:"save" + userId + campos wire, preservando scenes (RISK-011)', async () => {
     (enqueueMutation as jest.Mock).mockClear();
     const story = storyWithSceneInS5();

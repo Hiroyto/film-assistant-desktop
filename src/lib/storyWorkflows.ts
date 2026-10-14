@@ -12,8 +12,17 @@
 // never silently flips a corkboard story into the outline editor. If the
 // backend is confirmed to persist `workflow`, the fallback simply never
 // fires.
+//
+// Desktop: the grid record comes from worksFromLocal, which surfaces the local
+// `stories.workflow` column (migration v2). That column is fed by the pull (the
+// cloud record's field) and by local creation, so a corkboard story created on
+// another device — or on the web — routes to the corkboard here too. The
+// localStorage map stays as the per-device fallback for rows written before the
+// column existed (and for the web, which has no local DB).
 
-export type StoryWorkflow = 'outline' | 'freeform';
+import type { StoryWorkflow } from '../models/story';
+
+export type { StoryWorkflow };
 
 const LS_KEY = 'ff-story-workflows';
 
@@ -50,7 +59,7 @@ export function markStoryWorkflow(storyId: string, workflow: StoryWorkflow): voi
  *  desktop hits exactly this: its local-first save never sends `workflow` to
  *  /works, so the cloud record answers for a field it never received. */
 export function resolveStoryWorkflow(
-  story: { workflow?: string } | undefined | null,
+  story: { workflow?: string | null } | undefined | null,
   storyId: string,
 ): StoryWorkflow {
   if (story?.workflow === 'freeform') return 'freeform';

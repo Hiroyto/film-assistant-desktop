@@ -31,17 +31,17 @@ async function enqueuePush(story: CanonicalStory, operation: SyncOperation, user
     // identifica o owner. O push-worker envia este payload verbatim, então os
     // campos têm de bater com o que o backend lê (igual ao save() legado).
     //
-    // `workflow` viaja junto para as stories de corkboard: a tabela local
-    // `stories` não tem essa coluna (então canonicalToWire não a emite) e sem
-    // isto o work record da nuvem nunca sabe que a story é freeform — quem lesse
-    // o record (outro device, ou a própria Home ao ler works da nuvem) reabriria
-    // o corkboard no editor de outline. Só marcamos o positivo: `outline` é o
-    // default do backend e não precisa ser reafirmado.
+    // `workflow` viaja junto para as stories de corkboard, senão o work record da
+    // nuvem nunca sabe que a story é freeform — e quem lesse o record (outro
+    // device, ou o pull deste) reabriria o corkboard no editor de outline.
+    // canonicalToWire já emite o positivo quando a coluna local (stories.workflow)
+    // diz freeform; a tag em localStorage cobre linhas anteriores à coluna. Só o
+    // positivo: `outline` é o default do backend e não precisa ser reafirmado.
     payload: {
       event: 'save',
       userId,
       ...canonicalToWire(story),
-      ...(resolveStoryWorkflow(undefined, story.storyId) === 'freeform' ? { workflow: 'freeform' } : {}),
+      ...(resolveStoryWorkflow(story, story.storyId) === 'freeform' ? { workflow: 'freeform' } : {}),
     },
   });
 }

@@ -1,0 +1,14 @@
+-- Migration v2 — stories.workflow: pathway da story ('freeform' = corkboard).
+-- NULL = outline (default) ou desconhecido. Só o positivo é persistido e a tag é
+-- PEGAJOSA (upsertStory nunca rebaixa para NULL): uma story nunca converte de
+-- corkboard para outline, então um record sem o campo é campo perdido, não
+-- conversão. Alimentada pelo pull (campo `workflow` do work record do /works) e
+-- pela criação local (NewStoryModal -> saveStory).
+--
+-- Antes disto o desktop só tinha a tag em localStorage (ff-story-workflows), que
+-- é por device/origem: uma story de corkboard criada em outro device (ou na web)
+-- abria no editor de outline aqui, com a grade badgeando "No Genre".
+--
+-- ALTER TABLE ... ADD COLUMN não aceita IF NOT EXISTS no SQLite; a idempotência
+-- vem do runner (schema_version), que só aplica versões acima da atual.
+ALTER TABLE stories ADD COLUMN workflow TEXT;

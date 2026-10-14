@@ -436,9 +436,10 @@ export function HomePage(props: HomePageProps) {
       // The corkboard owns its own state (freeform backend, keyed by storyId),
       // but the WORK RECORD (title + workflow tag) must land in the same store
       // the grid reads, so a corkboard story shows up beside outline stories and
-      // survives a restart. `workflow` isn't a column in the local `stories`
-      // table, so the tag is kept via markStoryWorkflow (localStorage) —
-      // resolveStoryWorkflow reads that fallback for routing + the grid badge.
+      // survives a restart. On desktop the tag is persisted in the local
+      // `stories.workflow` column (carried by cacheDataToCanonical → saveStory)
+      // and mirrored to /works by the push; markStoryWorkflow (localStorage) is
+      // the per-device fallback for rows written before that column existed.
       if (isDesktop()) {
         // Local-first (mirrors App.save): SQLite is the source of truth, keyed by
         // the client id — so THAT id is canonical (no server-minted id to

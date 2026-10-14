@@ -48,6 +48,8 @@ export interface CacheDataLike {
   S8?: unknown;
   S9?: unknown;
   characters?: unknown;
+  /** 'outline' | 'freeform' — vem do NewStoryModal na criação; só o positivo persiste. */
+  workflow?: unknown;
   [k: string]: unknown;
 }
 
@@ -87,6 +89,7 @@ export function cacheDataToCanonical(
     characters: toCanonicalCharacterArray(data.characters as any),
     version: opts.version ?? 1,
     status: opts.status ?? 'active',
+    workflow: data.workflow === 'freeform' ? 'freeform' : null,
     createdAt: opts.createdAt ?? now,
     updatedAt: opts.updatedAt ?? now,
     syncedAt: opts.syncedAt ?? null,

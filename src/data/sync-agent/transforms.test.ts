@@ -111,6 +111,14 @@ describe('mapStoryToRow', () => {
   it('lança se faltar storyId', () => {
     expect(() => mapStoryToRow({ title: 'x' }, { userId: 'u1', now: NOW })).toThrow();
   });
+  it('workflow: só o positivo (freeform) persiste; outline/ausente/lixo viram null', () => {
+    const map = (workflow?: unknown) =>
+      mapStoryToRow({ storyId: 'story_1', workflow } as never, { userId: 'u1', now: NOW }).workflow;
+    expect(map('freeform')).toBe('freeform');
+    expect(map('outline')).toBeNull();
+    expect(map(undefined)).toBeNull();
+    expect(map('corkboard')).toBeNull();
+  });
 });
 
 describe('version-reconcile (ongoing pull)', () => {

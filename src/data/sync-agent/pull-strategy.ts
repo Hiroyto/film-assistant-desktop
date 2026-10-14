@@ -56,6 +56,17 @@ export async function runPull(deps: PullDeps): Promise<PullReport> {
     }
 
     const local = await storyRepo.getStory(remoteRow.story_id);
+
+    // Metadado de roteamento, fora da reconciliação de conteúdo: o record da nuvem
+    // dizendo 'freeform' promove a linha local mesmo quando o conteúdo vai ser
+    // pulado (local à frente) ou cair em conflito. É o que faz uma story de
+    // corkboard criada em OUTRO device (ou antes da coluna existir) abrir no
+    // corkboard aqui — a tag em localStorage é por device e não viaja. Nunca o
+    // inverso: um record sem o campo não rebaixa (ver rows.ts).
+    if (local && remoteRow.workflow === 'freeform' && local.workflow !== 'freeform') {
+      await storyRepo.markFreeform(remoteRow.story_id);
+    }
+
     const localState = local
       ? { version: local.version, updated_at: local.updated_at, synced_at: local.synced_at }
       : null;

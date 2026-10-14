@@ -62,6 +62,8 @@ export interface RawStory {
   SUM?: string | null;
   version?: number;
   status?: string;
+  /** 'outline' | 'freeform' — pathway da story (Lambda /works persiste; default 'outline'). */
+  workflow?: string | null;
   characters?: RawCharacter[] | Record<string, RawCharacter> | null;
   created_at?: string | number;
   createdAt?: string | number;
@@ -357,6 +359,17 @@ export function mapUserToSubscriptionRow(
   };
 }
 
+/**
+ * `workflow` do work record -> coluna local. Só o positivo ('freeform' =
+ * corkboard) é persistido; 'outline', ausente ou lixo viram NULL. O backend
+ * defaulta para 'outline' records que nunca receberam o campo (o save local-first
+ * antigo não o mandava), então 'outline' no record NÃO prova que a story é de
+ * outline — e upsertStory nunca rebaixa um 'freeform' já gravado.
+ */
+export function normalizeWorkflow(value: unknown): 'freeform' | null {
+  return value === 'freeform' ? 'freeform' : null;
+}
+
 /** RawStory -> StoryRow. Aplica T-01 (segments), T-08 (timestamps). */
 export function mapStoryToRow(
   raw: RawStory,
@@ -381,6 +394,7 @@ export function mapStoryToRow(
     segments_json: normalizeSegmentsJson(raw as Record<string, unknown>),
     version: typeof raw.version === 'number' ? raw.version : 1,
     status,
+    workflow: normalizeWorkflow(raw.workflow),
     created_at: normalizeTimestamp(pick(raw.created_at, raw.createdAt), now),
     updated_at: normalizeTimestamp(pick(raw.updated_at, raw.updatedAt), now),
     synced_at: now,

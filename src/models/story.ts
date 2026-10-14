@@ -53,6 +53,9 @@ export type CanonicalSegments = Record<SegmentKey, Segment>;
 
 export type StoryStatus = 'active' | 'soft_deleted';
 
+/** Pathway da story: editor de outline (/home) ou corkboard (/freeform/:id). */
+export type StoryWorkflow = 'outline' | 'freeform';
+
 /**
  * Story canônica (CacheData). Source-of-truth local (AD-01). `characters` é ARRAY
  * (BR-MIGRAR-025). `S1..S9` são objetos `{ S, scenes }` — Profile/Scripts NÃO podem
@@ -71,6 +74,8 @@ export interface CanonicalStory {
   characters: Character[];
   version: number;
   status: StoryStatus;
+  /** 'freeform' = corkboard; null/ausente = outline ou desconhecido (ver rows.ts). */
+  workflow?: StoryWorkflow | null;
   createdAt: string;
   updatedAt: string;
   syncedAt: string | null;

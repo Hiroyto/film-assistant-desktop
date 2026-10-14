@@ -68,6 +68,7 @@ CREATE TABLE stories (
                                                 -- canonical polymorphic shape (BR-MIGRAR-013)
     version INTEGER NOT NULL DEFAULT 1,         -- optimistic lock para conflict detection
     status TEXT NOT NULL DEFAULT 'active',      -- 'active' | 'soft_deleted'
+    workflow TEXT,                              -- 'freeform' (corkboard) | NULL = outline/desconhecido (v2; pegajoso)
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     synced_at TEXT,                             -- last successful push to DDB

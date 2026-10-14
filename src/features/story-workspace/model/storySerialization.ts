@@ -46,6 +46,7 @@ export function rowToCanonical(row: StoryRow, characters: Character[] = []): Can
     characters,
     version: row.version,
     status: row.status,
+    workflow: row.workflow === 'freeform' ? 'freeform' : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     syncedAt: row.synced_at,
@@ -67,6 +68,7 @@ export function canonicalToRow(story: CanonicalStory, now: string): StoryRow {
     segments_json: JSON.stringify(story.segments),
     version: story.version,
     status: story.status,
+    workflow: story.workflow === 'freeform' ? 'freeform' : null,
     created_at: story.createdAt,
     updated_at: now,
     synced_at: story.syncedAt,
@@ -86,6 +88,10 @@ export function canonicalToWire(story: CanonicalStory): Record<string, unknown> 
     SUM: story.SUM,
   };
   for (const k of SEGMENT_KEYS) wire[k] = story.segments[k]; // { S, scenes }
+  // Só o positivo: 'outline' é o default do backend e não precisa ser reafirmado —
+  // e mandar 'outline' por engano rebaixaria o record de um corkboard. É isto que
+  // a grade (worksFromLocal) e o push (/works) leem como `workflow`.
+  if (story.workflow === 'freeform') wire.workflow = 'freeform';
   return wire;
 }
 

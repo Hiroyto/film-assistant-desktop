@@ -14,6 +14,9 @@ Rodam no **boot** do app, em ordem crescente de `n`, dentro de uma transação.
 ## Arquivos
 
 - `v1.sql` — schema inicial (9 tabelas, BC-01/02/03/05/06/08/10). Validado contra DB vazio.
+- `v2.sql` — `stories.workflow` ('freeform' = corkboard; NULL = outline/desconhecido).
+  `ALTER TABLE … ADD COLUMN` não tem `IF NOT EXISTS` no SQLite: a idempotência é do
+  runner (só aplica versões acima da registrada em `schema_version`).
 
 ## Notas
 

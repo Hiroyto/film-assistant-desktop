@@ -2,7 +2,11 @@
 // push antigo deixava (story "pendente" pelos timestamps, fila vazia) — este
 // último aplica o remoto em vez de acusar conflito a cada boot. `craco test`.
 jest.mock('../local-db/repositories', () => ({
-  storyRepo: { getStory: jest.fn(async () => null), upsertStory: jest.fn(async () => undefined) },
+  storyRepo: {
+    getStory: jest.fn(async () => null),
+    upsertStory: jest.fn(async () => undefined),
+    markFreeform: jest.fn(async () => undefined),
+  },
   characterRepo: { replaceCharactersForStory: jest.fn(async () => undefined) },
   syncQueueRepo: { countOpenForStory: jest.fn(async () => 0) },
 }));
@@ -97,5 +101,53 @@ describe('runPull — "pendente" pelos timestamps vs. fila', () => {
     const { report } = await pull();
     expect(report).toEqual({ applied: 1, skipped: 0, conflicts: 0 });
     expect(syncQueueRepo.countOpenForStory).not.toHaveBeenCalled();
+  });
+});
+
+// O `workflow` do record é metadado de roteamento, não conteúdo: promove a linha
+// local para corkboard independentemente de apply/skip/conflito, e nunca rebaixa.
+describe('runPull — workflow (corkboard) do record promove a linha local', () => {
+  const freeformRemote = { ...remote, workflow: 'freeform' };
+  const settled = () => localRow({ version: 7, synced_at: ago(20 * MIN) });
+  const pullWith = (raw: unknown) =>
+    runPull({ userId: 'u1', getWorks: async () => [raw as never], since: null, now: () => NOW });
+
+  it('local em dia (skip de conteúdo): ainda assim marca freeform', async () => {
+    (storyRepo.getStory as jest.Mock).mockResolvedValue(settled());
+    const report = await pullWith(freeformRemote);
+    expect(report).toEqual({ applied: 0, skipped: 1, conflicts: 0 });
+    expect(storyRepo.markFreeform).toHaveBeenCalledWith('story_1');
+    expect(storyRepo.upsertStory).not.toHaveBeenCalled();
+  });
+
+  it('em conflito: marca freeform mesmo sem aplicar o conteúdo', async () => {
+    (storyRepo.getStory as jest.Mock).mockResolvedValue(localRow());
+    (syncQueueRepo.countOpenForStory as jest.Mock).mockResolvedValue(1);
+    const report = await pullWith(freeformRemote);
+    expect(report.conflicts).toBe(1);
+    expect(storyRepo.markFreeform).toHaveBeenCalledWith('story_1');
+  });
+
+  it('linha já freeform: não regrava', async () => {
+    (storyRepo.getStory as jest.Mock).mockResolvedValue({ ...settled(), workflow: 'freeform' });
+    await pullWith(freeformRemote);
+    expect(storyRepo.markFreeform).not.toHaveBeenCalled();
+  });
+
+  it('record sem o campo (ou outline) nunca rebaixa', async () => {
+    (storyRepo.getStory as jest.Mock).mockResolvedValue({ ...settled(), workflow: 'freeform' });
+    await pullWith({ ...remote, workflow: 'outline' });
+    await pullWith(remote);
+    expect(storyRepo.markFreeform).not.toHaveBeenCalled();
+    expect(storyRepo.upsertStory).not.toHaveBeenCalled();
+  });
+
+  it('story nova vinda da nuvem: a linha aplicada já carrega workflow', async () => {
+    const report = await pullWith(freeformRemote);
+    expect(report.applied).toBe(1);
+    expect(storyRepo.upsertStory).toHaveBeenCalledWith(
+      expect.objectContaining({ story_id: 'story_1', workflow: 'freeform' }),
+    );
+    expect(storyRepo.markFreeform).not.toHaveBeenCalled();
   });
 });

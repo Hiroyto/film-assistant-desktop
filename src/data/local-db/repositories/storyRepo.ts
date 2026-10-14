@@ -22,24 +22,36 @@ export async function countActiveStories(userId: string): Promise<number> {
   return row?.n ?? 0;
 }
 
+// `workflow` é PEGAJOSO: um save local (que pode não conhecer o workflow) ou um
+// record da nuvem sem o campo nunca apagam um 'freeform' já gravado — só o positivo
+// existe e uma story nunca converte de corkboard para outline (ver rows.ts).
 export async function upsertStory(s: StoryRow): Promise<void> {
   await run(
     `INSERT INTO stories
        (story_id, user_id, title, brainstorm, genre, theme, mood_setting, core_question,
-        synopsis, segments_json, version, status, created_at, updated_at, synced_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        synopsis, segments_json, version, status, workflow, created_at, updated_at, synced_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
      ON CONFLICT(story_id) DO UPDATE SET
        title=excluded.title, brainstorm=excluded.brainstorm, genre=excluded.genre,
        theme=excluded.theme, mood_setting=excluded.mood_setting,
        core_question=excluded.core_question, synopsis=excluded.synopsis,
        segments_json=excluded.segments_json, version=excluded.version,
-       status=excluded.status, updated_at=excluded.updated_at, synced_at=excluded.synced_at`,
+       status=excluded.status,
+       workflow=COALESCE(excluded.workflow, stories.workflow),
+       updated_at=excluded.updated_at, synced_at=excluded.synced_at`,
     [
       s.story_id, s.user_id, s.title, s.brainstorm, s.genre, s.theme, s.mood_setting,
       s.core_question, s.synopsis, s.segments_json, s.version, s.status,
+      s.workflow === 'freeform' ? 'freeform' : null,
       s.created_at, s.updated_at, s.synced_at,
     ],
   );
+}
+
+/** Marca a story como corkboard. Só o positivo existe e nunca é rebaixado, então
+ *  "desmarcar" não é uma operação (ver rows.ts). */
+export async function markFreeform(storyId: string): Promise<void> {
+  await run("UPDATE stories SET workflow = 'freeform' WHERE story_id = ?", [storyId]);
 }
 
 /** Soft-delete local (não apaga até o sync confirmar — AD-01). */
