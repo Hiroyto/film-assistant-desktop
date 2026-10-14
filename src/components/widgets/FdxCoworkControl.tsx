@@ -131,6 +131,12 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, strip }: Pr
     return stripRows.filter((r) => isCoworkStripRow(r, mapped));
   }, [stripRows, snap.mappedEventIds, snap.active]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // A janela nasce MINIMIZADA: um chip com o status e a contagem de perguntas.
+  // O roteirista está no Final Draft e, quando volta, quer ver o board, não a
+  // janela. Expandir é um clique no chip; minimizar solta a linha focada (e o
+  // spotlight dela) antes de esconder.
+  const [minimized, setMinimized] = useState(true);
+  const minimize = (): void => { setExpandedId(null); setMinimized(true); };
   // Linha respondida em outro lugar (o painel, um drop) some do docket: fecha.
   useEffect(() => {
     if (expandedId && !coworkRows.some((r) => r.cardId === expandedId)) setExpandedId(null);
@@ -188,6 +194,22 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, strip }: Pr
           : snap.lastSyncAt
             ? `Synced ${hhmmss(snap.lastSyncAt)}`
             : 'Waiting for the first sync';
+  // O chip (janela minimizada) diz em UMA palavra em que pé o cowork está, na
+  // mesma ordem de prioridade do statusLine; `busy` pulsa o ponto enquanto há
+  // trabalho em voo (rodada de sync ou job de IA).
+  const busy = snap.status === 'syncing' || !!snap.pending;
+  const chipStatus = snap.status === 'syncing'
+    ? (snap.progress ? `Syncing ${snap.progress.done}/${snap.progress.total}` : 'Syncing…')
+    : snap.status === 'error'
+      ? 'Error'
+      : snap.pending
+        ? 'Extracting…'
+        : snap.dirty
+          ? 'File changed'
+          : snap.lastSyncAt
+            ? 'Synced'
+            : 'Waiting';
+  const chipTone = snap.status === 'error' ? '#f87171' : busy ? '#5dd4c8' : snap.dirty ? '#eab308' : 'rgba(255,255,255,0.5)';
   const run = snap.lastRun;
   // A prose do braindump que mintou a linha (o pin "In your words"): o id da
   // própria linha, senão a entrada de proveniência cujo id embute o card.
@@ -197,6 +219,44 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, strip }: Pr
   )?.prose;
   const placeDragStart = strip?.onPlaceDragStart;
   const confirmSlot = strip?.onConfirmSlot;
+
+  // ---- Minimizada: o chip ------------------------------------------------
+  // Mesmo ponto de ancoragem da janela. Carrega o que a janela tem de mais
+  // urgente: o ponto de status e quantas perguntas esperam resposta.
+  if (minimized) {
+    return (
+      <div style={wrapPanel}>
+        <style>{'@keyframes fdxchip-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.7); } }'}</style>
+        <button
+          type="button"
+          onClick={() => setMinimized(false)}
+          title={`${statusLine} — click to open the cowork window`}
+          aria-label="Open the cowork window"
+          data-tour="cowork-chip"
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 11px', borderRadius: 999,
+            background: '#1f1f22', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.85)',
+            fontSize: 12, fontWeight: 600, fontFamily: FONT, cursor: 'pointer', boxShadow: '0 6px 18px rgba(0,0,0,0.35)',
+          }}
+        >
+          <span
+            style={{
+              display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: dotColor, transition: 'background 200ms',
+              animation: busy ? 'fdxchip-pulse 1.1s ease-in-out infinite' : 'none',
+            }}
+          />
+          .fdx cowork
+          <span style={{ fontWeight: 500, color: chipTone, transition: 'color 200ms', fontVariantNumeric: 'tabular-nums' }}>{chipStatus}</span>
+          {coworkRows.length ? (
+            <span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 7px', borderRadius: 999, background: 'rgba(230,126,34,0.18)', color: BD_ORANGE, border: '1px solid rgba(230,126,34,0.45)' }}>
+              {coworkRows.length} to confirm
+            </span>
+          ) : null}
+          <span aria-hidden style={{ opacity: 0.5, fontSize: 10 }}>▴</span>
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div style={wrapPanel}>
@@ -217,10 +277,12 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, strip }: Pr
           </strong>
           <button
             type="button"
-            onClick={() => void stopFdxSync()}
-            style={{ background: 'transparent', color: 'rgba(255,255,255,0.6)', border: 'none', cursor: 'pointer', padding: 2, fontSize: 12 }}
+            onClick={minimize}
+            title="Minimize: the chip keeps the status and the questions count"
+            aria-label="Minimize the cowork window"
+            style={{ background: 'transparent', color: 'rgba(255,255,255,0.6)', border: 'none', cursor: 'pointer', padding: '0 4px', fontSize: 14, lineHeight: 1 }}
           >
-            stop
+            –
           </button>
         </div>
 
@@ -347,6 +409,16 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, strip }: Pr
             style={{ ...btnPrimary, padding: '5px 10px', fontSize: 12, boxShadow: 'none', opacity: snap.status === 'syncing' ? 0.6 : 1 }}
           >
             {snap.status === 'syncing' ? 'Syncing…' : 'Sync now'}
+          </button>
+          {/* Parar vive aqui, discreto: a janela some para minimizar, não para
+              parar — e parar é raro (o board mantém tudo o que já sincronizou). */}
+          <button
+            type="button"
+            onClick={() => void stopFdxSync()}
+            title="Stop watching the file. The board keeps everything already synced."
+            style={{ ...btnSmall, marginLeft: 'auto', background: 'transparent', border: '1px solid transparent', color: 'rgba(255,255,255,0.45)', fontWeight: 500 }}
+          >
+            stop
           </button>
         </div>
       </div>
