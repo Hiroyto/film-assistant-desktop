@@ -88,6 +88,7 @@ import { runFixtureBoot } from './test-bridge/fixtures';
 import { TourContext } from './components/Tour/TourProvider';
 import { tutorialSteps } from './models/tutorialSteps';
 import { clearAllStoredGraphs } from './lib/localGraphStore';
+import { clearLocalStorySession, reconcileActiveStoryOwner } from './features/story-workspace/model/localStorySession';
 
 // Desktop packages the renderer over file:// where HTML5 history routing 404s on
 // navigation; use HashRouter on desktop and keep BrowserRouter on web so the web
@@ -1420,6 +1421,39 @@ function AppContent() {
   }, []); // Empty array = run once on mount
 
   // ============================================================================
+  // EFFECT: ACTIVE STORY MUST BELONG TO THE SIGNED-IN USER (desktop)
+  // ============================================================================
+  // The boot load above takes the active story from SQLite by the id kept in
+  // localStorage, BEFORE sign-in and without checking user_id — and the local
+  // database is one file for every account that signs in on this PC. Once the
+  // signed-in user is known (and whenever the active story changes), check the
+  // row's owner: another account's story is dropped back to the initial state
+  // and its id forgotten, so it never shows in the editor nor gets pushed to
+  // the wrong user's cloud on a save. A missing row (a new story not saved yet)
+  // or a row with no owner recorded passes.
+  const ownerCheckUserId = isDesktop() ? (token?.payload['cognito:username'] as string | undefined) : undefined;
+  useEffect(() => {
+    const storyId = data.storyId;
+    if (!ownerCheckUserId || !storyId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const row = await storyRepo.getStory(storyId);
+        if (cancelled) return;
+        if (reconcileActiveStoryOwner(row, ownerCheckUserId) === 'reset') {
+          console.warn('[B1] active story belongs to another account; dropped', { storyId });
+          setData(initialData);
+        }
+      } catch (e) {
+        console.error('[B1] active story owner check failed', e);
+      }
+    })();
+    return () => { cancelled = true; };
+    // initialData is a per-render literal; the check only needs to re-run on user/story changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ownerCheckUserId, data.storyId]);
+
+  // ============================================================================
   // EFFECT: AUTO-LOAD MOST RECENT STORY
   // ============================================================================
 
@@ -1671,6 +1705,11 @@ function AppContent() {
       // never readable by the next user of this browser (the shelf is otherwise
       // per-origin, not per-user, and never pruned).
       await clearAllStoredGraphs();
+      // Same reason, for the outline editor: forget the active story id and the
+      // story_<id> content caches. Without this the next account's boot loaded
+      // this account's last story from the shared SQLite (see the owner check
+      // effect) and showed it in the editor.
+      clearLocalStorySession();
       await amplifySignOut();
       navigate('/');
     } catch (error) {
