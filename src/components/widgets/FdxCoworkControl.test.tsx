@@ -1,3 +1,4 @@
+/* eslint-disable import/first -- jest.mock precisa vir antes dos imports */
 // A janela do cowork nasce minimizada (um chip); o chip abre a janela; "–"
 // minimiza de volta; "stop" fica discreto no rodapé da janela aberta. `craco test`.
 jest.mock('../../lib/fdxSync', () => ({
@@ -96,6 +97,9 @@ describe('FdxCoworkControl — janela minimizada por padrão', () => {
     expect(screen.getByText('Syncing 3/12')).toBeInTheDocument();
     show({ pending: { count: 2, since: '2026-10-14T12:01:00.000Z', braindumpId: 'fdx_job2', proseLength: 100 } });
     expect(screen.getByText('Extracting…')).toBeInTheDocument();
+    // O board já viu o braindump_complete: a IA terminou, os cards ainda não pousaram.
+    show({ pending: { count: 2, since: '2026-10-14T12:01:00.000Z', braindumpId: 'fdx_job2', proseLength: 100, completedAt: '2026-10-14T12:03:00.000Z' } });
+    expect(screen.getByText('Landing…')).toBeInTheDocument();
     show({ dirty: true, auto: false });
     expect(screen.getByText('File changed')).toBeInTheDocument();
     show({ status: 'error', lastError: 'boom' });

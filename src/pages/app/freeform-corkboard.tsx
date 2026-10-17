@@ -27,7 +27,7 @@ import RecentUpdatesTray from '../../components/Freeform/RecentUpdatesTray';
 import { getEntityColor, hexToRgba } from '../../components/Freeform/entityColors';
 import { PEER_BLUE } from '../../components/Freeform/tokens';
 import { FdxCoworkControl, startFdxCowork } from '../../components/widgets/FdxCoworkControl';
-import { remapFdxSyncCard } from '../../lib/fdxSync';
+import { notifyFdxJobComplete, remapFdxSyncCard } from '../../lib/fdxSync';
 import { isDesktop } from '../../lib/ipcClient';
 import { isLocalFirst } from '../../lib/localFirst';
 import { flushPushNow } from '../../data/desktop-lifecycle';
@@ -6224,6 +6224,13 @@ export default function FreeformCorkboard() {
 
       if (msg.type === 'braindump_complete') {
         const counts = msg.counts ?? {};
+        // The cowork's own job (`fdx_…`): tell the engine the extraction is
+        // over, so its pending state resolves now — adopting what landed, or
+        // releasing the scenes after a short grace — instead of sitting on
+        // "Extracting…" until its own 6/16-minute timeout.
+        if (String(msg.braindumpId ?? '').startsWith('fdx_')) {
+          notifyFdxJobComplete(String(msg.braindumpId), typeof counts.events === 'number' ? { events: counts.events } : undefined);
+        }
         const total =
           (counts.characters ?? 0) +
           (counts.events ?? 0) +
@@ -6401,6 +6408,11 @@ export default function FreeformCorkboard() {
         const total = (c.characters ?? 0) + (c.events ?? 0) + (c.locations ?? 0) + (c.relationships ?? 0);
         const staged = run.completed.staged;
         clearActiveRun(storyId, run.braindumpId);
+        // Same hand-off as the live braindump_complete, for a cowork job that
+        // finished while the writer was on another screen.
+        if (run.braindumpId.startsWith('fdx_')) {
+          notifyFdxJobComplete(run.braindumpId, typeof c.events === 'number' ? { events: c.events } : undefined);
+        }
         setBraindumpPhase('done');
         setBraindumpMsg(total === 0
           ? 'Extraction returned no new entities.'

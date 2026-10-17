@@ -1,6 +1,11 @@
 import {
   adoptBySpans,
+  alignWindows,
+  alignmentScore,
   bodyHashOf,
+  orphanFdxJobs,
+  splitWindowSuffix,
+  type MintedSpan,
   buildBraindumpProse,
   contiguousGroups,
   emptyStore,
@@ -336,5 +341,73 @@ describe('remapStoreCard (resposta do strip que troca o card)', () => {
     expect(remapStoreCard(st, ['ev_a'], 'ev_a')).toBe(0);
     expect(remapStoreCard(st, ['', 'ev_a'], '')).toBe(0);
     expect(Object.values(st.scenes)[0].eventId).toBe('ev_a');
+  });
+});
+
+describe('spansOf — janelas do import windowed (sufixo _wN, offsets relativos à janela)', () => {
+  // Caso real (Shawshank, 17/out/2026): headings da prose enviada pelo motor e
+  // spans da janela 1 lidos do servidor — todos começam num heading (Δ0).
+  const HEADINGS = [0, 930, 1378, 2547, 3661, 6698, 8301, 8704, 9374, 9961, 11302, 14072, 16178, 16492, 16757, 18093, 18291, 18484, 18699, 19658];
+  const JOB = 'fdx_1792249534890_4fxkxz';
+  const win = (id: string, w: number, start: number, end: number): ProjectEntity =>
+    card(id, id, { src_braindump: `${JOB}_w${w}`, src_start: String(start), src_end: String(end) } as any);
+
+  it('splitWindowSuffix: separa o id do job e a janela; sem sufixo = janela 0', () => {
+    expect(splitWindowSuffix(`${JOB}_w4`)).toEqual({ jobId: JOB, window: 4 });
+    expect(splitWindowSuffix(JOB)).toEqual({ jobId: JOB, window: 0 });
+    expect(splitWindowSuffix('bd1')).toEqual({ jobId: 'bd1', window: 0 });
+  });
+
+  it('janela 1 do caso real: base 0, spans intactos; eventos de outro job ficam de fora', () => {
+    const cards = [
+      win('e2', 1, 3661, 6698), win('e1', 1, 0, 3661), win('e3', 1, 6698, 8301),
+      card('other', 'X', { src_braindump: 'fdx_1_zzzzzz_w1', src_start: '0', src_end: '10' } as any),
+    ];
+    expect(spansOf(cards, JOB, HEADINGS)).toEqual([
+      { id: 'e1', start: 0, end: 3661 }, { id: 'e2', start: 3661, end: 6698 }, { id: 'e3', start: 6698, end: 8301 },
+    ]);
+  });
+
+  it('janela seguinte: a base é o heading que alinha os inícios dos spans, não a soma das janelas', () => {
+    // A janela 1 cobre [0,8301) mas a janela 2 começa em 9374: a IA não cobriu o
+    // fim do texto da janela 1. A soma das janelas (8301) alinharia 1 span; 9374 alinha 3.
+    const cards = [win('a', 1, 0, 3661), win('b', 1, 3661, 8301), win('c', 2, 0, 587), win('d', 2, 587, 1928), win('e', 2, 1928, 4698)];
+    expect(spansOf(cards, JOB, HEADINGS)).toEqual([
+      { id: 'a', start: 0, end: 3661 }, { id: 'b', start: 3661, end: 8301 },
+      { id: 'c', start: 9374, end: 9961 }, { id: 'd', start: 9961, end: 11302 }, { id: 'e', start: 11302, end: 14072 },
+    ]);
+  });
+
+  it('sem headings conhecidos (nada alinha) a janela começa onde a anterior acabou', () => {
+    const cards = [win('a', 1, 0, 100), win('b', 1, 100, 250), win('c', 2, 0, 50)];
+    expect(spansOf(cards, JOB)).toEqual([
+      { id: 'a', start: 0, end: 100 }, { id: 'b', start: 100, end: 250 }, { id: 'c', start: 250, end: 300 },
+    ]);
+  });
+
+  it('alignWindows: as bases não voltam atrás; a janela 0 (um-shot) fica em 0', () => {
+    const windows = new Map<number, MintedSpan[]>([[1, [{ id: 'a', start: 0, end: 500 }]], [2, [{ id: 'b', start: 0, end: 400 }]]]);
+    // O heading 0 também alinharia a janela 2, mas fica atrás da janela 1.
+    expect(alignWindows(windows, [0, 500, 900])).toEqual(new Map([[1, 0], [2, 500]]));
+    expect(alignWindows(new Map([[0, [{ id: 'x', start: 7, end: 20 }]]]), [0, 7])).toEqual(new Map([[0, 0]]));
+  });
+
+  it('alignmentScore: fração dos spans que começam num heading (±tolerância)', () => {
+    const spans = [{ id: 'a', start: 0, end: 3661 }, { id: 'b', start: 3661, end: 6698 }, { id: 'c', start: 5000, end: 6000 }, { id: 'd', start: 8299, end: 9374 }];
+    expect(alignmentScore(spans, HEADINGS)).toBeCloseTo(0.75);
+    expect(alignmentScore([], HEADINGS)).toBe(0);
+  });
+
+  it('orphanFdxJobs: jobs fdx_ com eventos vivos sem dona, do mais novo ao mais velho', () => {
+    const cards = [
+      card('k1', 'K', { src_braindump: 'fdx_1_aaaaaa', created_at: '2026-10-17T15:30:00Z' }), // adotado: fora
+      card('o1', 'O', { src_braindump: 'fdx_1_aaaaaa_w1', created_at: '2026-10-17T15:06:00Z' }),
+      card('o2', 'O', { src_braindump: 'fdx_2_bbbbbb_w3', created_at: '2026-10-17T15:14:00Z' }),
+      card('o3', 'O', { src_braindump: 'fdx_2_bbbbbb_w1', created_at: '2026-10-17T15:13:00Z' }),
+      card('dead', 'D', { src_braindump: 'fdx_3_cccccc', created_at: '2026-10-17T16:00:00Z', deleted_at: 'x' }), // trash: fora
+      card('bd', 'B', { src_braindump: 'bd_scratch_1', created_at: '2026-10-17T16:00:00Z' }), // não é do cowork
+      card('nosrc', 'N'),
+    ];
+    expect(orphanFdxJobs(cards, new Set(['k1']))).toEqual(['fdx_2_bbbbbb', 'fdx_1_aaaaaa']);
   });
 });

@@ -336,6 +336,15 @@ export interface PendingJob {
   scenes: PendingScene[];
   /** Cena mapeada imediatamente anterior ao bloco novo (âncora do splice). */
   tailSceneId?: string;
+  /** O board recebeu `braindump_complete` deste job (notifyFdxJobComplete).
+   *  A partir daqui o motor espera só uma folga curta pelos cards legíveis. */
+  completedAt?: string;
+  /** `counts.events` do braindump_complete, quando veio: 0 = nada vai pousar. */
+  completedEvents?: number;
+  /** Quantos spans legíveis a última rodada viu e desde quando esse número não
+   *  muda — o import windowed pousa janela a janela (ver decidePendingJob). */
+  spansSeen?: number;
+  spansSeenAt?: string;
 }
 
 /** Roteiro das cenas no formato do fullText do parser (heading, ação, CUE
@@ -356,18 +365,99 @@ export function buildBraindumpProse(scenes: FdxScene[]): { prose: string; offset
 
 export interface MintedSpan { id: string; start: number; end: number }
 
-/** Eventos vivos mintados por um braindump, com spans válidos, em ordem de span. */
-export function spansOf(entities: ProjectEntity[], braindumpId: string): MintedSpan[] {
-  return entities
-    .filter((e) => e.type === 'event' && !e.deleted_at && String((e as any).src_braindump ?? '') === braindumpId)
-    .map((e) => ({
-      id: e.id,
-      start: parseInt(String((e as any).src_start ?? ''), 10),
-      end: parseInt(String((e as any).src_end ?? ''), 10),
-    }))
-    .filter((s) => Number.isFinite(s.start))
-    .map((s) => ({ ...s, end: Number.isFinite(s.end) && s.end > s.start ? s.end : s.start + 1 }))
-    .sort((a, b) => a.start - b.start);
+/** Um `src_braindump` → id do job + índice da janela. O import WINDOWED do
+ *  servidor (prose > BIG_PROSE) carimba cada janela como `<braindumpId>_w<N>`
+ *  (caso real Shawshank, 17/out/2026: `fdx_…_4fxkxz_w1`…`_w4`), com
+ *  `src_start`/`src_end` RELATIVOS à janela. Sem sufixo = janela 0 (um-shot). */
+export function splitWindowSuffix(src: string): { jobId: string; window: number } {
+  const m = /^(fdx_\d+_[a-z0-9]+)_w(\d+)$/.exec(src);
+  return m ? { jobId: m[1], window: Number(m[2]) } : { jobId: src, window: 0 };
+}
+
+/** Tolerância (chars) entre o início de um span e um heading: a IA fecha o
+ *  span antes das linhas em branco que separam as cenas (Δ-2 observado). */
+export const WINDOW_ALIGN_TOL = 8;
+
+/** Base GLOBAL de cada janela do import windowed. O servidor corta as janelas
+ *  em heading e a IA começa cada evento num heading (Shawshank: Δ0 em todos
+ *  os spans da janela 1), então a base de uma janela é o heading que melhor
+ *  alinha os inícios dos seus spans aos headings das cenas enviadas — em
+ *  ordem de janela, sem voltar atrás. Sem alinhamento algum (ou sem headings
+ *  conhecidos), a janela começa onde a anterior acabou. Janela 0 = base 0. */
+export function alignWindows(windows: Map<number, MintedSpan[]>, headingOffsets: number[]): Map<number, number> {
+  const bases = new Map<number, number>();
+  const sorted = [...headingOffsets].sort((a, b) => a - b);
+  const hits = (base: number, spans: MintedSpan[]): number =>
+    spans.filter((s) => sorted.some((h) => Math.abs(base + s.start - h) <= WINDOW_ALIGN_TOL)).length;
+  let cursor = 0; // onde a janela anterior acabou
+  let floor = -1; // bases não voltam atrás
+  for (const w of [...windows.keys()].sort((a, b) => a - b)) {
+    const spans = windows.get(w)!;
+    let base = 0;
+    if (w !== 0) {
+      base = cursor;
+      let best = -1;
+      for (const h of [cursor, ...sorted.filter((o) => o > floor)]) {
+        const n = hits(h, spans);
+        if (n > best || (n === best && Math.abs(h - cursor) < Math.abs(base - cursor))) { best = n; base = h; }
+      }
+    }
+    bases.set(w, base);
+    floor = base;
+    cursor = base + Math.max(0, ...spans.map((s) => s.end));
+  }
+  return bases;
+}
+
+/** Eventos vivos mintados por um braindump, com spans válidos e GLOBAIS (as
+ *  janelas do import windowed re-baseadas por alignWindows), em ordem de span.
+ *  `headingOffsets` = offsets dos headings na prose enviada (PendingScene.offset). */
+export function spansOf(entities: ProjectEntity[], braindumpId: string, headingOffsets: number[] = []): MintedSpan[] {
+  const windows = new Map<number, MintedSpan[]>();
+  for (const e of entities) {
+    if (e.type !== 'event' || e.deleted_at) continue;
+    const src = String((e as any).src_braindump ?? '');
+    const { jobId, window } = src === braindumpId ? { jobId: src, window: 0 } : splitWindowSuffix(src);
+    if (jobId !== braindumpId) continue;
+    const start = parseInt(String((e as any).src_start ?? ''), 10);
+    if (!Number.isFinite(start)) continue;
+    const endRaw = parseInt(String((e as any).src_end ?? ''), 10);
+    const span: MintedSpan = { id: e.id, start, end: Number.isFinite(endRaw) && endRaw > start ? endRaw : start + 1 };
+    const list = windows.get(window);
+    if (list) list.push(span); else windows.set(window, [span]);
+  }
+  if (!windows.size) return [];
+  const bases = alignWindows(windows, headingOffsets);
+  const out: MintedSpan[] = [];
+  for (const [w, spans] of windows) {
+    const base = bases.get(w) ?? 0;
+    for (const s of spans) out.push({ id: s.id, start: base + s.start, end: base + s.end });
+  }
+  return out.sort((a, b) => a.start - b.start);
+}
+
+/** Fração dos spans que começam num heading do grupo (±WINDOW_ALIGN_TOL). */
+export function alignmentScore(spans: MintedSpan[], headingOffsets: number[]): number {
+  if (!spans.length) return 0;
+  const n = spans.filter((s) => headingOffsets.some((h) => Math.abs(s.start - h) <= WINDOW_ALIGN_TOL)).length;
+  return n / spans.length;
+}
+
+/** Alinhamento mínimo para adotar os cards de um job anterior (orphanFdxJobs). */
+export const ORPHAN_MIN_ALIGNMENT = 0.6;
+
+/** Jobs do cowork (`fdx_…`) com eventos vivos que ninguém adotou, do mais
+ *  recente ao mais antigo (pelo created_at mais novo de cada job). */
+export function orphanFdxJobs(entities: ProjectEntity[], knownEventIds: ReadonlySet<string>): string[] {
+  const newest = new Map<string, string>();
+  for (const e of entities) {
+    if (e.type !== 'event' || e.deleted_at || knownEventIds.has(e.id)) continue;
+    const { jobId } = splitWindowSuffix(String((e as any).src_braindump ?? ''));
+    if (!jobId.startsWith('fdx_')) continue;
+    const at = String((e as any).created_at ?? '');
+    if (at > (newest.get(jobId) ?? '')) newest.set(jobId, at);
+  }
+  return [...newest.entries()].sort((a, b) => (a[1] < b[1] ? 1 : a[1] > b[1] ? -1 : 0)).map(([id]) => id);
 }
 
 export interface SpanAdoption { eventId: string; own: boolean }
@@ -473,8 +563,10 @@ export interface FdxSyncSnapshot {
   cardCount: number;
   progress?: { done: number; total: number };
   /** Job de IA em voo: cenas novas aguardando os cards mintados. proseLength
-   *  deixa o board decidir o meter (windowed acima de 40k chars). */
-  pending?: { count: number; since: string; braindumpId: string; proseLength: number };
+   *  deixa o board decidir o meter (windowed acima de BIG_PROSE chars).
+   *  completedAt = o board já viu o braindump_complete; o motor espera os
+   *  cards ficarem legíveis ("Landing…" na UI). */
+  pending?: { count: number; since: string; braindumpId: string; proseLength: number; completedAt?: string };
   lastRun?: FdxRunSummary;
   /** Cenas sumidas do arquivo ainda SEM decisão (keep/trash). */
   missing: Array<{ recordId: string; eventId: string; heading: string; since: string; sharedCard: boolean }>;
@@ -494,9 +586,56 @@ const POLL_EARLY_MS = 15000;
 const POLL_LATE_MS = 30000;
 /** Sem eventos legíveis até aqui = a IA não produziu cards; libera as cenas
  *  (continuam sem card, esperando) para o Sync now / o cooldown re-tentar. */
-const PENDING_TIMEOUT_MS = 6 * 60 * 1000;
-const PENDING_TIMEOUT_BIG_MS = 16 * 60 * 1000; // roteiros > 40k chars (import windowed)
-const BIG_PROSE = 40000;
+export const PENDING_TIMEOUT_MS = 6 * 60 * 1000;
+export const PENDING_TIMEOUT_BIG_MS = 16 * 60 * 1000; // roteiros windowed no servidor
+/** Acima disto o servidor roda o import WINDOWED (minutos). Espelha
+ *  WINDOWED_SCRIPT_CHARS do board / LARGE_SCRIPT_CHARS do backend. */
+export const BIG_PROSE = 18000;
+/** Depois do `braindump_complete`, quanto esperar pelos cards ficarem legíveis
+ *  antes de liberar as cenas. O backend grava o blob vazio ao completar e o
+ *  conteúdo real chega numa segunda escrita ~3 min depois — quando chega. */
+export const LANDING_GRACE_MS = 4 * 60 * 1000;
+
+export type PendingVerdict =
+  | { action: 'adopt' }
+  | { action: 'wait' }
+  | { action: 'release'; reason: 'timeout' | 'completed_no_cards' | 'completed_unreadable' };
+
+/** Import windowed ainda sem `braindump_complete`: quanto tempo o número de
+ *  spans legíveis precisa ficar parado para adotar — as janelas pousam uma a
+ *  uma (Shawshank: w1 15:06:45, w4 15:07:05, complete 15:07:57). */
+export const WINDOW_SETTLE_MS = 90 * 1000;
+
+/**
+ * O que fazer com o job de IA pendente nesta rodada. Pura (testada sem o motor):
+ * spans legíveis → adota — mas um job WINDOWED ainda sem complete só adota com
+ * o conjunto de spans parado há WINDOW_SETTLE_MS (adotar só a 1ª janela
+ * deixaria as cenas das seguintes "novas" → outro job → cards duplicados);
+ * sem spans → espera, até o timeout OU, se o board já viu o
+ * `braindump_complete`, até uma folga curta (ou na hora, se o servidor disse
+ * que extraiu zero eventos). Sem isto um job terminado sem cards legíveis
+ * ficava "Extracting…" por 6/16 minutos.
+ */
+export function decidePendingJob(
+  job: Pick<PendingJob, 'enqueuedAt' | 'prose' | 'completedAt' | 'completedEvents' | 'spansSeenAt'>,
+  spansFound: number,
+  nowMs: number,
+): PendingVerdict {
+  if (spansFound > 0) {
+    if (job.completedAt || job.prose.length <= BIG_PROSE) return { action: 'adopt' };
+    const stableFor = nowMs - (Date.parse(job.spansSeenAt ?? '') || nowMs);
+    return stableFor >= WINDOW_SETTLE_MS ? { action: 'adopt' } : { action: 'wait' };
+  }
+  const age = nowMs - (Date.parse(job.enqueuedAt) || nowMs);
+  const timeout = job.prose.length > BIG_PROSE ? PENDING_TIMEOUT_BIG_MS : PENDING_TIMEOUT_MS;
+  if (age > timeout) return { action: 'release', reason: 'timeout' };
+  if (job.completedAt) {
+    if (job.completedEvents === 0) return { action: 'release', reason: 'completed_no_cards' };
+    const sinceDone = nowMs - (Date.parse(job.completedAt) || nowMs);
+    if (sinceDone > LANDING_GRACE_MS) return { action: 'release', reason: 'completed_unreadable' };
+  }
+  return { action: 'wait' };
+}
 /** Depois de um job que não pousou, o modo auto espera antes de re-enfileirar. */
 const AI_FAILURE_COOLDOWN_MS = 10 * 60 * 1000;
 
@@ -553,7 +692,10 @@ export function getFdxSyncSnapshot(): FdxSyncSnapshot {
     cardCount: new Set(live.map((r) => r.eventId)).size,
     progress,
     pending: store.pending
-      ? { count: store.pending.scenes.length, since: store.pending.enqueuedAt, braindumpId: store.pending.braindumpId, proseLength: store.pending.prose.length }
+      ? {
+        count: store.pending.scenes.length, since: store.pending.enqueuedAt, braindumpId: store.pending.braindumpId,
+        proseLength: store.pending.prose.length, ...(store.pending.completedAt ? { completedAt: store.pending.completedAt } : {}),
+      }
       : undefined,
     lastRun,
     missing: recs
@@ -666,6 +808,27 @@ export async function openFdxSync(): Promise<boolean> {
   emit();
   if (payload.ok) await runSync(payload, { manual: true });
   return true;
+}
+
+/**
+ * O board recebeu `braindump_complete` deste job (pelo WS, que o motor não
+ * escuta). Sem isto o motor só descobria o pouso pelo poll, e um job que
+ * terminou sem cards legíveis (o blob vazio do backend) ficava "Extracting…"
+ * até o timeout. Agora: marca o job como completo, roda a rodada na hora
+ * (adota o que pousou) e, se nada pousar na folga (decidePendingJob), libera
+ * as cenas. Idempotente por job; ignora ids que não são o pendente.
+ */
+export function notifyFdxJobComplete(braindumpId: string, counts?: { events?: number }): void {
+  const job = store.pending;
+  if (!job || job.braindumpId !== braindumpId || job.completedAt) return;
+  job.completedAt = new Date().toISOString();
+  if (typeof counts?.events === 'number') job.completedEvents = counts.events;
+  if (storyId) persistStore(storyId, store);
+  emit();
+  clearPoll();
+  pollAttempt = 1; // cadência curta (15 s) enquanto espera o pouso
+  if (active && lastPayload?.ok) void runSync(lastPayload);
+  else schedulePoll();
 }
 
 export async function stopFdxSync(): Promise<void> {
@@ -804,23 +967,27 @@ async function runSync(payload: FdxPayload, opts?: { manual?: boolean }): Promis
     let jobPending = false;
     if (store.pending) {
       const job = store.pending;
-      const spans = spansOf(cards, job.braindumpId);
-      const age = Date.now() - Date.parse(job.enqueuedAt);
-      const timeout = job.prose.length > BIG_PROSE ? PENDING_TIMEOUT_BIG_MS : PENDING_TIMEOUT_MS;
-      if (spans.length === 0) {
-        if (age > timeout) {
-          // A IA não produziu cards a tempo. NADA é criado mecanicamente: as
-          // cenas seguem sem card, esperando; o modo auto respeita um cooldown
-          // para novos jobs, o Sync now re-enfileira na hora.
-          console.warn('[fdx-sync] AI job produced no readable cards in time; releasing', { braindumpId: job.braindumpId, age });
-          store.pending = undefined;
-          store.lastAiFailureAt = now;
-          lastError = `AI extraction produced no cards for ${job.scenes.length} scene(s) in time — they are still waiting; Sync now retries`;
-          clearPoll();
-        } else {
-          jobPending = true;
-          for (const ps of job.scenes) waitingKeys.add(keyOf(ps.number, ps.headingNorm));
-        }
+      const spans = spansOf(cards, job.braindumpId, job.scenes.map((ps) => ps.offset));
+      if (spans.length !== (job.spansSeen ?? 0)) { job.spansSeen = spans.length; job.spansSeenAt = now; }
+      const verdict = decidePendingJob(job, spans.length, Date.now());
+      if (verdict.action === 'release') {
+        // A IA não produziu cards legíveis (a tempo, ou depois de terminar).
+        // NADA é criado mecanicamente: as cenas seguem sem card, esperando; o
+        // modo auto respeita um cooldown para novos jobs, o Sync now
+        // re-enfileira na hora.
+        console.warn('[fdx-sync] AI job produced no readable cards; releasing', { braindumpId: job.braindumpId, reason: verdict.reason });
+        store.pending = undefined;
+        store.lastAiFailureAt = now;
+        const n = job.scenes.length;
+        lastError = verdict.reason === 'completed_no_cards'
+          ? `AI extraction finished with no cards for ${n} scene(s) — they are still waiting; Sync now retries`
+          : verdict.reason === 'completed_unreadable'
+            ? `AI extraction finished but its cards never became readable — ${n} scene(s) still waiting; Sync now retries`
+            : `AI extraction produced no cards for ${n} scene(s) in time — they are still waiting; Sync now retries`;
+        clearPoll();
+      } else if (verdict.action === 'wait') {
+        jobPending = true;
+        for (const ps of job.scenes) waitingKeys.add(keyOf(ps.number, ps.headingNorm));
       } else {
         const adoptions = adoptBySpans(job.scenes, spans);
         job.scenes.forEach((ps, i) => {
@@ -831,6 +998,48 @@ async function runSync(payload: FdxPayload, opts?: { manual?: boolean }): Promis
         });
         store.pending = undefined;
         clearPoll();
+      }
+    }
+
+    // ---- Cards órfãos de um job NOSSO que já pousou ---------------------------
+    // Um job liberado (timeout, complete sem spans legíveis — foi o caso do
+    // sufixo `_wN` do import windowed — ou a segunda escrita tardia do blob)
+    // deixa os cards no board sem dona. Antes de pedir OUTRO job à IA, adota-os:
+    // sem isto cada retry duplicava o roteiro inteiro em cards (Shawshank,
+    // 17/out: 51 + 54 cards do mesmo roteiro). Só com alinhamento forte dos
+    // spans aos headings do grupo — um job de outras cenas não alinha — e só
+    // as cenas que os spans cobrem; o resto segue novo.
+    if (!store.pending) {
+      const freeIdx = matches.map((m, i) => (m.eventId ? -1 : i)).filter((i) => i >= 0);
+      const group = contiguousGroups(freeIdx)[0];
+      if (group && group.length) {
+        const known = new Set<string>(Object.keys(store.events));
+        for (const m of matches) if (m.eventId) known.add(m.eventId);
+        const { offsets } = buildBraindumpProse(group.map((i) => matches[i].scene));
+        for (const jobId of orphanFdxJobs(cards, known)) {
+          const spans = spansOf(cards, jobId, offsets);
+          if (!spans.length || alignmentScore(spans, offsets) < ORPHAN_MIN_ALIGNMENT) continue;
+          const pend: PendingScene[] = group.map((i, j) => ({
+            number: matches[i].scene.number, heading: matches[i].scene.heading.trim(), headingNorm: matches[i].headingNorm,
+            offset: offsets[j], bodyHash: matches[i].bodyHash,
+          }));
+          const adoptions = adoptBySpans(pend, spans);
+          const coveredEnd = Math.max(...spans.map((s) => s.end)) + WINDOW_ALIGN_TOL;
+          let adopted = 0;
+          group.forEach((i, j) => {
+            const a = adoptions[j];
+            if (!a || offsets[j] >= coveredEnd) return;
+            // A IA leu este texto quando o job rodou; o bodyHash atual carimba a
+            // extração como feita (mesma regra do job pendente).
+            fromJob.set(i, { eventId: a.eventId, own: a.own, bodyHash: matches[i].bodyHash });
+            adopted++;
+          });
+          if (adopted) {
+            console.info('[fdx-sync] adopted the cards of an earlier cowork job', { braindumpId: jobId, scenes: adopted, of: group.length });
+            lastError = undefined;
+            break;
+          }
+        }
       }
     }
 

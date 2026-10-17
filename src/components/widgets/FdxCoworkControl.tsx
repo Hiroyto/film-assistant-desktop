@@ -188,7 +188,9 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, strip }: Pr
     : snap.status === 'error'
       ? `Error: ${snap.lastError || 'sync run failed'}`
       : snap.pending
-        ? `AI extracting ${snap.pending.count} new scene(s)… since ${hhmmss(snap.pending.since)}`
+        ? (snap.pending.completedAt
+          ? `AI finished; waiting for the cards of ${snap.pending.count} scene(s) to land… since ${hhmmss(snap.pending.completedAt)}`
+          : `AI extracting ${snap.pending.count} new scene(s)… since ${hhmmss(snap.pending.since)}`)
         : snap.dirty
           ? 'File changed — waiting for Sync'
           : snap.lastSyncAt
@@ -203,7 +205,7 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, strip }: Pr
     : snap.status === 'error'
       ? 'Error'
       : snap.pending
-        ? 'Extracting…'
+        ? (snap.pending.completedAt ? 'Landing…' : 'Extracting…')
         : snap.dirty
           ? 'File changed'
           : snap.lastSyncAt
