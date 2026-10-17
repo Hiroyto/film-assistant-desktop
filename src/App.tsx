@@ -74,6 +74,7 @@ import { StoryUIProvider } from './components/ui/StoryUIContext';
 import { useStoryUI } from './components/ui/StoryUIContext';
 import { isDesktop } from './lib/ipcClient';
 import { safeApiCall } from './models/apiHelpers';
+import { isLocalFirst } from './lib/localFirst';
 import { startDesktopDataLifecycle, DesktopLifecycleHandle } from './data/desktop-lifecycle';
 import { cacheDataToCanonical } from './features/story-workspace/model/cacheDataAdapter';
 import { saveStory } from './features/story-workspace/model/storySave';
@@ -554,7 +555,7 @@ function AppContent() {
       // Home aparece instantânea e mesmo offline (quando o POST /user falha). O
       // backend abaixo segue atualizando cap/subscription e alimentando o pull.
       const desktopUserId = token?.payload['cognito:username'] as string | undefined;
-      if (isDesktop() && desktopUserId) {
+      if (isLocalFirst() && desktopUserId) {
         try {
           const localWorks = await worksFromLocal(desktopUserId);
           if (Object.keys(localWorks).length > 0) {
@@ -584,7 +585,7 @@ function AppContent() {
               // Desktop: `works` é fonte-local (SQLite); o backend NÃO sobrescreve.
               // O scheduler aplica os deltas do backend no SQLite e o efeito de
               // refresh (sync.applied) re-lê. Web: `works` vem do backend.
-              ...(isDesktop() ? {} : { works: body.works }),
+              ...(isLocalFirst() ? {} : { works: body.works }),
               privacy: body.privacy
             }));
             setLoading(true);
@@ -604,7 +605,7 @@ function AppContent() {
   // pull termina, re-lê o `works` do banco local. Mantém a grade da Home coerente
   // com o que o scheduler trouxe, sem depender de um novo POST /user. No-op na web.
   useEffect(() => {
-    if (!isDesktop()) return;
+    if (!isLocalFirst()) return;
     const userId = token?.payload['cognito:username'] as string | undefined;
     if (!userId) return;
     let cancelled = false;
@@ -696,7 +697,7 @@ function AppContent() {
    * (Strangler Fig). See src/data/desktop-lifecycle.ts.
    */
   useEffect(() => {
-    if (!isDesktop() || authStatus !== 'authenticated' || !token) return;
+    if (!isLocalFirst() || authStatus !== 'authenticated' || !token) return;
     const userId = token.payload['cognito:username'] as string | undefined;
     if (!userId) return;
     const handle = startDesktopDataLifecycle({
@@ -1176,7 +1177,7 @@ function AppContent() {
       // A2 (local-first / AD-01): no desktop, grava characters no SQLite + enfileira
       // o push (event=update-characters, characters como mapa). Web: POST direto.
       let response: any;
-      if (isDesktop()) {
+      if (isLocalFirst()) {
         const uid = token.payload['cognito:username'] as string;
         await saveCharactersLocal(data.storyId, charactersToSave as any, uid);
         const works = await worksFromLocal(uid);
@@ -1360,7 +1361,7 @@ function AppContent() {
       // Fonte-da-verdade no desktop: carrega a story ativa do banco local ANTES
       // do localStorage. Roda no mount (pré-auth) — getStory é por storyId, não
       // precisa de userId. screenplayContent fica para o editor (B3). No-op web.
-      if (isDesktop()) {
+      if (isLocalFirst()) {
         try {
           const activeId = localStorage.getItem('active_story_id');
           if (activeId) {
@@ -1431,7 +1432,7 @@ function AppContent() {
   // and its id forgotten, so it never shows in the editor nor gets pushed to
   // the wrong user's cloud on a save. A missing row (a new story not saved yet)
   // or a row with no owner recorded passes.
-  const ownerCheckUserId = isDesktop() ? (token?.payload['cognito:username'] as string | undefined) : undefined;
+  const ownerCheckUserId = isLocalFirst() ? (token?.payload['cognito:username'] as string | undefined) : undefined;
   useEffect(() => {
     const storyId = data.storyId;
     if (!ownerCheckUserId || !storyId) return;
@@ -1825,7 +1826,7 @@ function AppContent() {
     // push ao /works (push-worker faz retry/backoff). storyId é client-gen (COD-002);
     // a serialização canônica preserva segments+scenes (corrige RISK-011 lossy save).
     // Retorna um envelope no mesmo shape do backend p/ o onSuccess do mutateSave.
-    if (isDesktop()) {
+    if (isLocalFirst()) {
       const userId = token?.payload['cognito:username'] as string;
       const effectiveStoryId = storyId || data.storyId || generateStoryId();
       const canonical = cacheDataToCanonical({ ...data, title, storyId: effectiveStoryId });

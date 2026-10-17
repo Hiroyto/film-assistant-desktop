@@ -7,7 +7,7 @@
 //                  lastModified, createdAt } }
 //
 // Fonte = SQLite (já populado pelo initial-pull + scheduler). Desktop-only — o
-// caller deve checar isDesktop(). Repos injetáveis p/ teste sem Electron/DB.
+// caller deve checar isLocalFirst(). Repos injetáveis p/ teste sem Electron/DB.
 import { storyRepo, characterRepo } from '../../../data/local-db/repositories';
 import { rowToCanonical, canonicalToWire } from './storySerialization';
 import { toCanonicalCharacterArray, Character } from '../../../models/character';

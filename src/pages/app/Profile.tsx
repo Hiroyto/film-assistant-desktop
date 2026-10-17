@@ -18,6 +18,7 @@ import { worksFromLocal } from '../../features/story-workspace/model/worksFromLo
 import { Settings, CreditCard } from "lucide-react";
 import Footer from "../../components/footer";
 import { isDesktop, openExternal } from "../../lib/ipcClient";
+import { isLocalFirst } from "../../lib/localFirst";
 import { useStoryUI } from "../../components/ui/StoryUIContext";
 
 
@@ -55,7 +56,7 @@ export default function Profile(props: any) {
                 sign_up_date: res.data.body.sign_up_date,
                 // Desktop: `works` é fonte-LOCAL (SQLite) — o backend NÃO sobrescreve
                 // (mesma guarda do handleDynamoUser do App.tsx).
-                ...(isDesktop() ? {} : { works: res.data.body.works ?? {} }),
+                ...(isLocalFirst() ? {} : { works: res.data.body.works ?? {} }),
                 privacy: res.data.body.privacy,
             }));
         } catch (error) {
@@ -121,7 +122,7 @@ export default function Profile(props: any) {
                 // local-first (o refetch da nuvem não a sobrescreve mais), e o
                 // delete legado só chama a Lambda — então some-se localmente
                 // também, senão a story volta do SQLite no próximo render.
-                if (isDesktop()) {
+                if (isLocalFirst()) {
                     const at = new Date().toISOString();
                     try {
                         for (const sid of storyIdsArray) await storyRepo.softDelete(sid, at);

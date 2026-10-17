@@ -29,6 +29,7 @@ import { PEER_BLUE } from '../../components/Freeform/tokens';
 import { FdxCoworkControl, startFdxCowork } from '../../components/widgets/FdxCoworkControl';
 import { remapFdxSyncCard } from '../../lib/fdxSync';
 import { isDesktop } from '../../lib/ipcClient';
+import { isLocalFirst } from '../../lib/localFirst';
 import { flushPushNow } from '../../data/desktop-lifecycle';
 import { SupersessionRequiredError, acceptArcSuggestion, answerStagedQuestion, saveStoryFact, deleteStoryFact, type StoryFactKind, createArc, createArcFromEvents, createCard, createInformation, createSequence, deleteArc, deleteCard, dismissArcSuggestion, enqueueCardExtraction, enqueueExtractionJob, getCardLayouts, isMockMode, listArcSuggestions, listCardQuestions, listProjectEntities, listBraindumps, listStagedQuestions, placeStagedCard, promoteStructuralToRelationship, resolveNarrativeStatusFlip, restoreArc, restoreCard, slugForCard, tagSequenceContains, updateArc, updateCardDescription, updateCardName, updateCardNarrativeStatus, updateCardPosition, type ArcKind, type ArcSuggestion, type BraindumpLogEntry, type CardLayout, type EvokesTransition, type ListProjectEntitiesResponse, type NarrativeStatus, type PersistedQuestion, type ProjectEntity, type StagedQuestion, type SupersessionRequiredResponse, tagEventEvokes
 } from '../../lib/freeformApi';
@@ -878,7 +879,7 @@ export default function FreeformCorkboard() {
             // push só ENFILEIRADO. Drena a fila antes de re-tentar; assim o board
             // se recupera sozinho (reload, deep link, fila atrasada) em vez de
             // abrir vazio sobre um grafo que existe. No-op na web e com fila vazia.
-            if (isDesktop()) {
+            if (isLocalFirst()) {
               try {
                 await flushPushNow();
               } catch { /* best-effort — o retry acontece de qualquer jeito */ }

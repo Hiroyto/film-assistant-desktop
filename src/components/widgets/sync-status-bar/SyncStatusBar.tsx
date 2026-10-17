@@ -6,7 +6,7 @@
 import React, { useEffect, useState } from 'react';
 import { WifiHigh, RefreshCw, WifiOff, AlertTriangle, LucideIcon } from 'lucide-react';
 import { on, SyncState } from '../../../data/sync-agent/events';
-import { isDesktop } from '../../../lib/ipcClient';
+import { isLocalFirst } from '../../../lib/localFirst';
 
 export interface SyncStatusBarProps {
   onRetry?: () => void;
@@ -65,7 +65,7 @@ export function SyncStatusBar({ onRetry, onViewConflicts }: SyncStatusBarProps):
     return () => offs.forEach((off) => off());
   }, []);
 
-  if (!isDesktop()) return null;
+  if (!isLocalFirst()) return null;
 
   const view = VIEWS[state];
   const Icon = view.Icon;

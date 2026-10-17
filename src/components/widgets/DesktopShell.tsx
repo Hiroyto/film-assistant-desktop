@@ -4,6 +4,7 @@
 // (não afeta a SPA — Strangler Fig / AD-07).
 import React, { useEffect, useRef } from 'react';
 import { isDesktop, onOsEvent } from '../../lib/ipcClient';
+import { isLocalFirst } from '../../lib/localFirst';
 import { initTelemetry } from '../../lib/telemetry';
 import { SyncStatusBar } from './sync-status-bar';
 import { UpdateAvailableModal } from './update-available';
@@ -90,6 +91,9 @@ export function DesktopShell(): JSX.Element | null {
           (z 50 — senão o "Resolve" re-emite o conflito com o modal aberto e zera a
           escolha) e acima das páginas com <Theme> (o root theme do Radix é um
           contexto z 0, então a sidebar z 99 da Home não a cobre). */}
+      {/* Barra de sync e modal de conflito só existem com o local-first ligado
+          (src/lib/localFirst.ts): em modo web não há fila nem pull. */}
+      {isLocalFirst() && (
       <div style={{ position: 'fixed', left: 12, bottom: 12, zIndex: 40 }}>
         <SyncStatusBar
           onRetry={() => void requestSyncNow()}
@@ -101,11 +105,13 @@ export function DesktopShell(): JSX.Element | null {
           }}
         />
       </div>
+      )}
       <UpdateAvailableModal />
       <FdxCoworkPanel />{/* protótipo coworking .fdx (só leitura) */}
       {/* 'remote' = aceitar a versão do backend (re-pull, não-destrutivo).
           'local' = manter a minha (re-enfileira p/ sobrescrever o backend; possível
           após o push-cutover A1). 'both' (duplicar) segue pendente — decisão de produto. */}
+      {isLocalFirst() && (
       <ConflictResolutionModal
         resolve={async (entityType, entityId, choice) => {
           console.info('[conflict] resolução escolhida', { entityType, entityId, choice });
@@ -130,6 +136,7 @@ export function DesktopShell(): JSX.Element | null {
           emitSyncEvent('sync.conflict.resolved', { entityType, entityId });
         }}
       />
+      )}
     </>
   );
 }

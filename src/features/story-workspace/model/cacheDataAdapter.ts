@@ -104,7 +104,7 @@ export interface MirrorDeps {
 /**
  * Espelha a Story salva no SQLite local (desktop). O writer de backend continua
  * sendo o axios POST /works legado; por isso synced_at = now (converge com o pull
- * sem conflito espúrio). Desktop-only — o caller deve checar isDesktop().
+ * sem conflito espúrio). Desktop-only — o caller deve checar isLocalFirst().
  */
 export async function mirrorStoryToLocal(
   data: CacheDataLike,

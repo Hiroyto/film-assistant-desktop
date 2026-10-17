@@ -11,7 +11,8 @@
 // the LOCAL SQLite. It NEVER double-writes to the backend — the push-queue only
 // sends entries that the legacy UI enqueues, and no live path enqueues yet (the
 // legacy DynamoDB save stays the sole writer until the Phase 3 feature cutover).
-// Desktop-only: callers MUST guard with isDesktop() (db proxy throws on web).
+// Desktop-only: callers MUST guard with isLocalFirst() (src/lib/localFirst.ts —
+// the switch is OFF by default; the db proxy throws on web).
 //
 // Every collaborator is injectable (opts.deps) so the orchestration is unit
 // testable without Electron, a backend, or aws-amplify.

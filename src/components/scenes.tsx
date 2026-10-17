@@ -18,7 +18,7 @@ import StoryNavigation from './Home/StoryNavigation';
 import ScenesActionButtons from './ScenesActionButtons';
 import { useWebSocket } from '../lib/useWebSocket';
 import { SegmentScenesView } from './Scenes/SegmentScenesView';
-import { isDesktop } from '../lib/ipcClient';
+import { isLocalFirst } from '../lib/localFirst';
 import { cacheDataToCanonical } from '../features/story-workspace/model/cacheDataAdapter';
 import { saveScenes } from '../features/scenes/model/saveScenes';
 import '../styles/Home/StackedActionButtons.css'
@@ -830,7 +830,7 @@ export function Scenes(props: any) {
     // fan-out de sync por segment alterado (save-scenes / delete-scenes COD-001).
     // Substitui o mirror + o POST por-segment. A serialização preserva segments+scenes
     // (RISK-011). Web: mantém o POST por-segment ao /works (inalterado).
-    if (isDesktop()) {
+    if (isLocalFirst()) {
       const uid = (user?.id || token?.payload?.['cognito:username']) as string | undefined;
       if (uid && updatedData.storyId) {
         const prev = cacheDataToCanonical(data);

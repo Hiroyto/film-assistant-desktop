@@ -83,7 +83,7 @@ import axios from "axios";
 import { debounce as lodashDebounce } from "lodash";
 import { CheckCircle, Loader } from "lucide-react";
 import { mirrorScreenplayToLocal, loadScreenplay, saveScreenplay } from "../../features/scripts/model/screenplayPersistence";
-import { isDesktop } from "../../lib/ipcClient";
+import { isLocalFirst } from "../../lib/localFirst";
 
 import Header from "../header";
 import Footer from "../footer";
@@ -608,7 +608,7 @@ export function Scripts(props: any) {
       //    abaixo seguir coerente (writeScreenplayToCache já espelha no SQLite).
       //  • Web: mantém o POST direto ao S3 (fire-and-forget), inalterado.
       if (resolvedStoryId && editorHTML) {
-        if (isDesktop()) {
+        if (isLocalFirst()) {
           writeScreenplayToCache(resolvedStoryId, editorHTML);
           void saveScreenplay(
             resolvedStoryId,
@@ -659,7 +659,7 @@ export function Scripts(props: any) {
         cached?.html ||
         (typeof data.screenplayContent === "string" ? data.screenplayContent : "");
 
-      if (isDesktop()) {
+      if (isLocalFirst()) {
         try {
           // loadScreenplay resolve SQLite > stateHtml; passamos o conteúdo do
           // localStorage/state como fallback. S3 segue como revalidação (passo B).

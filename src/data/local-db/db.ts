@@ -2,7 +2,7 @@
 // Os repositories usam estas funções; nunca tocam window.electronAPI diretamente.
 //
 // Na web (sem electronAPI) lança — a camada local-first é exclusiva do desktop (AD-07).
-// Hooks de feature checam isDesktop() antes de usar.
+// Hooks de feature checam isLocalFirst() (src/lib/localFirst.ts) antes de usar.
 
 import { isDesktop } from '../../lib/ipcClient';
 

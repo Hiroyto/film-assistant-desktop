@@ -14,7 +14,7 @@ import { ErrorModal } from './ui/ErrorModal';
 import { useError } from './Error/useError';
 import { Layers } from 'lucide-react';
 import { markStoryWorkflow, resolveStoryWorkflow } from '../lib/storyWorkflows';
-import { isDesktop } from '../lib/ipcClient';
+import { isLocalFirst } from '../lib/localFirst';
 import { saveStory } from '../features/story-workspace/model/storySave';
 import { cacheDataToCanonical } from '../features/story-workspace/model/cacheDataAdapter';
 import { worksFromLocal } from '../features/story-workspace/model/worksFromLocal';
@@ -440,7 +440,7 @@ export function HomePage(props: HomePageProps) {
       // `stories.workflow` column (carried by cacheDataToCanonical → saveStory)
       // and mirrored to /works by the push; markStoryWorkflow (localStorage) is
       // the per-device fallback for rows written before that column existed.
-      if (isDesktop()) {
+      if (isLocalFirst()) {
         // Local-first (mirrors App.save): SQLite is the source of truth, keyed by
         // the client id — so THAT id is canonical (no server-minted id to
         // resolve) and corkboard project == grid id. The push queue mirrors to
@@ -545,7 +545,7 @@ export function HomePage(props: HomePageProps) {
       BRAINSTORM: '', M: '', T: '', G: '', CQ: '', SUM: '',
       S1: '', S2: '', S3: '', S4: '', S5: '', S6: '', S7: '', S8: '', S9: '',
     };
-    if (isDesktop()) {
+    if (isLocalFirst()) {
       // Local-first, like the freeform branch of handleJumpToOutline: the client
       // id is canonical (SQLite key), so no server-minted id to resolve.
       markStoryWorkflow(fallbackId, 'freeform');
@@ -643,7 +643,7 @@ export function HomePage(props: HomePageProps) {
         // guarda o mapa da nuvem substituía a grade local-first: uma story que
         // ainda não subiu some da grade, e um work record da nuvem com
         // `workflow` errado reabria uma story de corkboard no editor de outline.
-        ...(isDesktop() ? {} : { works: res.data.body.works ?? {} }),
+        ...(isLocalFirst() ? {} : { works: res.data.body.works ?? {} }),
         cap: res.data.body.cap,
         subscription: res.data.body.subscription,
         sign_up_date: res.data.body.sign_up_date,
@@ -666,7 +666,7 @@ export function HomePage(props: HomePageProps) {
   // legado só chama a Lambda — então some-se localmente também, senão a story
   // volta do SQLite no próximo render.
   const refreshWorksAfterDelete = useCallback(async (storyIds: string[]) => {
-    if (!isDesktop()) {
+    if (!isLocalFirst()) {
       await handleDynamoUser();
       return;
     }

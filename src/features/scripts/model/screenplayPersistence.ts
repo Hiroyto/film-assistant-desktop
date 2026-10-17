@@ -6,7 +6,7 @@
 // A LÓGICA DO EDITOR TIPTAP NÃO é tocada (RISK-002). Aqui é só persistência.
 import { screenplayRepo } from '../../../data/local-db/repositories';
 import { enqueueMutation } from '../../../data/sync-queue';
-import { isDesktop } from '../../../lib/ipcClient';
+import { isLocalFirst } from '../../../lib/localFirst';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -38,7 +38,7 @@ export interface LoadOptions {
 /** Carrega o screenplay respeitando a prioridade SQLite > state > S3. */
 export async function loadScreenplay(storyId: string, opts: LoadOptions = {}): Promise<string> {
   let localHtml: string | null = null;
-  if (isDesktop()) {
+  if (isLocalFirst()) {
     const row = await screenplayRepo.getScreenplay(storyId);
     localHtml = decodeHtml(row?.html_content);
   }
@@ -50,7 +50,7 @@ export async function loadScreenplay(storyId: string, opts: LoadOptions = {}): P
     const s3 = await opts.fetchFromS3();
     if (s3) {
       // Hidrata o local com o que veio do S3.
-      if (isDesktop()) await persistLocal(storyId, s3);
+      if (isLocalFirst()) await persistLocal(storyId, s3);
       return s3;
     }
   }
@@ -79,7 +79,7 @@ async function persistLocal(storyId: string, html: string): Promise<void> {
  * bater com o que a Lambda lê — `screenplayContent` (não `html`) e `userId` presente.
  */
 export async function saveScreenplay(storyId: string, html: string, userId: string): Promise<void> {
-  if (isDesktop()) {
+  if (isLocalFirst()) {
     await persistLocal(storyId, html);
   }
   await enqueueMutation({
@@ -96,6 +96,6 @@ export async function saveScreenplay(storyId: string, html: string, userId: stri
  * Fig. No-op fora do desktop. Best-effort.
  */
 export async function mirrorScreenplayToLocal(storyId: string, html: string): Promise<void> {
-  if (!isDesktop() || !storyId) return;
+  if (!isLocalFirst() || !storyId) return;
   await persistLocal(storyId, html);
 }

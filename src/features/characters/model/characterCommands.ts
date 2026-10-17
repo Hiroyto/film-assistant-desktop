@@ -82,7 +82,7 @@ export interface CharacterMirrorDeps {
  * Espelha o conjunto de characters no SQLite local (desktop) SEM enfileirar push —
  * o writer de backend continua sendo o axios legado (Strangler Fig). `source` pode
  * ser array OU map (DDB shape). synced_at = now (converge com o pull, sem conflito).
- * Caller deve checar isDesktop(). Best-effort.
+ * Caller deve checar isLocalFirst(). Best-effort.
  */
 export async function mirrorCharactersToLocal(
   storyId: string,
