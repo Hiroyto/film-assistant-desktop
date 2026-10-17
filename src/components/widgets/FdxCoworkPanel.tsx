@@ -3,6 +3,12 @@
 // 'app:open-fdx'). Depois de abrir, mostra um controle discreto (arquivo, nº de
 // cenas, board, parar) e o board ao vivo. Enquanto nenhum .fdx está aberto,
 // renderiza nada — não é mais um widget flutuante permanente. Desktop-only.
+//
+// Só mostra arquivos que ELE abriu. O watcher do shell é um só e emite
+// fdx:changed para qualquer arquivo observado — inclusive o do cowork
+// sincronizado (lib/fdxSync). Antes o painel guardava esses payloads também, e
+// no "stop" da janela do cowork (sync.active → false) aparecia com o último
+// deles, board read-only aberto. Parar tem de ser só parar.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { isDesktop } from '../../lib/ipcClient';
 import { openFdx, closeFdx, onFdxChanged } from '../../lib/fdxClient';
@@ -25,6 +31,8 @@ export function FdxCoworkPanel(): JSX.Element | null {
   const [boardOpen, setBoardOpen] = useState(false);
   const busyRef = useRef(false);
   const pulseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** true só entre o openFdx() DESTE painel e o seu stop. */
+  const ownsRef = useRef(false);
 
   const open = useCallback(async () => {
     if (busyRef.current) return;
@@ -32,6 +40,7 @@ export function FdxCoworkPanel(): JSX.Element | null {
     try {
       const p = await openFdx();
       if (p) {
+        ownsRef.current = true;
         setPayload(p);
         if (p.ok) setBoardOpen(true); // abre o board na 1ª leitura
       }
@@ -43,6 +52,7 @@ export function FdxCoworkPanel(): JSX.Element | null {
   useEffect(() => {
     // Push do main a cada save do arquivo observado.
     const off = onFdxChanged((p) => {
+      if (!ownsRef.current) return; // arquivo do cowork sincronizado, não nosso
       setPayload(p);
       setPulse(true);
       if (pulseTimer.current) clearTimeout(pulseTimer.current);
@@ -62,11 +72,22 @@ export function FdxCoworkPanel(): JSX.Element | null {
     };
   }, [open]);
 
+  // O motor de sync tomou o watcher (um só no shell): o arquivo do painel, se
+  // havia, já não é observado — solta.
+  useEffect(() => {
+    if (sync.active && ownsRef.current) {
+      ownsRef.current = false;
+      setPayload(null);
+      setBoardOpen(false);
+    }
+  }, [sync.active]);
+
   // Opt-in: nada na tela até um .fdx ser aberto pelo menu. Com o motor de
   // sync ativo, o controle vive dentro do corkboard — este painel se cala.
   if (!isDesktop() || !payload || sync.active) return null;
 
   const stop = async (): Promise<void> => {
+    ownsRef.current = false;
     await closeFdx();
     setPayload(null);
     setBoardOpen(false);
