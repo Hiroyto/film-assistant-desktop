@@ -47,7 +47,7 @@ import {
   type ProjectEntity,
   type SceneLedgerBlock,
 } from './freeformApi';
-import { openFdx, closeFdx, onFdxChanged } from './fdxClient';
+import { openFdx, closeFdx, onFdxChanged, watchFdx } from './fdxClient';
 import { pulseExtractionGlobal } from './storySession';
 
 // ---- Helpers puros (exportados para teste) ---------------------------------
@@ -149,6 +149,14 @@ export interface FdxSyncStore {
   v: 2;
   filePath?: string;
   fileName?: string;
+  /** O cowork estava LIGADO neste arquivo quando o app fechou ou a story saiu
+   *  de cena. Só o stop explícito desliga. Com `filePath`, o motor reconecta
+   *  sozinho ao vincular a story de novo (resumeFdxSync). */
+  connected?: boolean;
+  /** Jobs de IA de uma sincronização DESFEITA (undoFdxResync: o roteirista
+   *  confirmou o arquivo errado): os cards que eles mintarem vão para o Trash
+   *  quando pousarem. Ids expiram (DISOWN_TTL_MS). */
+  disownedJobs?: Array<{ id: string; at: string }>;
   /** Auto-sync ligado (default) — o análogo do toggle do editor de roteiro. */
   auto: boolean;
   /** Por id de registro (uma cena do arquivo). */
@@ -171,7 +179,7 @@ let recSeq = 0;
 export const newRecordId = (): string => `rec_${Date.now().toString(36)}_${(recSeq++).toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
 
 /** v1 (um registro por eventId, hashes no registro) → v2. */
-function migrateStore(parsed: any): FdxSyncStore | null {
+export function migrateStore(parsed: any): FdxSyncStore | null {
   if (!parsed || typeof parsed !== 'object') return null;
   if (parsed.v === 2 && typeof parsed.scenes === 'object') {
     return { ...emptyStore(), ...parsed, scenes: parsed.scenes ?? {}, events: parsed.events ?? {} };
@@ -397,7 +405,8 @@ export function alignWindows(windows: Map<number, MintedSpan[]>, headingOffsets:
     if (w !== 0) {
       base = cursor;
       let best = -1;
-      for (const h of [cursor, ...sorted.filter((o) => o > floor)]) {
+      const after = floor; // cópia estável para o closure (no-loop-func)
+      for (const h of [cursor, ...sorted.filter((o) => o > after)]) {
         const n = hits(h, spans);
         if (n > best || (n === best && Math.abs(h - cursor) < Math.abs(base - cursor))) { best = n; base = h; }
       }
@@ -548,6 +557,14 @@ export interface FdxSyncSnapshot {
   active: boolean;
   filePath?: string;
   fileName?: string;
+  /** A reconexão ao abrir a story não achou o arquivo (nome): o cowork está
+   *  desligado à espera de o roteirista escolher o arquivo de novo ou parar. */
+  fileMissing?: string;
+  /** Arquivo escolhido depois de um `fileMissing`, à espera de confirmação: o
+   *  relatório compara-o com o mapa do board (compareWithStore). */
+  candidate?: { fileName: string; path: string; report: CandidateReport };
+  /** A última confirmação de arquivo novo pode ser desfeita (undoFdxResync). */
+  undo?: { fileName: string; previousFileName?: string; at: string };
   title?: string;
   auto: boolean;
   status: FdxSyncStatus;
@@ -644,6 +661,15 @@ let boundAuth: Auth | null = null;
 let store: FdxSyncStore = emptyStore();
 let active = false;
 let lastPayload: FdxPayload | null = null;
+/** Nome do arquivo que a reconexão não encontrou (ver resumeFdxSync). */
+let fileMissing: string | undefined;
+/** Arquivo escolhido na reconexão, à espera de confirmação: o shell já o
+ *  observa, o motor ainda não sincroniza (chooseFdxCandidate). */
+let candidate: { payload: FdxPayload; report: CandidateReport } | null = null;
+/** Ponto de desfazer da última confirmação de arquivo novo (confirmFdxCandidate). */
+let undoPoint: { storeJson: string; fileName?: string; newFileName: string; at: string; jobId?: string } | null = null;
+/** Story cuja reconexão já foi tentada nesta vinculação — uma tentativa só. */
+let resumeTriedFor: string | null = null;
 let status: FdxSyncStatus = 'idle';
 let lastError: string | undefined;
 let lastSyncAt: string | undefined;
@@ -680,6 +706,9 @@ export function getFdxSyncSnapshot(): FdxSyncSnapshot {
     active,
     filePath: store.filePath,
     fileName: store.fileName,
+    ...(fileMissing ? { fileMissing } : {}),
+    ...(candidate ? { candidate: { fileName: candidate.payload.fileName, path: candidate.payload.path, report: candidate.report } } : {}),
+    ...(undoPoint ? { undo: { fileName: undoPoint.newFileName, previousFileName: undoPoint.fileName, at: undoPoint.at } } : {}),
     title: lastPayload?.title,
     auto: store.auto,
     status,
@@ -716,7 +745,9 @@ export function getFdxSyncSnapshot(): FdxSyncSnapshot {
  *  ativo encerra o watch anterior (uma fonte, um board). */
 export function bindFdxSync(nextStoryId: string, auth: Auth | null): void {
   if (storyId !== nextStoryId) {
-    if (active) void stopFdxSync();
+    // Trocar de story solta o watcher mas NÃO é um stop: a story que saiu
+    // continua `connected` e reconecta quando voltar.
+    if (active) void releaseWatcher();
     clearPoll();
     storyId = nextStoryId;
     store = loadStore(nextStoryId);
@@ -728,9 +759,17 @@ export function bindFdxSync(nextStoryId: string, auth: Auth | null): void {
     lastRun = undefined;
     progress = undefined;
     status = 'idle';
+    fileMissing = undefined;
+    resumeTriedFor = null; // story nova nesta vinculação: pode tentar reconectar
   }
   if (auth) boundAuth = auth;
   emit();
+  // Reconexão: a story voltou com o cowork ligado e um caminho conhecido.
+  // Uma tentativa por vinculação; espera a auth (a primeira rodada precisa).
+  if (boundAuth && !active && store.connected && store.filePath && resumeTriedFor !== storyId) {
+    resumeTriedFor = storyId;
+    void resumeFdxSync();
+  }
 }
 
 async function freshAuth(): Promise<Auth> {
@@ -797,17 +836,49 @@ export async function openFdxSync(): Promise<boolean> {
   if (!storyId) return false;
   const payload = await openFdx();
   if (!payload) return false;
+  await activate(payload);
+  return true;
+}
+
+/** Liga o motor ao snapshot inicial do watcher (open ou reconexão), grava o
+ *  arquivo como o da story (`connected`) e roda a primeira rodada. */
+async function activate(payload: FdxPayload): Promise<void> {
   ensureSubscribed();
   active = true;
+  fileMissing = undefined;
   store.filePath = payload.path;
   store.fileName = payload.fileName;
-  persistStore(storyId, store);
+  store.connected = true;
+  if (storyId) persistStore(storyId, store);
   lastPayload = payload;
   lastChangeAt = payload.updatedAt;
   lastError = payload.ok ? undefined : (payload.error || 'could not read the .fdx');
   emit();
   if (payload.ok) await runSync(payload, { manual: true });
-  return true;
+}
+
+/**
+ * Reconecta o cowork ao .fdx da story vinculada SEM diálogo — "continuar
+ * conectado depois de fechar o app". Dispara em bindFdxSync quando o store diz
+ * `connected` e tem o caminho. O mapa cena→card persistido faz a primeira
+ * rodada tratar só o que mudou enquanto o app esteve fechado, como um save
+ * normal do Final Draft. Arquivo sumido (movido/apagado/outra máquina):
+ * `fileMissing` no snapshot — a UI oferece escolher de novo (openFdxSync, que
+ * mantém o mapa) ou parar. O shell tem UM watcher: o último start vence, por
+ * isso uma resposta tardia para uma story que já saiu de cena é só ignorada.
+ */
+export async function resumeFdxSync(): Promise<'resumed' | 'missing' | 'none'> {
+  const sid = storyId;
+  if (!sid || active || !store.connected || !store.filePath) return 'none';
+  const payload = await watchFdx(store.filePath);
+  if (sid !== storyId || active) return 'none';
+  if (!payload) {
+    fileMissing = store.fileName ?? store.filePath;
+    emit();
+    return 'missing';
+  }
+  await activate(payload);
+  return 'resumed';
 }
 
 /**
@@ -831,13 +902,189 @@ export function notifyFdxJobComplete(braindumpId: string, counts?: { events?: nu
   else schedulePoll();
 }
 
-export async function stopFdxSync(): Promise<void> {
+/** Solta o watcher e os timers sem mexer na intenção do roteirista (`connected`
+ *  fica): trocar de story, testes. */
+async function releaseWatcher(): Promise<void> {
   if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
   clearPoll();
   active = false;
   pendingPayload = null;
   try { await closeFdx(); } catch { /* best-effort */ }
+}
+
+/** Stop EXPLÍCITO do roteirista: solta o watcher E desliga a reconexão. O
+ *  board mantém tudo o que já sincronizou; o mapa fica para um open futuro. */
+export async function stopFdxSync(): Promise<void> {
+  store.connected = false;
+  fileMissing = undefined;
+  candidate = null;
+  undoPoint = null;
+  if (storyId) persistStore(storyId, store);
+  await releaseWatcher();
   emit();
+}
+
+/** O cowork está LIGADO para esta story? Fonte: o motor, se vinculado a ela;
+ *  senão o store persistido (`connected`) — vale em outra tela (o editor de
+ *  roteiro) antes de o corkboard vincular. Devolve o nome do arquivo, ou null. */
+export function fdxCoworkFileFor(sid: string): string | null {
+  const st = storyId === sid ? store : loadStore(sid);
+  const on = storyId === sid ? active || !!st.connected : !!st.connected;
+  return on ? st.fileName ?? st.filePath ?? '.fdx' : null;
+}
+
+// ---- Arquivo novo depois de um `fileMissing`: escolher → conferir → confirmar → desfazer
+
+/** Comparação de um arquivo candidato com o mapa persistido da story. */
+export interface CandidateReport {
+  /** Cenas (com heading) no arquivo. */
+  scenes: number;
+  /** Cenas do arquivo que casam com um registro do mapa (nº+heading, corpo ou heading). */
+  matched: number;
+  /** Dessas, quantas têm o corpo diferente do último sync. */
+  changed: number;
+  /** Cenas do arquivo sem registro: iriam para a IA como cards novos. */
+  added: number;
+  /** Registros vivos do mapa sem cena no arquivo: virariam "missing". */
+  missing: number;
+  /** Registros vivos no mapa. */
+  mapped: number;
+  /** Parece o MESMO roteiro: pelo menos metade das cenas mapeadas está no arquivo. */
+  sameScript: boolean;
+}
+
+/** Pura: o que uma sincronização com estas cenas faria ao mapa atual. Só o
+ *  mapa (sem cards): a adoção por título não entra na conta. */
+export function compareWithStore(st: FdxSyncStore, scenes: FdxScene[]): CandidateReport {
+  const { matches, missing } = matchScenes(st, scenes, []);
+  const matched = matches.filter((m) => m.record);
+  const changed = matched.filter((m) => m.record!.bodyHash !== m.bodyHash).length;
+  const mapped = Object.values(st.scenes).filter((r) => !r.missingSince).length;
+  return {
+    scenes: matches.length,
+    matched: matched.length,
+    changed,
+    added: matches.length - matched.length,
+    missing: missing.filter((r) => !r.missingSince).length,
+    mapped,
+    sameScript: mapped === 0 || matched.length * 2 >= mapped,
+  };
+}
+
+/**
+ * Passo 1 da reconexão manual: o roteirista escolhe o arquivo. O shell passa a
+ * observá-lo, mas o motor NÃO sincroniza: segura o snapshot como candidato e
+ * devolve o relatório (compareWithStore) para a UI pedir confirmação — um
+ * arquivo errado mandaria o roteiro inteiro para a IA e marcaria o board
+ * todo como "missing".
+ */
+export async function chooseFdxCandidate(): Promise<CandidateReport | null> {
+  if (!storyId) return null;
+  const payload = await openFdx();
+  if (!payload) return null;
+  if (!payload.ok) {
+    lastError = payload.error || 'could not read the .fdx';
+    try { await closeFdx(); } catch { /* best-effort */ }
+    emit();
+    return null;
+  }
+  candidate = { payload, report: compareWithStore(store, payload.scenes) };
+  lastError = undefined;
+  emit();
+  return candidate.report;
+}
+
+/** O roteirista desistiu do candidato: o shell para de observá-lo. */
+export async function discardFdxCandidate(): Promise<void> {
+  if (!candidate) return;
+  candidate = null;
+  try { await closeFdx(); } catch { /* best-effort */ }
+  emit();
+}
+
+/**
+ * Passo 2: confirmar o candidato. Guarda um ponto de desfazer (o store como
+ * estava + o arquivo anterior), liga o motor nele e roda a primeira rodada;
+ * se ela enfileirou um job de IA, o id fica no ponto de desfazer para o Trash
+ * dos cards (undoFdxResync).
+ */
+export async function confirmFdxCandidate(): Promise<boolean> {
+  if (!candidate || !storyId) return false;
+  const { payload } = candidate;
+  candidate = null;
+  undoPoint = { storeJson: JSON.stringify(store), fileName: store.fileName, newFileName: payload.fileName, at: new Date().toISOString() };
+  await activate(payload);
+  if (undoPoint && store.pending) undoPoint.jobId = store.pending.braindumpId;
+  emit();
+  return true;
+}
+
+/**
+ * Desfazer a confirmação: para de observar o arquivo, restaura o mapa e o
+ * arquivo anteriores, descarta o job pendente que a rodada criou e marca esse
+ * job como DESFEITO (os cards que ele mintar vão para o Trash ao pousar; os
+ * que já pousaram vão agora). Texto que a rodada salvou em cards existentes
+ * NÃO volta por aqui — mas os hashes restaurados fazem a próxima sync com o
+ * arquivo certo regravá-lo. Volta ao estado "arquivo não encontrado".
+ */
+export async function undoFdxResync(): Promise<void> {
+  const u = undoPoint;
+  const sid = storyId;
+  if (!u || !sid) return;
+  undoPoint = null;
+  await releaseWatcher();
+  const restored = migrateStore(JSON.parse(u.storeJson)) ?? emptyStore();
+  if (u.jobId) restored.disownedJobs = [...(restored.disownedJobs ?? []), { id: u.jobId, at: new Date().toISOString() }];
+  store = restored;
+  persistStore(sid, store);
+  lastPayload = null; lastSyncAt = undefined; lastRun = undefined; dirty = false; status = 'idle'; lastError = undefined;
+  fileMissing = store.fileName ?? store.filePath;
+  emit();
+  if (u.jobId) {
+    try {
+      const auth = await freshAuth();
+      const graph = await listProjectEntities({ projectId: sid }, auth.token);
+      await trashDisownedCards(graph.entities ?? [], auth.token, sid);
+    } catch (e) {
+      console.warn('[fdx-sync] undo: trash of the disowned cards failed (the next round retries)', e);
+    }
+  }
+}
+
+/** O roteirista ficou com o arquivo novo: o ponto de desfazer some. */
+export function dismissFdxUndo(): void {
+  undoPoint = null;
+  emit();
+}
+
+const DISOWN_TTL_MS = 30 * 60 * 1000;
+
+/** Trash dos cards mintados por jobs DESFEITOS (store.disownedJobs) que já
+ *  pousaram; devolve os cards restantes. Ids expiram depois de DISOWN_TTL_MS. */
+async function trashDisownedCards(cards: ProjectEntity[], token: string, sid: string): Promise<ProjectEntity[]> {
+  const jobs = store.disownedJobs ?? [];
+  if (!jobs.length) return cards;
+  const nowMs = Date.now();
+  const live = jobs.filter((j) => nowMs - (Date.parse(j.at) || nowMs) < DISOWN_TTL_MS);
+  const ids = new Set(live.map((j) => j.id));
+  const keep: ProjectEntity[] = [];
+  for (const e of cards) {
+    const { jobId } = splitWindowSuffix(String((e as any).src_braindump ?? ''));
+    if (e.type === 'event' && !e.deleted_at && ids.has(jobId)) {
+      try {
+        await deleteCard({ cardId: e.id, projectId: sid }, token);
+        continue;
+      } catch (err) {
+        console.warn('[fdx-sync] trash of a disowned card failed', e.id, err);
+      }
+    }
+    keep.push(e);
+  }
+  if (live.length !== jobs.length) {
+    store.disownedJobs = live.length ? live : undefined;
+    if (storyId) persistStore(storyId, store);
+  }
+  return keep;
 }
 
 /** "Sync now": roda a rodada com o último snapshot (funciona com auto OFF e
@@ -945,7 +1192,9 @@ async function runSync(payload: FdxPayload, opts?: { manual?: boolean }): Promis
   try {
     const auth = await freshAuth();
     const graph = await listProjectEntities({ projectId: sid }, auth.token);
-    const cards = graph.entities ?? [];
+    // Cards de um job DESFEITO (undoFdxResync) que pousaram desde então vão
+    // para o Trash antes de qualquer matching.
+    const cards = await trashDisownedCards(graph.entities ?? [], auth.token, sid);
     const titleOf = new Map(cards.map((e) => [e.id, String(e.working_title ?? e.working_name ?? '')]));
     const matched = matchScenes(store, payload.scenes, cards);
     const matches = matched.matches;
@@ -1016,7 +1265,9 @@ async function runSync(payload: FdxPayload, opts?: { manual?: boolean }): Promis
         const known = new Set<string>(Object.keys(store.events));
         for (const m of matches) if (m.eventId) known.add(m.eventId);
         const { offsets } = buildBraindumpProse(group.map((i) => matches[i].scene));
+        const disowned = new Set((store.disownedJobs ?? []).map((j) => j.id));
         for (const jobId of orphanFdxJobs(cards, known)) {
+          if (disowned.has(jobId)) continue; // job desfeito: os cards dele vão para o Trash, não para o mapa
           const spans = spansOf(cards, jobId, offsets);
           if (!spans.length || alignmentScore(spans, offsets) < ORPHAN_MIN_ALIGNMENT) continue;
           const pend: PendingScene[] = group.map((i, j) => ({
@@ -1232,6 +1483,7 @@ export function __resetFdxSyncForTests(): void {
   if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
   clearPoll();
   storyId = null; boundAuth = null; store = emptyStore(); active = false; lastPayload = null;
+  fileMissing = undefined; resumeTriedFor = null; candidate = null; undoPoint = null;
   status = 'idle'; lastError = undefined; lastSyncAt = undefined; lastChangeAt = undefined; dirty = false;
   running = false; pendingPayload = null; progress = undefined; lastRun = undefined;
   resolving.clear();

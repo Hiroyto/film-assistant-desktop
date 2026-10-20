@@ -10,7 +10,10 @@
 // roteirista que está no Final Draft responder sem abrir o painel.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { flushPushNow } from '../../data/desktop-lifecycle';
-import { bindFdxSync, openFdxSync, resolveMissingScene, setFdxAuto, stopFdxSync, syncFdxNow } from '../../lib/fdxSync';
+import {
+  bindFdxSync, chooseFdxCandidate, confirmFdxCandidate, discardFdxCandidate, dismissFdxUndo, openFdxSync,
+  resolveMissingScene, setFdxAuto, stopFdxSync, syncFdxNow, undoFdxResync,
+} from '../../lib/fdxSync';
 import type { BraindumpLogEntry } from '../../lib/freeformApi';
 import { BD_ORANGE, StagedRow, type StagedStripRow } from '../Freeform/corkboard/panels';
 import { useFdxSync } from './useFdxSync';
@@ -93,6 +96,33 @@ const btnSmall: React.CSSProperties = {
   background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.85)', border: '1px solid rgba(255,255,255,0.12)',
   borderRadius: 6, padding: '5px 9px', cursor: 'pointer', fontSize: 12, fontWeight: 600,
 };
+
+/** Diálogo modal do cowork (arquivo perdido / confirmar arquivo novo): escuro
+ *  como a janela, por cima do board e da wall. */
+function CoworkDialog({ title, children, actions }: { title: string; children: React.ReactNode; actions: React.ReactNode }): JSX.Element {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(0,0,0,0.55)', fontFamily: FONT,
+      }}
+    >
+      <div
+        style={{
+          width: 440, maxWidth: 'calc(100vw - 32px)', background: '#1f1f22', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 12,
+          padding: 18, color: 'rgba(255,255,255,0.9)', fontSize: 13, boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
+        }}
+      >
+        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>{title}</div>
+        <div style={{ lineHeight: 1.5, color: 'rgba(255,255,255,0.75)' }}>{children}</div>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16, flexWrap: 'wrap' }}>{actions}</div>
+      </div>
+    </div>
+  );
+}
 
 export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, strip }: Props): JSX.Element | null {
   const snap = useFdxSync();
@@ -177,13 +207,20 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, strip }: Pr
     ...(strip?.hidden ? { visibility: 'hidden' as const, pointerEvents: 'none' as const } : {}),
   };
 
+  // ---- Arquivo perdido na reconexão / arquivo novo à espera de confirmação /
+  // desfazer disponível: o chip fica e os diálogos abrem (ver `dialogs`).
+  const fileMissing = !snap.active && !!snap.fileMissing;
+  const [missingDismissed, setMissingDismissed] = useState(false);
+  useEffect(() => { if (!snap.fileMissing) setMissingDismissed(false); }, [snap.fileMissing]);
+  const showMissingDialog = fileMissing && !snap.candidate && !missingDismissed;
+
   // ---- Inativo: nada flutuando — o "Open .fdx" vive no empty state do board
   // (startFdxCowork). Os effects acima continuam vinculando o motor à story.
-  if (!snap.active) return null;
+  if (!snap.active && !fileMissing && !snap.candidate && !snap.undo) return null;
 
   // ---- Ativo: painel de status + controles -------------------------------
-  const dotColor = snap.status === 'syncing' || snap.pending ? '#5dd4c8' : snap.status === 'error' ? '#ef4444' : snap.dirty ? '#eab308' : '#4ecdc4';
-  const statusLine = snap.status === 'syncing'
+  const dotColor = fileMissing ? '#ef4444' : snap.status === 'syncing' || snap.pending ? '#5dd4c8' : snap.status === 'error' ? '#ef4444' : snap.dirty ? '#eab308' : '#4ecdc4';
+  const liveLine = snap.status === 'syncing'
     ? `Syncing…${snap.progress ? ` ${snap.progress.done}/${snap.progress.total}` : ''}`
     : snap.status === 'error'
       ? `Error: ${snap.lastError || 'sync run failed'}`
@@ -196,11 +233,12 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, strip }: Pr
           : snap.lastSyncAt
             ? `Synced ${hhmmss(snap.lastSyncAt)}`
             : 'Waiting for the first sync';
+  const statusLine = fileMissing ? `File not found: ${snap.fileMissing}` : liveLine;
   // O chip (janela minimizada) diz em UMA palavra em que pé o cowork está, na
   // mesma ordem de prioridade do statusLine; `busy` pulsa o ponto enquanto há
   // trabalho em voo (rodada de sync ou job de IA).
-  const busy = snap.status === 'syncing' || !!snap.pending;
-  const chipStatus = snap.status === 'syncing'
+  const busy = !fileMissing && (snap.status === 'syncing' || !!snap.pending);
+  const liveChip = snap.status === 'syncing'
     ? (snap.progress ? `Syncing ${snap.progress.done}/${snap.progress.total}` : 'Syncing…')
     : snap.status === 'error'
       ? 'Error'
@@ -211,7 +249,8 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, strip }: Pr
           : snap.lastSyncAt
             ? 'Synced'
             : 'Waiting';
-  const chipTone = snap.status === 'error' ? '#f87171' : busy ? '#5dd4c8' : snap.dirty ? '#eab308' : 'rgba(255,255,255,0.5)';
+  const chipStatus = fileMissing ? 'File not found' : liveChip;
+  const chipTone = fileMissing || snap.status === 'error' ? '#f87171' : busy ? '#5dd4c8' : snap.dirty ? '#eab308' : 'rgba(255,255,255,0.5)';
   const run = snap.lastRun;
   // A prose do braindump que mintou a linha (o pin "In your words"): o id da
   // própria linha, senão a entrada de proveniência cujo id embute o card.
@@ -222,12 +261,91 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, strip }: Pr
   const placeDragStart = strip?.onPlaceDragStart;
   const confirmSlot = strip?.onConfirmSlot;
 
+  // ---- Diálogos da reconexão -----------------------------------------------
+  // 1. O arquivo sumiu: alerta com "Choose the file…" (ou parar / depois).
+  // 2. Arquivo escolhido: o relatório do que a sync faria ao board, e a
+  //    confirmação — um arquivo errado mandaria o roteiro inteiro para a IA.
+  // 3. Confirmado: "Undo" por perto, até o roteirista dispensar.
+  const report = snap.candidate?.report;
+  const dialogs = (
+    <>
+      {showMissingDialog ? (
+        <CoworkDialog
+          title="Final Draft file not found"
+          actions={(
+            <>
+              <button type="button" style={btnSmall} onClick={() => setMissingDismissed(true)}>Later</button>
+              <button type="button" style={btnSmall} onClick={() => void stopFdxSync()} title="Stop the cowork. The board keeps everything already synced.">Stop the cowork</button>
+              <button type="button" style={btnPrimary} onClick={() => void chooseFdxCandidate()}>Choose the file…</button>
+            </>
+          )}
+        >
+          <p style={{ margin: '0 0 8px' }}>
+            The board was coworking with <strong>{snap.fileMissing}</strong>, but the file isn't where it was.
+            It may have been moved, renamed or deleted, or it lives on another computer.
+          </p>
+          <p style={{ margin: 0 }}>Choose it again to keep the board in sync. Nothing on the board changes until you confirm the file.</p>
+        </CoworkDialog>
+      ) : null}
+      {snap.candidate && report ? (
+        <CoworkDialog
+          title={`Sync with ${snap.candidate.fileName}?`}
+          actions={(
+            <>
+              <button type="button" style={btnSmall} onClick={() => void discardFdxCandidate()}>Cancel</button>
+              <button type="button" style={btnSmall} onClick={() => void chooseFdxCandidate()}>Choose another…</button>
+              <button
+                type="button"
+                style={{ ...btnPrimary, ...(report.sameScript ? {} : { background: '#b91c1c' }) }}
+                onClick={() => void confirmFdxCandidate()}
+              >
+                {report.sameScript ? 'Sync with this file' : 'Sync anyway'}
+              </button>
+            </>
+          )}
+        >
+          <p style={{ margin: '0 0 8px' }} data-testid="cowork-candidate-report">
+            <strong>{report.scenes}</strong> scene{report.scenes === 1 ? '' : 's'} in the file. <strong>{report.matched}</strong> match the board
+            {report.changed ? ` (${report.changed} changed since the last sync)` : ''}, <strong>{report.added}</strong> new
+            {report.missing ? <>, <strong>{report.missing}</strong> board scene{report.missing === 1 ? '' : 's'} not in this file</> : null}.
+          </p>
+          {!report.sameScript ? (
+            <p style={{ margin: '0 0 8px', color: '#f87171' }}>
+              This doesn't look like the same screenplay: only {report.matched} of the {report.mapped} scenes on the board are in this file.
+              Syncing would send {report.added} scene{report.added === 1 ? '' : 's'} to the AI as new cards and flag {report.missing} board scene{report.missing === 1 ? '' : 's'} as missing.
+            </p>
+          ) : null}
+          <p style={{ margin: 0, opacity: 0.7 }}>
+            You can undo right after syncing: the board's scene map goes back, the file is released and the cards this file created are trashed.
+          </p>
+        </CoworkDialog>
+      ) : null}
+      {snap.undo ? (
+        <div
+          role="status"
+          style={{
+            position: 'fixed', left: 20, bottom: 110, zIndex: 161, display: 'flex', gap: 10, alignItems: 'center',
+            background: '#1f1f22', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, padding: '10px 12px',
+            color: 'rgba(255,255,255,0.9)', fontSize: 12, boxShadow: '0 8px 24px rgba(0,0,0,0.4)', fontFamily: FONT,
+          }}
+        >
+          <span>
+            Now syncing with <strong>{snap.undo.fileName}</strong>{snap.undo.previousFileName && snap.undo.previousFileName !== snap.undo.fileName ? ` (was ${snap.undo.previousFileName})` : ''}. Wrong file?
+          </span>
+          <button type="button" style={btnSmall} onClick={() => void undoFdxResync()} title="Release this file, restore the board's scene map and trash the cards it created">Undo</button>
+          <button type="button" aria-label="Dismiss" style={{ ...btnSmall, background: 'transparent', border: '1px solid transparent', color: 'rgba(255,255,255,0.5)' }} onClick={() => dismissFdxUndo()}>✕</button>
+        </div>
+      ) : null}
+    </>
+  );
+
   // ---- Minimizada: o chip ------------------------------------------------
   // Mesmo ponto de ancoragem da janela. Carrega o que a janela tem de mais
   // urgente: o ponto de status e quantas perguntas esperam resposta.
   if (minimized) {
     return (
       <div style={wrapPanel}>
+        {dialogs}
         <style>{'@keyframes fdxchip-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.7); } }'}</style>
         <button
           type="button"
@@ -262,6 +380,7 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, strip }: Pr
 
   return (
     <div style={wrapPanel}>
+      {dialogs}
       <div
         style={{
           // As linhas do strip foram desenhadas para a gaveta do painel (~384px
@@ -288,14 +407,23 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, strip }: Pr
           </button>
         </div>
 
-        <div style={{ opacity: 0.7, marginBottom: 4, wordBreak: 'break-all' }}>{snap.fileName}{snap.title ? ` · “${snap.title}”` : ''}</div>
-        <div style={{ marginBottom: 6 }}>
-          <strong>{snap.sceneCount}</strong> scenes in file · {snap.mappedCount} on board
-          {snap.cardCount && snap.cardCount !== snap.mappedCount ? ` (${snap.cardCount} cards)` : ''}
-          {snap.missing.length ? <> · <span style={{ color: '#eab308' }}>{snap.missing.length} missing</span></> : null}
-          {coworkRows.length ? <> · <span style={{ color: BD_ORANGE }}>{coworkRows.length} to confirm</span></> : null}
+        <div style={{ opacity: 0.7, marginBottom: 4, wordBreak: 'break-all' }}>
+          {fileMissing ? snap.fileMissing : snap.fileName}{!fileMissing && snap.title ? ` · “${snap.title}”` : ''}
         </div>
-        <div style={{ marginBottom: 8, color: snap.status === 'error' ? '#f87171' : 'rgba(255,255,255,0.8)' }}>{statusLine}</div>
+        {fileMissing ? null : (
+          <div style={{ marginBottom: 6 }}>
+            <strong>{snap.sceneCount}</strong> scenes in file · {snap.mappedCount} on board
+            {snap.cardCount && snap.cardCount !== snap.mappedCount ? ` (${snap.cardCount} cards)` : ''}
+            {snap.missing.length ? <> · <span style={{ color: '#eab308' }}>{snap.missing.length} missing</span></> : null}
+            {coworkRows.length ? <> · <span style={{ color: BD_ORANGE }}>{coworkRows.length} to confirm</span></> : null}
+          </div>
+        )}
+        <div style={{ marginBottom: 8, color: fileMissing || snap.status === 'error' ? '#f87171' : 'rgba(255,255,255,0.8)' }}>{statusLine}</div>
+        {fileMissing ? (
+          <div style={{ marginBottom: 8, opacity: 0.7, lineHeight: 1.45 }}>
+            Moved, renamed, deleted or on another computer. Choose it again — the board and its scene map stay as they are until you confirm.
+          </div>
+        ) : null}
         {snap.status !== 'error' && snap.lastError ? (
           // Aviso não-fatal (job de IA expirou / cooldown): a rodada terminou, mas há cenas esperando.
           <div style={{ marginBottom: 8, color: '#eab308' }}>{snap.lastError}</div>
@@ -393,6 +521,17 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, strip }: Pr
         ) : null}
 
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          {fileMissing ? (
+            <button
+              type="button"
+              onClick={() => void chooseFdxCandidate()}
+              title="Pick the Final Draft file again. You confirm before anything syncs."
+              style={{ ...btnPrimary, padding: '5px 10px', fontSize: 12, boxShadow: 'none' }}
+            >
+              Choose the file…
+            </button>
+          ) : (
+          <>
           <button
             type="button"
             onClick={() => setFdxAuto(!snap.auto)}
@@ -412,6 +551,8 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, strip }: Pr
           >
             {snap.status === 'syncing' ? 'Syncing…' : 'Sync now'}
           </button>
+          </>
+          )}
           {/* Parar vive aqui, discreto: a janela some para minimizar, não para
               parar — e parar é raro (o board mantém tudo o que já sincronizou). */}
           <button

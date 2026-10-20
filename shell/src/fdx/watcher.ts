@@ -102,6 +102,22 @@ export function registerFdx(getWindow: () => BrowserWindow | null): void {
     return readFdx(filePath); // leitura inicial imediata
   });
 
+  // Reconexão sem diálogo: o renderer guarda o caminho do .fdx por story e,
+  // ao reabrir o app (ou voltar à story), pede para observar o MESMO arquivo.
+  // null = o arquivo não está mais lá (movido/apagado/outra máquina); o
+  // renderer oferece escolher de novo.
+  ipcMain.handle(IPC.FDX_WATCH, async (_event, args: { path?: string } | undefined): Promise<FdxPayload | null> => {
+    const filePath = String(args?.path ?? '');
+    if (!filePath || !/\.fdx$/i.test(filePath)) return null;
+    try {
+      if (!(await fs.promises.stat(filePath)).isFile()) return null;
+    } catch {
+      return null;
+    }
+    startWatch(filePath, getWindow);
+    return readFdx(filePath);
+  });
+
   ipcMain.handle(IPC.FDX_CLOSE, async (): Promise<void> => {
     stopWatch();
   });

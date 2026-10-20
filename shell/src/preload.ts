@@ -54,6 +54,8 @@ const api = {
   // --- Protótipo coworking .fdx (SOMENTE LEITURA) ---------------------------
   /** Abre um seletor de .fdx e começa a observá-lo. Retorna o snapshot inicial. */
   openFdx: (): Promise<FdxPayload | null> => ipcRenderer.invoke(IPC.FDX_OPEN),
+  /** Volta a observar um .fdx conhecido (sem seletor). null = o arquivo sumiu. */
+  watchFdx: (path: string): Promise<FdxPayload | null> => ipcRenderer.invoke(IPC.FDX_WATCH, { path }),
   /** Para de observar o .fdx atual. */
   closeFdx: (): Promise<void> => ipcRenderer.invoke(IPC.FDX_CLOSE),
   /** Inscreve handler para mudanças do .fdx observado. Retorna unsubscribe. */

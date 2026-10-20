@@ -9,6 +9,13 @@ export function openFdx(): Promise<FdxPayload | null> {
   return Promise.resolve(null);
 }
 
+/** Volta a observar um .fdx conhecido, sem seletor (reconexão do cowork ao
+ *  reabrir o app). null = o arquivo não está mais lá — ou não há shell. */
+export function watchFdx(path: string): Promise<FdxPayload | null> {
+  if (isDesktop() && window.electronAPI?.watchFdx) return window.electronAPI.watchFdx(path);
+  return Promise.resolve(null);
+}
+
 /** Para de observar o .fdx atual. */
 export function closeFdx(): Promise<void> {
   if (isDesktop() && window.electronAPI?.closeFdx) return window.electronAPI.closeFdx();

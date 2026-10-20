@@ -71,6 +71,8 @@ declare global {
     // --- Protótipo coworking .fdx (SOMENTE LEITURA) ---
     /** Abre um seletor de .fdx e começa a observá-lo. Retorna o snapshot inicial. */
     openFdx?: () => Promise<FdxPayload | null>;
+    /** Volta a observar um .fdx conhecido (sem seletor). null = o arquivo sumiu. */
+    watchFdx?: (path: string) => Promise<FdxPayload | null>;
     /** Para de observar o .fdx atual. */
     closeFdx?: () => Promise<void>;
     /** Inscreve handler para mudanças do .fdx observado. Retorna unsubscribe. */

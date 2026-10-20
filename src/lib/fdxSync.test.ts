@@ -3,6 +3,7 @@ import {
   alignWindows,
   alignmentScore,
   bodyHashOf,
+  compareWithStore,
   orphanFdxJobs,
   splitWindowSuffix,
   type MintedSpan,
@@ -409,5 +410,34 @@ describe('spansOf — janelas do import windowed (sufixo _wN, offsets relativos 
       card('nosrc', 'N'),
     ];
     expect(orphanFdxJobs(cards, new Set(['k1']))).toEqual(['fdx_2_bbbbbb', 'fdx_1_aaaaaa']);
+  });
+});
+
+describe('compareWithStore — o que uma sync com o arquivo candidato faria ao mapa', () => {
+  const rec = (id: string, number: string, heading: string, bodyHash: string, extra: Partial<FdxSceneRecord> = {}): FdxSceneRecord =>
+    ({ id, eventId: `evt_${id}`, number, heading, headingNorm: normHeading(heading), bodyHash, lastSeenAt: 'x', ...extra });
+  const st = (): FdxSyncStore => ({
+    ...emptyStore(),
+    scenes: {
+      a: rec('a', '1', 'INT. BAR - NIGHT', bodyHashOf(scene('1', 'INT. BAR - NIGHT', ['drinks']))),
+      b: rec('b', '2', 'EXT. STREET - DAY', 'old'),
+      gone: rec('gone', '9', 'INT. ATTIC - DAY', 'g', { missingSince: 'y' }), // já sumida: não conta
+    },
+  });
+
+  it('mesmo roteiro: casa por nº+heading/corpo/heading; conta mudadas, novas e sumidas', () => {
+    const r = compareWithStore(st(), [
+      scene('1', 'INT. BAR - NIGHT', ['drinks']), scene('2', 'EXT. STREET - DAY', ['new body']), scene('3', 'INT. CAR - DAY', ['c']),
+    ]);
+    expect(r).toEqual({ scenes: 3, matched: 2, changed: 1, added: 1, missing: 0, mapped: 2, sameScript: true });
+  });
+
+  it('roteiro diferente: nada casa → sameScript false, as cenas do board sumiriam', () => {
+    const r = compareWithStore(st(), [scene('1', 'INT. SPACESHIP - NIGHT', ['z'])]);
+    expect(r).toEqual({ scenes: 1, matched: 0, changed: 0, added: 1, missing: 2, mapped: 2, sameScript: false });
+  });
+
+  it('mapa vazio (story nova): sempre o mesmo roteiro', () => {
+    expect(compareWithStore(emptyStore(), [scene('1', 'INT. BAR - NIGHT')]).sameScript).toBe(true);
   });
 });

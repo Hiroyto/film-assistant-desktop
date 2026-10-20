@@ -8,6 +8,7 @@ export const IPC = {
   DB_BATCH: 'db:batch', // { ops: {sql,params}[] } em uma transação -> void
   UPDATE_INSTALL: 'shell:updateInstall', // invoke: relaunch p/ instalar update (AD-09)
   FDX_OPEN: 'fdx:open', // invoke: dialog + inicia watch de um .fdx -> FdxPayload | null
+  FDX_WATCH: 'fdx:watch', // invoke: { path } — retoma o watch de um .fdx conhecido, sem dialog -> FdxPayload | null (arquivo sumiu)
   FDX_CLOSE: 'fdx:close', // invoke: para o watch atual -> void
 
   // send (main -> renderer, push)
