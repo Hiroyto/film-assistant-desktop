@@ -26,6 +26,7 @@ import { Extension } from '@tiptap/core';
 import { DOMSerializer } from '@tiptap/pm/model';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import ScriptEditor from '../../components/Scripts/ScriptEditor';
+import { FdxCoworkLockBar, useFdxCoworkLock } from '../../components/widgets/FdxCoworkLockBar';
 import {
   listProjectEntities,
   listBraindumps,
@@ -969,6 +970,14 @@ export default function FreeformScript() {
   const seqOfEventRef = useRef<Map<string, string>>(new Map());
   const getAllHTMLRef = useRef<(() => string) | null>(null);
   const getAllEditorsRef = useRef<(() => Editor[]) | null>(null);
+  // COWORK LOCK (FdxCoworkLockBar): read-only while a .fdx coworks this story
+  // — two writers of save-scene-text would overwrite each other — unless the
+  // writer unlocks editing (with the warning). The ref is what the save and
+  // extraction entry points read; the effect next to handleEditorReady locks
+  // the page editors themselves.
+  const coworkLock = useFdxCoworkLock(storyId);
+  const coworkReadOnlyRef = useRef(coworkLock.readOnly);
+  coworkReadOnlyRef.current = coworkLock.readOnly;
   const saveTimerRef = useRef<number | null>(null);
   // Save freeze for the carve window: a queued debounced save walking the
   // PRE-reload document re-persists stale scratch right after the carve
@@ -1747,6 +1756,7 @@ export default function FreeformScript() {
   const runSave = useCallback(async () => {
     const a = authRef.current;
     if (!a || !storyId) return;
+    if (coworkReadOnlyRef.current) return; // cowork lock: nothing persists from here
     if (carvingRef.current) return; // carve window: the document is mid-rebind
     // Degraded walks still save — from the snapshot, never the truncation.
     const { collected, degraded } = reliableCollect();
@@ -2313,6 +2323,7 @@ export default function FreeformScript() {
   }, [storyId, collectRegionTexts, collectRegions, reliableCollect, refreshTitles, fireScratch, trackSceneExtraction]);
 
   const scheduleExtractCheck = useCallback((eventId: string) => {
+    if (coworkReadOnlyRef.current) return; // cowork lock: the .fdx is the source
     // Manual-only preference: no auto trigger ever schedules. Sync, the
     // highlight-extract, and the peer's stale-gate are the update paths —
     // safe because staleness is backend truth (design doc §3).
@@ -3506,6 +3517,7 @@ export default function FreeformScript() {
   }, []);
 
   const scheduleSave = useCallback(() => {
+    if (coworkReadOnlyRef.current) return; // cowork lock
     setSaveState('dirty');
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => { void runSave(); }, 3000);
@@ -3514,6 +3526,13 @@ export default function FreeformScript() {
   // Editor-ready: hook the update stream for the debounced save (the same
   // posture Scripts.tsx takes).
   const attachedRef = useRef<Editor | null>(null);
+  // Cowork lock → every page editor (TipTap setEditable). Pages mounted later
+  // get it in handleEditorReady.
+  useEffect(() => {
+    const editors = [...(getAllEditorsRef.current?.() ?? [])];
+    if (attachedRef.current && !editors.includes(attachedRef.current)) editors.push(attachedRef.current);
+    for (const ed of editors) { if (!ed.isDestroyed) ed.setEditable(!coworkLock.readOnly); }
+  }, [coworkLock.readOnly]);
   const selTimerRef = useRef<number | null>(null);
   // IDLE SETTLE (Ben, 2026-09-11: "it seems to only work if I jump to the
   // board"). Every carve trigger was an EXIT: a scene change, a blur, Sync.
@@ -3528,6 +3547,7 @@ export default function FreeformScript() {
   const handleEditorReady = useCallback((editor: Editor) => {
     if (attachedRef.current === editor) return;
     attachedRef.current = editor;
+    editor.setEditable(!coworkReadOnlyRef.current); // cowork lock
     editor.on('update', () => {
       scheduleSave();
       if (tailIdleRef.current) window.clearTimeout(tailIdleRef.current);
@@ -4315,6 +4335,11 @@ export default function FreeformScript() {
         )}
         </div></div>
 
+        {/* COWORK LOCK: while a .fdx coworks this story the script is read-only
+            here (the file is the source of truth); editing can be unlocked,
+            with the conflict warning. */}
+        {coworkLock.coworkFile ? <FdxCoworkLockBar lock={coworkLock} theme={theme} /> : null}
+
         {/* THE screenwriting editor, lifted whole. ff-script-host scopes
             freeform-only overrides: the outline's scene-id badge (::after on
             sluglines) renders our long Event vids as noise — regions must be
@@ -4459,7 +4484,7 @@ export default function FreeformScript() {
             onThemeToggle={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
             isGenerating={false}
             isFullscreen={isFullscreen}
-            focusMode={isFullscreen}
+            focusMode={isFullscreen || coworkLock.readOnly}
             hideSaveButton
             onFullscreen={() => setIsFullscreen(true)}
             onMinimize={() => setIsFullscreen(false)}
