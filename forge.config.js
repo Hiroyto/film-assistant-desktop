@@ -196,7 +196,9 @@ module.exports = {
           owner: process.env.GITHUB_REPO_OWNER || 'TODO-owner',
           name: process.env.GITHUB_REPO_NAME || 'film-assistant-desktop',
         },
-        prerelease: true, // canal beta primeiro (Fase 3)
+        // Canal pela tag (desktop-release.yml → RELEASE_CHANNEL): `prod` = release
+        // cheia (o auto-update só serve essas); qualquer outro, ou local, = pre-release.
+        prerelease: process.env.RELEASE_CHANNEL !== 'prod',
         draft: false,     // publica direto (não como rascunho) — necessário p/ download público + botões da web
       },
     },

@@ -3,8 +3,9 @@
 // Os instaladores são publicados no GitHub Releases pelo Electron Forge
 // (publisher-github, AD-09). O Windows tem nome estável (FilmAssistantSetup.exe,
 // forge.config.js §maker-squirrel); o macOS .dmg é versionado. Por isso resolvemos
-// os assets DINAMICAMENTE pela API do GitHub — que também enxerga prereleases
-// (canal beta, `prerelease: true`), ao contrário do atalho /releases/latest/download.
+// os assets DINAMICAMENTE pela API do GitHub. Preferimos a release CHEIA mais
+// recente (canal prod); sem nenhuma, a pre-release mais recente (canal beta) —
+// o atalho /releases/latest/download não enxergaria o canal beta.
 //
 // Só renderiza na web: dentro do próprio app desktop retorna null (isDesktop()).
 
@@ -28,6 +29,7 @@ interface GhRelease {
   tag_name?: string;
   name?: string;
   draft?: boolean;
+  prerelease?: boolean;
   assets?: GhAsset[];
 }
 
@@ -82,7 +84,8 @@ function fetchLatestRelease(): Promise<GhRelease | null> {
       .then(async res => {
         if (!res.ok) throw new Error(`GitHub API ${res.status}`);
         const releases: GhRelease[] = await res.json();
-        return Array.isArray(releases) ? releases.find(r => !r.draft) || null : null;
+        const list = Array.isArray(releases) ? releases.filter(r => !r.draft) : [];
+        return list.find(r => !r.prerelease) || list[0] || null;
       })
       .catch(err => {
         releaseCache = null; // permite retry numa próxima montagem
