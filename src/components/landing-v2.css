@@ -2280,35 +2280,7 @@
   font-weight: 700;
 }
 
-/* ---------- footer ---------- */
-.ld-footer {
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  background: #0a0a0a;
-  padding: 44px 0 56px;
-}
-
-.ld-footer-inner {
-  max-width: 1120px;
-  margin: 0 auto;
-  padding: 0 32px;
-  display: flex;
-  justify-content: space-between;
-  gap: 24px;
-  flex-wrap: wrap;
-  font-family: 'Inter', sans-serif;
-  font-size: 0.85rem;
-  color: rgba(255, 255, 255, 0.4);
-}
-
-.ld-footer-inner a {
-  color: rgba(255, 255, 255, 0.6);
-  text-decoration: none;
-  margin-right: 22px;
-}
-
-.ld-footer-inner a:hover {
-  color: #ffffff;
-}
+/* footer styles live in footer.css (shared with the app pages) */
 
 /* ---------- responsive ---------- */
 @media (max-width: 900px) {
@@ -2376,4 +2348,283 @@
   vertical-align: 1px;
   margin: 0 2px;
   box-shadow: 0 0 0 3px rgba(141, 191, 126, 0.18);
+}
+
+/* ============================================
+   MOBILE PASS (social traffic lands on phones)
+   ============================================ */
+
+/* Button grain: a CSS noise tile in the slot the overlay video used to fill
+   (between the orange ::before and the blue hover ::after). */
+.btn-grain {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 160 160' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.9 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+  background-size: 160px 160px;
+  mix-blend-mode: overlay;
+  opacity: 0.35;
+}
+
+/* Carousel steps carry a text label; desktop keeps the dots. */
+.ld-dot-label { display: none; }
+
+/* Phone-only pieces, hidden on wider screens */
+.ld-hero-mobile-note,
+.ld-final { display: none; }
+
+@media (max-width: 600px) {
+  .landing-page { overflow-x: clip; }
+
+  /* --- hero: start higher, stack the CTAs --- */
+  .hero-container.ld-hero {
+    min-height: 0;
+    padding: 84px 0 96px;
+  }
+  .ld-eyebrow {
+    margin-top: 1.5rem;
+    line-height: 1.7;
+  }
+  .ld-hero-sub { font-size: 1.05rem; }
+  .ld-hero-ctas {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+    max-width: 360px;
+    margin: 2rem auto 0;
+    padding: 0 20px;
+    box-sizing: border-box;
+    gap: 10px;
+  }
+  .ld-hero-ctas .ld-cta-inline.btn-overlay-container {
+    display: block;
+    width: 100%;
+  }
+  .ld-hero-ctas .ld-cta-inline .btn.btn-primary,
+  .ld-hero-ctas .ld-btn-ghost {
+    width: 100%;
+    min-height: 52px;
+    padding: 0 16px;
+    white-space: nowrap;
+    justify-content: center;
+    align-items: center;
+  }
+  .ld-hero-mobile-note {
+    display: block;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.82rem;
+    color: rgba(255, 255, 255, 0.5);
+    margin: 14px 20px 0;
+    animation: heroFadeIn 1s ease-out 1.5s both;
+  }
+  .hero-scroll-hint { bottom: 1.6rem; }
+
+  /* --- reel --- */
+  .ld-showreel { padding-bottom: 48px; }
+  .ld-showreel-inner { padding: 0 16px; }
+
+  /* --- demo carousels: room for the slides, labelled tabs instead of dots --- */
+  .ld-door-visual {
+    min-height: 480px;
+    padding: 16px 16px 72px;
+  }
+  .ld-slide { inset: 16px 16px 72px; }
+  .ld-carousel-dots {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    transform: none;
+    gap: 6px;
+  }
+  .ld-carousel-dots button {
+    flex: 1;
+    width: auto;
+    height: 44px;
+    border-radius: 10px;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.6);
+  }
+  .ld-carousel-dots button.on {
+    background: rgba(212, 160, 61, 0.1);
+    border-color: #d4a03d;
+    color: #f2ede6;
+  }
+  .ld-dot-label {
+    display: inline;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.82rem;
+    font-weight: 500;
+  }
+  .ld-tab { min-height: 44px; }
+  .ld-nav-cta .btn.btn-primary { min-height: 44px; }
+
+  /* --- demo labels: nothing under 11px --- */
+  .ld-seqcard-sc,
+  .ld-seqcard-chip,
+  .ld-heropeer-kicker,
+  .ld-pp-you,
+  .ld-cascade-title,
+  .ld-price-tag { font-size: 11px; }
+  .ld-seqcard-sc,
+  .ld-seqcard-chip {
+    white-space: nowrap;
+    letter-spacing: 0.02em;
+  }
+  .ld-board-grid .ld-seqcard-meta { gap: 5px; }
+  .ld-board-grid .ld-seqcard-chip { padding: 1px 4px; }
+  .ld-arc-label,
+  .ld-cast-rel,
+  .ld-claimrow-k,
+  .ld-braindump-head,
+  .ld-seqbox-title { font-size: 11.5px; }
+
+  /* --- "I script first" demo: stack the navigator over the page --- */
+  /* Desktop pins the navigator left and pushes the page 190px right; the
+     900px rule meant to undo that loses to .ld-write-wrap specificity. */
+  .ld-write-wrap .ld-navrail {
+    position: static;
+    width: auto;
+    border-right: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 0 0 10px;
+    margin-bottom: 12px;
+    font-size: 0.8rem;
+  }
+  /* Only the sequence being written in: the earlier one is context the
+     phone has no room for. */
+  .ld-write-wrap .ld-navrail > :nth-child(-n + 4) { display: none; }
+  .ld-write-wrap .ld-navrail .ld-seq { margin-top: 0; font-size: 11px; }
+  .ld-write-wrap .ld-write-page {
+    margin-left: 0;
+    font-size: 0.74rem;
+  }
+  .ld-write-wrap .ld-typedline { white-space: normal; }
+  .ld-write-visual.zoom { transform: none; }
+
+  /* the opened card stays inside the panel */
+  .ld-trail-seq { width: 88%; }
+  .ld-seqcard.ld-morph.open { width: 100%; }
+  .ld-trail-stage.card-open { transform: none; }
+  .ld-morph .ld-seqcard-meta { flex-wrap: wrap; row-gap: 6px; }
+  .ld-morph-chips { flex-wrap: wrap; margin-left: 0; }
+  .ld-xchip { white-space: nowrap; }
+  .ld-morph-more .ld-xcard-links,
+  .ld-morph-more .ld-xcard-castlabel,
+  .ld-morph-more .ld-xcard-cast { display: none; }
+  .ld-morph-more .ld-xcard-body { font-size: 0.8rem; }
+
+  /* Hidden tags still took two wrapped rows on the closed card, leaving it
+     tall and empty before it opened. */
+  .ld-morph:not(.open) .ld-morph-chips { display: none; }
+
+  /* --- "Never lose track": headline, quieter lede, then the three payoffs --- */
+  .philosophy-section .philosophy-headline {
+    font-size: 2.3rem;
+    line-height: 1.08;
+    margin-bottom: 14px;
+  }
+  .philosophy-section .philosophy-lede {
+    font-family: 'Inter', sans-serif;
+    font-size: 1rem;
+    line-height: 1.65;
+    color: rgba(255, 255, 255, 0.66);
+    margin-bottom: 8px;
+  }
+  .philosophy-split .philosophy-pillars { gap: 16px; }
+  .philosophy-split .philosophy-pillar { font-size: 1.22rem; gap: 14px; }
+  .philosophy-pillar-text { line-height: 1.35; }
+
+  /* --- performance: Android chokes on stacked live blurs and blends --- */
+  .hero-lens-flare-wash,
+  .hero-lens-flare-mid,
+  .hero-lens-flare-core,
+  .hero-lens-flare-shimmer { display: none; }
+  .hero-glow-warm { animation: glowFadeIn 2.5s ease-out 0.5s forwards; }
+  .hero-glow-orange { animation: glowFadeInOrange 2.5s ease-out 0.8s forwards; }
+  .hero-glow-core { animation: glowFadeInCore 2.5s ease-out 1s forwards; }
+  /* Static on phones, so no need for the 200% oversize the shift animation uses */
+  .hero-film-grain-fallback {
+    animation: none;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+  .hero-container::before {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .ld-nav-pill {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: rgba(16, 14, 12, 0.94);
+  }
+
+  /* --- trust: tighter cards --- */
+  .ld-trust-grid { gap: 12px; margin-top: 24px; }
+  .ld-trust-card { padding: 20px; }
+  .ld-trust-card p { margin-bottom: 0; }
+  .ld-trust-checks { padding-top: 12px; }
+
+  /* --- pricing: swipe sideways instead of three stacked cards --- */
+  /* .landing-page is a flex column; without this the section grows to the
+     scroller's full content width instead of scrolling inside the screen. */
+  .landing-page > .ld-section {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+  .ld-price-grid {
+    display: flex;
+    gap: 12px;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    scroll-padding-inline: 24px;
+    margin: 28px -24px 0;
+    padding: 14px 24px 8px;
+    scrollbar-width: none;
+  }
+  .ld-price-grid::-webkit-scrollbar { display: none; }
+  .ld-price-card {
+    flex: 0 0 84%;
+    scroll-snap-align: start;
+    padding: 24px 22px;
+  }
+  .ld-price-card > .ld-cta-inline,
+  .ld-price-card > .ld-btn-ghost {
+    align-self: stretch;
+    text-align: center;
+  }
+  .ld-price-card > .ld-cta-inline .btn.btn-primary { width: 100%; }
+
+  /* --- closer + footer --- */
+  .ld-final {
+    display: block;
+    text-align: center;
+    padding: 56px 24px 52px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    background: #0a0a0a;
+  }
+  .ld-final-title {
+    font-family: "adobe-thai", Georgia, serif;
+    font-weight: 400;
+    font-size: 2.5rem;
+    line-height: 1.05;
+    color: #ffffff;
+    margin: 0 0 24px;
+  }
+  .ld-final .ld-cta-inline.btn-overlay-container {
+    display: block;
+    width: 100%;
+    max-width: 360px;
+    margin: 0 auto;
+  }
+  .ld-final .btn-overlay-container .btn.btn-primary { width: 100%; }
+  .ld-final .btn-overlay-container .btn.btn-primary,
+  .ld-price-card > .ld-cta-inline .btn.btn-primary {
+    min-height: 52px;
+    justify-content: center;
+    align-items: center;
+  }
 }

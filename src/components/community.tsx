@@ -13,7 +13,7 @@ import axios from 'axios';
 import { TailSpin } from 'react-loading-icons';
 import { toast, Toaster } from 'react-hot-toast';
 
-import config from '../aws-exports';
+import config from '../amplifyConfig';
 import { UserContext } from '../App';
 import { User } from '../models/user';
 import { Event, EventStatus } from '../models/event';

@@ -2,13 +2,20 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <!-- Tab icon: the app head mark (source of truth: src/assets/images/App Head.png,
-         1024x1024; these are sips-resized copies, since a favicon must be served
-         from public/ and the 592KB original would be downloaded on every page
-         load). The legacy favicon.ico is kept only as the bare-/favicon.ico
-         fallback some clients request without reading these tags. -->
+    <!-- Tab icon: the app head mark (source of truth: src/assets/images/app-head.svg;
+         every PNG and the .ico are rendered straight from it at their own size).
+         Google Search reads these tags off the homepage and wants a square icon
+         larger than 48px, so 48/96/192 are listed. Split by job (claude.ai does
+         the same): the tab sizes (32 PNG, favicon.ico) keep rounded transparent
+         corners; 48 and up stay opaque and full bleed, because Google
+         circle-crops an opaque square to fill its result badge but shrinks
+         anything with transparent corners onto a white disc.
+         favicon.ico (16/32/48) also
+         serves clients that request bare /favicon.ico without reading tags. -->
     <link rel="icon" type="image/png" sizes="32x32" href="%PUBLIC_URL%/app-head-32.png" />
-    <link rel="icon" type="image/png" sizes="180x180" href="%PUBLIC_URL%/app-head-180.png" />
+    <link rel="icon" type="image/png" sizes="48x48" href="%PUBLIC_URL%/app-head-48.png" />
+    <link rel="icon" type="image/png" sizes="96x96" href="%PUBLIC_URL%/app-head-96.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="%PUBLIC_URL%/app-head-192.png" />
     <link rel="icon" href="%PUBLIC_URL%/favicon.ico" sizes="any" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#000000" />
@@ -25,17 +32,21 @@
     <!-- Open Graph / Twitter -->
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://filmassistant.io/" />
-    <meta property="og:title" content="filmassistant.io: Your story. Your writers room." />
+    <meta property="og:title" content="FilmAssistant: Your story. Your writers room." />
     <meta
       property="og:description"
-      content="Outline it or just write it. filmassistant.io builds your board as you work, keeps it current with every page, and gives notes grounded in your whole story."
+      content="Outline it or just write it. FilmAssistant builds your board as you work, keeps it current with every page, and gives notes grounded in your whole story."
     />
-    <meta property="og:image" content="https://filmassistant.io/logo512.png" />
-    <meta name="twitter:card" content="summary" />
-    <meta name="twitter:title" content="filmassistant.io: Your story. Your writers room." />
+    <meta property="og:image" content="https://filmassistant.io/og-image.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="FilmAssistant. Your story. Your writers room." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="https://filmassistant.io/og-image.jpg" />
+    <meta name="twitter:title" content="FilmAssistant: Your story. Your writers room." />
     <meta
       name="twitter:description"
-      content="Outline it or just write it. filmassistant.io builds your board as you work, keeps it current with every page, and gives notes grounded in your whole story."
+      content="Outline it or just write it. FilmAssistant builds your board as you work, keeps it current with every page, and gives notes grounded in your whole story."
     />
     <link rel="apple-touch-icon" href="%PUBLIC_URL%/app-head-180.png" />
     <!--
@@ -50,7 +61,7 @@
     <link rel="preconnect" href="https://use.typekit.net" crossorigin>
     
     <!-- Google Fonts (display=swap for fast rendering) -->
-    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Inter:wght@300;400;500;600&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
     
     <!-- Adobe Fonts (Typekit) -->
     <link rel="preload" href="https://use.typekit.net/amw3htm.css" as="style">
@@ -65,7 +76,7 @@
       work correctly both with client-side routing and a non-root public URL.
       Learn how to configure a non-root public URL by running `npm run build`.
     -->
-    <title>filmassistant.io | Screenwriting with a Living Outline</title>
+    <title>FilmAssistant | Screenwriting with a Living Outline</title>
     <!-- Third-party embeds (Google Analytics, GetTerms) live in web-analytics.js:
          it is a same-origin script (allowed by the desktop CSP) and it skips
          itself inside the Electron shell, where remote scripts would share the

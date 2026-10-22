@@ -1,15 +1,35 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Theme, Button, Dialog } from '@radix-ui/themes';
 import { Authenticator, useAuthenticator, CheckboxField } from '@aws-amplify/ui-react';
-import logo from "../../assets/images/glow-head.png"
+import logo from "../../assets/images/fa-logo-login.png"
 import grainVideo from "../../assets/videos/login/35mm_G3_DIRTY_2s.mp4"
 import AuthModal from '../../components/Login/AuthModal';
+import { noiseDataUrl } from '../../utils/noise';
 
 const signUpDialogStyle = {
     maxWidth: 'fit-content',
     padding: 0,
     border: 'none',
 };
+
+// The six login color bands. `slide` is how far each travels in on desktop
+// (`width` is its full size, the rest is margin for the pulse); `phoneDepth` is the share of screen height it
+// covers on phones. glow = [inner radius, outer radius, inner alpha, outer alpha].
+type Band = {
+    side: 'start' | 'end'; color: string; z: number; width: number; slide: number; phoneDepth: number;
+    pulse: number; freq: number; phase: number; delay: number; blur: number;
+    glow: [number, number, number, number]; glowColor: (a: number) => string;
+    shadow: [number, number, number];
+};
+const rgba = (rgb: string) => (a: number) => `rgba(${rgb}, ${a})`;
+const BANDS: Band[] = [
+    { side: 'start', color: '#ff6600', z: 2, width: 380, slide: 300, phoneDepth: 0.34, pulse: 12, freq: 0.8, phase: 0, delay: 1.1, blur: 4, glow: [60, 120, 0.8, 0.4], glowColor: rgba('255, 102, 0'), shadow: [8, 25, 0.25] },
+    { side: 'start', color: '#ffa500', z: 3, width: 340, slide: 240, phoneDepth: 0.28, pulse: 10, freq: 0.9, phase: 0.8, delay: 0.8, blur: 3, glow: [70, 130, 0.9, 0.5], glowColor: rgba('255, 165, 0'), shadow: [12, 35, 0.3] },
+    { side: 'start', color: '#ffd700', z: 4, width: 300, slide: 180, phoneDepth: 0.22, pulse: 8, freq: 1.1, phase: 1.2, delay: 0.5, blur: 2, glow: [80, 150, 1, 0.6], glowColor: rgba('255, 215, 0'), shadow: [15, 40, 0.35] },
+    { side: 'end', color: '#dc143c', z: 2, width: 380, slide: 300, phoneDepth: 0.34, pulse: 12, freq: 0.75, phase: 0.4, delay: 1.1, blur: 4, glow: [60, 120, 0.8, 0.4], glowColor: rgba('220, 20, 60'), shadow: [8, 25, 0.25] },
+    { side: 'end', color: '#ff4500', z: 3, width: 340, slide: 240, phoneDepth: 0.28, pulse: 10, freq: 0.85, phase: 1.1, delay: 0.8, blur: 3, glow: [70, 130, 0.9, 0.5], glowColor: rgba('255, 69, 0'), shadow: [12, 35, 0.3] },
+    { side: 'end', color: '#ff6600', z: 4, width: 300, slide: 180, phoneDepth: 0.22, pulse: 8, freq: 1.0, phase: 1.8, delay: 0.5, blur: 2, glow: [80, 150, 1, 0.6], glowColor: rgba('255, 102, 0'), shadow: [15, 40, 0.35] },
+];
 
 export default function NewLogin() {
     const { authStatus } = useAuthenticator(context => [context.authStatus]);
@@ -18,10 +38,10 @@ export default function NewLogin() {
     const [termsDialogOpen, setTermsDialogOpen] = useState(false);
     const [termsLoaded, setTermsLoaded] = useState(false);
     const [pageLoaded, setPageLoaded] = useState(false);
-    const [scrollY, setScrollY] = useState(0);
     const [time, setTime] = useState(0);
     const [shapesSettled, setShapesSettled] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
+    const [isNarrow] = useState(() => window.matchMedia('(max-width: 600px)').matches);
 
     const [loginOpen, setLoginOpen] = useState(false);
     const [signupOpen, setSignupOpen] = useState(false);
@@ -36,16 +56,29 @@ export default function NewLogin() {
         }
     }, [authStatus]);
 
-    // Handle parallax scroll effect
+    // The login screen is one fixed frame: no page scroll (the old parallax
+    // tied the logo and button to it, and on phones 100vh overflowed anyway).
     useEffect(() => {
-        const handleScroll = () => {
-            setScrollY(window.scrollY);
+        if (authStatus === 'authenticated') return;
+        const html = document.documentElement, body = document.body;
+        // Top first, then lock: once overflow is hidden, iOS can ignore the scroll.
+        window.scrollTo(0, 0);
+        const prev = [html.style.overflow, body.style.overflow, body.style.overscrollBehavior];
+        html.style.overflow = 'hidden';
+        body.style.overflow = 'hidden';
+        body.style.overscrollBehavior = 'none';
+        // Anything the bands don't reach (under Safari's toolbar, overscroll)
+        // shows this instead of the site's dark background: the bottom band's
+        // yellow on phones, the coral on desktop. !important because
+        // styles/home.css forces the dark background on html and body.
+        const edge = window.matchMedia('(max-width: 600px)').matches ? '#ffd700' : '#ff8559';
+        html.style.setProperty('background', edge, 'important');
+        body.style.setProperty('background', edge, 'important');
+        return () => {
+            [html.style.overflow, body.style.overflow, body.style.overscrollBehavior] = prev;
+            html.style.removeProperty('background');
+            body.style.removeProperty('background');
         };
-
-        if (authStatus !== 'authenticated') {
-            window.addEventListener('scroll', handleScroll);
-            return () => window.removeEventListener('scroll', handleScroll);
-        }
     }, [authStatus]);
 
     // Handle GetTerms script loading
@@ -96,7 +129,6 @@ export default function NewLogin() {
     // Helper function to calculate staggered slide-in with pulsing
     const getShapeTransform = (
         slideDistance: number,
-        parallaxMultiplier: number,
         pulseAmplitude: number,
         pulseFrequency: number,
         pulseOffset: number = 0,
@@ -114,12 +146,9 @@ export default function NewLogin() {
         // Base slide-in position with staggered timing
         const slidePosition = pageLoaded ? slideDistance * easedProgress : 0;
 
-        // Parallax effect
-        const parallaxOffset = scrollY * parallaxMultiplier;
-
         const pulseOffset_calc = Math.sin(time * pulseFrequency + pulseOffset) * pulseAmplitude;
 
-        return slidePosition + parallaxOffset + pulseOffset_calc;
+        return slidePosition + pulseOffset_calc;
     };
 
     if (authStatus === 'authenticated') {
@@ -129,7 +158,10 @@ export default function NewLogin() {
     const containerStyle: React.CSSProperties = {
         position: 'relative',
         width: '100%',
-        minHeight: '100vh',
+        // The visible screen, so the logo centres where you can see it. The
+        // strip under Safari's floating toolbar is covered by the body
+        // background set in the lock effect below.
+        height: '100dvh',
         overflow: 'hidden',
         background: `
       linear-gradient(135deg, 
@@ -154,6 +186,25 @@ export default function NewLogin() {
         objectFit: 'cover',
     };
 
+    const cssGrainStyle: React.CSSProperties = {
+        position: 'fixed',
+        inset: '-25%',
+        zIndex: 15,
+        pointerEvents: 'none',
+        backgroundImage: `url(${noiseDataUrl()})`,
+        // 160px tile drawn at 80px: one noise pixel per screen pixel on a 2x
+        // phone, so it reads as fine grain instead of clumps
+        backgroundSize: '80px 80px',
+        // hard-light, not overlay: overlay leaves pure white and black alone,
+        // so the logo (white wordmark, black linework) sat clean above the
+        // grain. Mid-grey noise is neutral in hard-light, so the bands keep
+        // their colour and everything, logo included, gets the same texture.
+        mixBlendMode: 'hard-light',
+        opacity: 0.11,
+        // six grain positions per cycle: 1s is about 6 changes a second
+        animation: 'loginGrain 1s steps(6) infinite',
+    };
+
     const contentContainerStyle: React.CSSProperties = {
         position: 'relative',
         zIndex: 10,
@@ -161,14 +212,12 @@ export default function NewLogin() {
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        minHeight: '100vh',
+        height: '100%',
         padding: '2rem',
-        transform: `translateY(${scrollY * -0.2}px)`,
     };
 
     const logoContainerStyle: React.CSSProperties = {
         marginBottom: '3rem',
-        transform: `translateY(${scrollY * -0.1}px)`,
         opacity: pageLoaded ? 1 : 0,
         transition: 'opacity 1.5s ease-out 0.8s',
     };
@@ -186,7 +235,7 @@ export default function NewLogin() {
         position: 'absolute',
         bottom: '10%', // Lower quarter positioning
         left: '50%',
-        transform: `translateX(-50%) translateY(${scrollY * -0.3}px)`,
+        transform: 'translateX(-50%)',
         zIndex: 10,
     };
 
@@ -209,127 +258,73 @@ export default function NewLogin() {
         <Theme>
             <div ref={containerRef} style={containerStyle}>
 
-                {/* Grain overlay video */}
-                <video
-                    style={grainOverlayStyle}
-                    autoPlay
-                    loop
-                    muted
-                    playsInline
-                >
-                    <source src={grainVideo} type="video/mp4" />
-                    {/* Fallback for browsers that don't support video */}
-                </video>
+                {/* Grain overlay. Phones get animated CSS noise: the video only
+                    moves when the phone allows autoplay (Low Power Mode, data
+                    saver and some Android browsers freeze it), and it's 3MB. */}
+                {isNarrow ? (
+                    <div aria-hidden="true" style={cssGrainStyle} />
+                ) : (
+                    <video
+                        style={grainOverlayStyle}
+                        autoPlay
+                        loop
+                        muted
+                        playsInline
+                    >
+                        <source src={grainVideo} type="video/mp4" />
+                    </video>
+                )}
 
-                {/* Left color blocks - staggered slide-in with pulsing throughout */}
-                {/* Back shape (z-index 2) - slides in third */}
-                <div style={{
-                    position: 'fixed',
-                    top: 0,
-                    bottom: 0,
-                    height: '100vh',
-                    width: '380px',
-                    left: '-380px',
-                    zIndex: 2,
-                    pointerEvents: 'none',
-                    transform: `translateX(${getShapeTransform(300, 0.15, 12, 0.8, 0, 1.1)}px)`,
-                    opacity: pageLoaded ? 1 : 0,
-                    transition: 'opacity 0.3s ease-out 1.1s',
-                    background: '#ff6600',
-                    filter: 'blur(4px)',
-                    boxShadow: '0 0 60px rgba(255, 102, 0, 0.8), 0 0 120px rgba(255, 102, 0, 0.4), 8px 0 25px rgba(0, 0, 0, 0.25)',
-                }} />
-
-                {/* Middle shape (z-index 3) - slides in second */}
-                <div style={{
-                    position: 'fixed',
-                    top: 0,
-                    bottom: 0,
-                    height: '100vh',
-                    width: '340px',
-                    left: '-340px',
-                    zIndex: 3,
-                    pointerEvents: 'none',
-                    transform: `translateX(${getShapeTransform(240, 0.18, 10, 0.9, 0.8, 0.8)}px)`,
-                    opacity: pageLoaded ? 1 : 0,
-                    transition: 'opacity 0.3s ease-out 0.8s',
-                    background: '#ffa500',
-                    filter: 'blur(3px)',
-                    boxShadow: '0 0 70px rgba(255, 165, 0, 0.9), 0 0 130px rgba(255, 165, 0, 0.5), 12px 0 35px rgba(0, 0, 0, 0.3)',
-                }} />
-
-                {/* Front shape (z-index 4) - slides in first */}
-                <div style={{
-                    position: 'fixed',
-                    top: 0,
-                    bottom: 0,
-                    height: '100vh',
-                    width: '300px',
-                    left: '-300px',
-                    zIndex: 4,
-                    pointerEvents: 'none',
-                    transform: `translateX(${getShapeTransform(180, 0.2, 8, 1.1, 1.2, 0.5)}px)`,
-                    opacity: pageLoaded ? 1 : 0,
-                    transition: 'opacity 0.3s ease-out 0.5s',
-                    background: '#ffd700',
-                    filter: 'blur(2px)',
-                    boxShadow: '0 0 80px rgba(255, 215, 0, 1), 0 0 150px rgba(255, 215, 0, 0.6), 15px 0 40px rgba(0, 0, 0, 0.35)',
-                }} />
-
-                {/* Right color blocks - staggered slide-in with pulsing throughout */}
-                {/* Back shape (z-index 2) - slides in third */}
-                <div style={{
-                    position: 'fixed',
-                    top: 0,
-                    bottom: 0,
-                    height: '100vh',
-                    width: '380px',
-                    right: '-380px',
-                    zIndex: 2,
-                    pointerEvents: 'none',
-                    transform: `translateX(${getShapeTransform(-300, -0.15, -12, 0.75, 0.4, 1.1)}px)`,
-                    opacity: pageLoaded ? 1 : 0,
-                    transition: 'opacity 0.3s ease-out 1.1s',
-                    background: '#dc143c',
-                    filter: 'blur(4px)',
-                    boxShadow: '0 0 60px rgba(220, 20, 60, 0.8), 0 0 120px rgba(220, 20, 60, 0.4), -8px 0 25px rgba(0, 0, 0, 0.25)',
-                }} />
-
-                {/* Middle shape (z-index 3) - slides in second */}
-                <div style={{
-                    position: 'fixed',
-                    top: 0,
-                    bottom: 0,
-                    height: '100vh',
-                    width: '340px',
-                    right: '-340px',
-                    zIndex: 3,
-                    pointerEvents: 'none',
-                    transform: `translateX(${getShapeTransform(-240, -0.18, -10, 0.85, 1.1, 0.8)}px)`,
-                    opacity: pageLoaded ? 1 : 0,
-                    transition: 'opacity 0.3s ease-out 0.8s',
-                    background: '#ff4500',
-                    filter: 'blur(3px)',
-                    boxShadow: '0 0 70px rgba(255, 69, 0, 0.9), 0 0 130px rgba(255, 69, 0, 0.5), -12px 0 35px rgba(0, 0, 0, 0.3)',
-                }} />
-
-                {/* Front shape (z-index 4) - slides in first */}
-                <div style={{
-                    position: 'fixed',
-                    top: 0,
-                    bottom: 0,
-                    height: '100vh',
-                    width: '300px',
-                    right: '-300px',
-                    zIndex: 4,
-                    pointerEvents: 'none',
-                    transform: `translateX(${getShapeTransform(-180, -0.2, -8, 1.0, 1.8, 0.5)}px)`,
-                    opacity: pageLoaded ? 1 : 0,
-                    transition: 'opacity 0.3s ease-out 0.5s',
-                    background: '#ff6600',
-                    filter: 'blur(2px)',
-                    boxShadow: '0 0 80px rgba(255, 102, 0, 1), 0 0 150px rgba(255, 102, 0, 0.6), -15px 0 40px rgba(0, 0, 0, 0.35)',
-                }} />
+                {/* Color bands - staggered slide-in with pulsing throughout. Desktop:
+                    the warm set slides in from the left, the red set from the right,
+                    leaving the coral centre for the logo. Phones: the warm set rises
+                    from the bottom (yellow behind the orange Get Started button) and the
+                    red set comes down from the top, because side bands 180-300px deep
+                    meet in the middle of a 375px screen. */}
+                {BANDS.map((b) => {
+                    const fromStart = b.side === 'start';
+                    // which edge the band enters from: left/right on desktop,
+                    // bottom (warm set) / top (red set) on phones
+                    const edge = isNarrow ? (fromStart ? 'bottom' : 'top') : (fromStart ? 'left' : 'right');
+                    const sign = edge === 'left' || edge === 'top' ? 1 : -1;
+                    // Phones: visible depth as a share of the screen height, so a
+                    // coral strip (~34% to 66%) always stays clear for the logo.
+                    const depth = isNarrow ? Math.round(b.phoneDepth * window.innerHeight) : b.slide;
+                    const size = depth + (b.width - b.slide);
+                    const offset = getShapeTransform(sign * depth, sign * b.pulse, b.freq, b.phase, b.delay);
+                    const shadowOffset = isNarrow ? `0 ${sign * b.shadow[0]}px` : `${sign * b.shadow[0]}px 0`;
+                    return (
+                        <div
+                            key={b.color + b.side}
+                            style={{
+                                position: 'fixed',
+                                pointerEvents: 'none',
+                                zIndex: b.z,
+                                background: b.color,
+                                filter: `blur(${b.blur}px)`,
+                                opacity: pageLoaded ? 1 : 0,
+                                transition: `opacity 0.3s ease-out ${b.delay}s`,
+                                boxShadow: `0 0 ${b.glow[0]}px ${b.glowColor(b.glow[2])}, 0 0 ${b.glow[1]}px ${b.glowColor(b.glow[3])}, ${shadowOffset} ${b.shadow[1]}px rgba(0, 0, 0, ${b.shadow[2]})`,
+                                ...(isNarrow
+                                    ? {
+                                        left: 0,
+                                        right: 0,
+                                        height: `${size}px`,
+                                        [edge]: `-${size}px`,
+                                        transform: `translateY(${offset}px)`,
+                                    }
+                                    : {
+                                        top: 0,
+                                        bottom: 0,
+                                        height: '100vh',
+                                        width: `${size}px`,
+                                        [edge]: `-${size}px`,
+                                        transform: `translateX(${offset}px)`,
+                                    }),
+                            }}
+                        />
+                    );
+                })}
 
                 {/* Main content */}
                 <div style={contentContainerStyle}>
@@ -337,7 +332,7 @@ export default function NewLogin() {
                     <div style={logoContainerStyle}>
                         <img
                             src={logo}
-                            alt="Logo"
+                            alt="FilmAssistant"
                             style={logoStyle}
                             onError={(e) => {
                                 const target = e.target as HTMLImageElement;
@@ -413,21 +408,21 @@ export default function NewLogin() {
                 {/* CSS Animations */}
                 <style>
                     {`
+            @keyframes loginGrain {
+              0% { transform: translate(0, 0); }
+              17% { transform: translate(-7%, 4%); }
+              33% { transform: translate(5%, -6%); }
+              50% { transform: translate(-3%, 8%); }
+              67% { transform: translate(8%, 2%); }
+              83% { transform: translate(-6%, -5%); }
+              100% { transform: translate(0, 0); }
+            }
+
             @keyframes spin {
               0% { transform: rotate(0deg); }
               100% { transform: rotate(360deg); }
             }
 
-            /* Smooth scrolling for better parallax effect */
-            html {
-              scroll-behavior: smooth;
-            }
-
-            /* Hide scrollbar but keep functionality */
-            body::-webkit-scrollbar {
-              width: 0px;
-              background: transparent;
-            }
           `}
                 </style>
             </div>

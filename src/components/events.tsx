@@ -13,7 +13,7 @@ import { useMutation } from "react-query";
 import type { WithAuthenticatorProps } from '@aws-amplify/ui-react';
 import { withAuthenticator } from '@aws-amplify/ui-react';
 import '@aws-amplify/ui-react/styles.css';
-import config from '../aws-exports';
+import config from '../amplifyConfig';
 import { Theme, Flex, Text, Button, Grid, TextArea ,TextField,Box, Checkbox, ScrollArea,Dialog,Table,DropdownMenu} from '@radix-ui/themes';
 import axios from 'axios';
 import '@radix-ui/themes/styles.css';

@@ -40,6 +40,7 @@ import type { WithAuthenticatorProps } from '@aws-amplify/ui-react';
 import { withAuthenticator } from '@aws-amplify/ui-react';
 import { useAuthenticator, Authenticator } from '@aws-amplify/ui-react';
 import { BrowserRouter, HashRouter, Routes, Route, useLocation, Navigate } from 'react-router-dom';
+import MobileGuard, { isPhoneDevice } from './components/MobileGuard';
 import { debounce } from "lodash";
 import { Cache } from 'aws-amplify/utils';
 import { useNavigate } from 'react-router-dom';
@@ -49,7 +50,7 @@ import Profile from './pages/app/Profile';
 import NotFound from './components/notfound';
 import '@aws-amplify/ui-react/styles.css';
 import { Amplify } from 'aws-amplify';
-import config from './aws-exports';
+import config from './amplifyConfig';
 import '@radix-ui/themes/styles.css';
 import axios from 'axios';
 import Header from './components/header';
@@ -69,12 +70,13 @@ import FreeformScript from './pages/app/freeform-script';
 import HomePage from './components/HomePage';
 import { AIModelProvider } from './components/AIModelContext';
 import { GlobalErrorModal } from './components/Error/GlobalErrorModal';
+import AiPauseBanner from './components/AiPauseBanner';
 import { ErrorProvider } from './components/Error/ErrorProvider';
 import { StoryUIProvider } from './components/ui/StoryUIContext';
 import { useStoryUI } from './components/ui/StoryUIContext';
 import { isDesktop } from './lib/ipcClient';
-import { safeApiCall } from './models/apiHelpers';
 import { isLocalFirst } from './lib/localFirst';
+import { safeApiCall } from './models/apiHelpers';
 import { startDesktopDataLifecycle, DesktopLifecycleHandle } from './data/desktop-lifecycle';
 import { cacheDataToCanonical } from './features/story-workspace/model/cacheDataAdapter';
 import { saveStory } from './features/story-workspace/model/storySave';
@@ -228,6 +230,7 @@ function useAuthStatus(): string {
  */
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const authStatus = useAuthStatus();
+  const [isPhone] = useState(isPhoneDevice);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -250,6 +253,12 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   // Show nothing while configuring
   if (authStatus === 'configuring') {
     return null;
+  }
+
+  // Phones get a "use a computer" screen instead of the app: it isn't built
+  // for touch or small screens. Landing, login and legal pages stay open.
+  if (authStatus === 'authenticated' && isPhone) {
+    return <MobileGuard />;
   }
 
   return authStatus === 'authenticated' ? <>{children}</> : null;
@@ -1986,6 +1995,7 @@ function AppContent() {
               setCharacterDatabase,       // Direct access to character DB setter
             }}>
               <GlobalErrorModal />
+              <AiPauseBanner />
               <FixtureProvider value={fixtureState}>
               <Routes>
                 {/* ========================================

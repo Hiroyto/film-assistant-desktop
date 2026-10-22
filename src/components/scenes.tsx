@@ -4,7 +4,7 @@ import Header from './header';
 import Footer from './footer';
 import { useMutation } from "react-query";
 import '@aws-amplify/ui-react/styles.css';
-import config from '../aws-exports';
+import config from '../amplifyConfig';
 import { Theme, Flex, Text, Button, Grid, Box, Container, Dialog, TextField, ScrollArea, Tooltip } from '@radix-ui/themes';
 import axios from 'axios';
 import { UserContext } from '../App';

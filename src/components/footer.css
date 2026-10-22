@@ -1,0 +1,42 @@
+/* The site footer (footer.tsx), shared by the landing and the app pages. */
+.ld-footer {
+  position: relative;
+  z-index: 98; /* carried over from the old app footer, which sat over page content */
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  /* No fill of its own: the footer sits on whatever the page paints, so it
+     reads as the page's last row everywhere (the landing is #0a0a0a, the app
+     pages are lighter gradients, and a solid #0a0a0a band stood out on them). */
+  background: transparent;
+  padding: 44px 0 56px;
+}
+
+.ld-footer-inner {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 32px;
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+  font-family: 'Inter', sans-serif;
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.ld-footer-inner a {
+  color: rgba(255, 255, 255, 0.6);
+  text-decoration: none;
+  margin-right: 22px;
+}
+
+.ld-footer-inner a:hover {
+  color: #ffffff;
+}
+
+@media (max-width: 600px) {
+  .ld-footer-inner a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+}

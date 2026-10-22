@@ -58,7 +58,7 @@ import { ErrorModal } from "../../components/ui/ErrorModal";
 
 import "../../styles/home.css"
 
-import config from '../../aws-exports';
+import config from '../../amplifyConfig';
 
 // Import our new components
 import StoryFoundation from '../../components/Home/StoryFoundation';

@@ -7,10 +7,10 @@ import '@aws-amplify/ui-react/styles.css';
 import { Button } from '@radix-ui/themes';
 import { Component1Icon } from '@radix-ui/react-icons';
 
-import config from '../aws-exports';
+import config from '../amplifyConfig';
 import './header.css';
 import { UserContext } from '../App';
-import whiteOverlay from './Head-color-white.png';
+import FaLogo from '../assets/images/fa-logo-nav.png';
 import { motion, AnimatePresence } from 'framer-motion';
 
 Amplify.configure(config);
@@ -192,8 +192,8 @@ export function Header({
             <div className="logo-section">
               <img
                 onClick={() => navigate('/dashboard')}
-                src={whiteOverlay}
-                alt="Logo"
+                src={FaLogo}
+                alt="FilmAssistant"
                 className="header-logo"
                 style={{ cursor: 'pointer' }}
               />

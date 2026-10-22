@@ -3,10 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import '@aws-amplify/ui-react/styles.css';
 import './landing.css';
 import './landing-v2.css';
-import GlowHeadLogo from '../assets/images/glow-head.png';
+// FilmAssistant logo at nav size (the 2099px glow-head.png was 726KB for a 46px-tall logo)
+import FaLogo from '../assets/images/fa-logo-nav.png';
 import FilmGrainVideo from '../assets/videos/login/35mm_G3_DIRTY_2s.mp4';
 import DesktopDownloadButtons from './DesktopDownloadButtons';
+import Footer from './footer';
 import InternIcon from './Freeform/InternIcon';
+import { noiseDataUrl } from '../utils/noise';
 
 // Section dot colors, top to bottom, matching the connecting-line gradient
 const SECTION_DOTS = {
@@ -156,11 +159,26 @@ const BetaButton: React.FC<{ onClick: () => void; disabled?: boolean; variant?: 
     <button onClick={onClick} className="btn btn-primary" disabled={disabled}>
       <span className="btn-text">Join the Beta</span>
     </button>
-    <video autoPlay loop muted playsInline className="btn-overlay">
-      <source src="/35mm_G3_DIRTY_2s.mp4" type="video/mp4" />
-    </video>
+    {/* CSS noise tile; the old overlay video pointed at a file public/ never had */}
+    <span className="btn-grain" aria-hidden="true" />
   </div>
 );
+
+// True while the element is on (or near) screen. The demo clocks re-render the
+// whole page every 40ms, so they only tick while their section is in view.
+const useOnScreen = (ref: React.RefObject<HTMLElement>) => {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const io = new IntersectionObserver(([e]) => setOn(e.isIntersecting), { rootMargin: '200px 0px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [ref]);
+  return on;
+};
+
+type ArcLayout = { w: number; h: number; paths: string[]; labels: { x: number; y: number }[] };
 
 const Landing: React.FC = () => {
   const navigate = useNavigate();
@@ -174,6 +192,12 @@ const Landing: React.FC = () => {
   const dotRefs = useRef<(HTMLDivElement | null)[]>([]);
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [videoError, setVideoError] = useState(false);
+  // Phones get CSS grain instead of the 3MB hero grain video, and the
+  // phone-sized reel. Read once at mount; rotating a phone doesn't cross it.
+  const [isNarrow] = useState(() => window.matchMedia('(max-width: 600px)').matches);
+  // The reel box follows whichever file loaded: 16:9 desktop cut today, the
+  // portrait phone cut once hero-loop-mobile.mp4 lands.
+  const [reelAspect, setReelAspect] = useState<string | undefined>(undefined);
   // The "Watch it work" band's Screen Studio capture: true until the video
   // element reports the files missing, then the mock poster renders.
   const [heroLoopOk, setHeroLoopOk] = useState(true);
@@ -199,9 +223,18 @@ const Landing: React.FC = () => {
   const [doorTab, setDoorTab] = useState<'outline' | 'write'>('outline');
   const [boardSlide, setBoardSlide] = useState(0);
   const [writeSlide, setWriteSlide] = useState(0);
+  // Tapping a demo step pins that slide: no more auto-advance until the
+  // reader picks the other door, so a flip never cuts them off mid-read.
+  const [demoPinned, setDemoPinned] = useState(false);
+  const pickBoardSlide = (i: number) => { setDemoPinned(true); setBoardSlide(i); };
+  const pickWriteSlide = (i: number) => { setDemoPinned(true); setWriteSlide(i); };
+  const pickDoor = (d: 'outline' | 'write') => { setDemoPinned(false); setDoorTab(d); };
   const [writeTick, setWriteTick] = useState(0);
   const [cardOpen, setCardOpen] = useState(false);
   const [peerTick, setPeerTick] = useState(0);
+
+  const peerOnScreen = useOnScreen(peerSectionRef);
+  const doorsOnScreen = useOnScreen(doorsSectionRef);
 
   // Peer section loop clock
   useEffect(() => {
@@ -209,16 +242,17 @@ const Landing: React.FC = () => {
       setPeerTick(PP_CHIP3_AT + 1);
       return;
     }
+    if (!peerOnScreen) return;
     const t = setInterval(() => setPeerTick(k => (k + 1) % PP_LOOP_TICKS), 40);
     return () => clearInterval(t);
-  }, []);
+  }, [peerOnScreen]);
 
   // Auto-flip the outline-door carousel: braindump, board, characters
   useEffect(() => {
-    if (doorTab !== 'outline') return;
+    if (doorTab !== 'outline' || demoPinned || !doorsOnScreen) return;
     const t = setInterval(() => setBoardSlide(s => (s + 1) % 3), 6000);
     return () => clearInterval(t);
-  }, [doorTab]);
+  }, [doorTab, demoPinned, doorsOnScreen]);
 
   // Slide 2 choreography: The Trail lands, then the card opens, then loop
   useEffect(() => {
@@ -230,16 +264,18 @@ const Landing: React.FC = () => {
       setCardOpen(true);
       return;
     }
-    const t1 = setTimeout(() => setCardOpen(true), 2800);
-    const t2 = setTimeout(() => {
+    // Phones open sooner: the closed card reads as a stall on a small screen.
+    const t1 = setTimeout(() => setCardOpen(true), isNarrow ? 900 : 2800);
+    // Pinned: the card opens and stays open instead of looping back.
+    const t2 = demoPinned ? undefined : setTimeout(() => {
       setCardOpen(false);
       setWriteSlide(0);
     }, 8600);
     return () => {
       clearTimeout(t1);
-      clearTimeout(t2);
+      if (t2) clearTimeout(t2);
     };
-  }, [doorTab, writeSlide]);
+  }, [doorTab, writeSlide, demoPinned, isNarrow]);
 
   // Per-character typing clock for the writing slide
   useEffect(() => {
@@ -251,21 +287,29 @@ const Landing: React.FC = () => {
       setWriteTick(ADVANCE_AT - 1);
       return;
     }
-    const t = setInterval(() => setWriteTick(k => (k + 1) % WRITE_LOOP_TICKS), 40);
+    if (!doorsOnScreen) return;
+    // Pinned: type the scene once and hold on the finished page.
+    const t = setInterval(
+      () => setWriteTick(k => (demoPinned ? Math.min(k + 1, ADVANCE_AT - 1) : (k + 1) % WRITE_LOOP_TICKS)),
+      40,
+    );
     return () => clearInterval(t);
-  }, [doorTab, writeSlide]);
+  }, [doorTab, writeSlide, demoPinned, doorsOnScreen]);
 
   // The moment the mint beat lands, jump to the sequence slide
   useEffect(() => {
     if (doorTab !== 'write' || writeSlide !== 0) return;
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    if (demoPinned) return;
     if (writeTick >= ADVANCE_AT) setWriteSlide(1);
-  }, [writeTick, doorTab, writeSlide]);
+  }, [writeTick, doorTab, writeSlide, demoPinned]);
   const [dotPositions, setDotPositions] = useState<{ x: number; y: number }[]>([]);
   const [philosophyDotPosition, setPhilosophyDotPosition] = useState<{ x: number; y: number } | null>(null);
 
   // Calculate dot positions relative to the flow wrapper
   useEffect(() => {
+    // The connecting line is hidden on phones; don't measure for it there.
+    if (isNarrow) return;
     const updateDotPositions = () => {
       if (!flowSectionRef.current) return;
 
@@ -298,8 +342,9 @@ const Landing: React.FC = () => {
     };
 
     updateDotPositions();
+    // Positions are relative to the flow section, so scrolling never changes
+    // them; a scroll listener here re-rendered the whole page per scroll event.
     window.addEventListener('resize', updateDotPositions);
-    window.addEventListener('scroll', updateDotPositions, { passive: true });
 
     // Recalculate after fonts load
     document.fonts.ready.then(updateDotPositions);
@@ -318,14 +363,71 @@ const Landing: React.FC = () => {
 
     return () => {
       window.removeEventListener('resize', updateDotPositions);
-      window.removeEventListener('scroll', updateDotPositions);
       timeouts.forEach(clearTimeout);
       cancelAnimationFrame(rafId);
     };
+  }, [doorTab, isNarrow]);
+
+  // Board slide arcs, drawn from where the card dots actually sit so the
+  // threads connect at any width (the old fixed paths only lined up on desktop).
+  const boardGridRef = useRef<HTMLDivElement>(null);
+  const arcLabelRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const [arcLayout, setArcLayout] = useState<ArcLayout | null>(null);
+  useEffect(() => {
+    const grid = boardGridRef.current;
+    if (!grid) return;
+    // offsetLeft/Top ignore the slide's scale and stream-in transforms
+    const center = (el: HTMLElement) => {
+      let x = el.offsetWidth / 2, y = el.offsetHeight / 2;
+      let e: HTMLElement | null = el;
+      while (e && e !== grid) {
+        x += e.offsetLeft; y += e.offsetTop;
+        e = e.offsetParent as HTMLElement | null;
+      }
+      return { x, y };
+    };
+    const measure = () => {
+      const dots = Array.from(grid.querySelectorAll<HTMLElement>('.ld-seqcard-dot'));
+      if (dots.length < 3) return;
+      const w = grid.clientWidth, h = grid.clientHeight;
+      const [a, b, c] = dots.map(center);
+      const room = Math.max(24, w - Math.max(a.x, b.x, c.x) - 6);
+      // the missing singer: SC 01 to SC 03 (outer); the ledger thread: SC 02 to SC 03 (inner)
+      const arcs = [{ from: a, bulge: room * 0.95 }, { from: b, bulge: room * 0.55 }];
+      const paths = arcs.map(({ from, bulge }) =>
+        `M ${from.x},${from.y} C ${from.x + bulge},${from.y} ${c.x + bulge},${c.y} ${c.x},${c.y}`);
+      // Each label rides its arc in the gap between two cards (never on a
+      // card's dot): the singer between SC 01 and SC 02, the ledger between
+      // SC 02 and SC 03. y(t) is a smoothstep, so bisect for the label's t.
+      const gapY = [(a.y + b.y) / 2, (b.y + c.y) / 2];
+      const labels = arcs.map(({ from, bulge }, i) => {
+        const lw = arcLabelRefs.current[i]?.offsetWidth ?? 110;
+        const y = gapY[i];
+        let lo = 0, hi = 1;
+        for (let k = 0; k < 24; k++) {
+          const t = (lo + hi) / 2;
+          const yt = from.y + (c.y - from.y) * (3 * t * t - 2 * t * t * t);
+          if (yt < y) lo = t; else hi = t;
+        }
+        const t = (lo + hi) / 2;
+        const x = from.x + (c.x - from.x) * t + 3 * bulge * t * (1 - t);
+        return { x: Math.max(lw / 2 + 4, Math.min(x, w - lw / 2 - 4)), y };
+      });
+      setArcLayout({ w, h, paths, labels });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(grid);
+    document.fonts.ready.then(measure);
+    return () => ro.disconnect();
   }, [doorTab]);
 
   const handleJoinBeta = () => {
     setIsTransitioning(true);
+    // Back to the top during the fade: scrolled down, iOS Safari has collapsed
+    // its bars, and /login (one locked screen) would open sized for that
+    // taller viewport and stay that way.
+    if (window.scrollY > 0) window.scrollTo({ top: 0, behavior: 'smooth' });
     setTimeout(() => {
       navigate('/login');
     }, 1000);
@@ -362,7 +464,7 @@ const Landing: React.FC = () => {
         <nav className="ld-nav">
           <div className="ld-nav-pill">
             <div className="ld-nav-brand">
-              <img src={GlowHeadLogo} alt="filmassistant.io" className="ld-nav-logo" />
+              <img src={FaLogo} alt="FilmAssistant" className="ld-nav-logo" />
             </div>
             <div className="ld-nav-links">
               <button onClick={() => scrollTo(doorsSectionRef)}>How it works</button>
@@ -390,6 +492,8 @@ const Landing: React.FC = () => {
             </button>
           </div>
 
+          <p className="ld-hero-mobile-note">Best on a laptop or desktop. Sign up here, write there.</p>
+
           {/* Download do app desktop (Windows + macOS) — só aparece na web */}
           <DesktopDownloadButtons className="hero-download" />
         </div>
@@ -401,7 +505,7 @@ const Landing: React.FC = () => {
         {/* Bottom blend to smooth transition to philosophy */}
         <div className="hero-bottom-blend"></div>
 
-        {!videoError ? (
+        {!videoError && !isNarrow ? (
           <video
             className="hero-film-grain"
             src={FilmGrainVideo}
@@ -412,7 +516,9 @@ const Landing: React.FC = () => {
             onError={() => setVideoError(true)}
           />
         ) : (
-          <div className="hero-film-grain-fallback" />
+          // Bitmap grain, not the SVG filter in landing.css: iOS drew that tile
+          // by tile on this oversized layer, flashing squares as the hero faded.
+          <div className="hero-film-grain-fallback" style={{ backgroundImage: `url(${noiseDataUrl()})`, backgroundSize: '160px 160px' }} />
         )}
       </section>
 
@@ -424,7 +530,7 @@ const Landing: React.FC = () => {
           public/landing/hero-poster.jpg. */}
       <section className="ld-showreel" ref={showreelRef}>
         <div className="ld-showreel-inner">
-          <div className="ld-poster" role="button" tabIndex={0} onClick={handleJoinBeta}>
+          <div className="ld-poster" role="button" tabIndex={0} onClick={handleJoinBeta} style={reelAspect ? { aspectRatio: reelAspect } : undefined}>
             {heroLoopOk ? (
               <video
                 ref={heroVideoRef}
@@ -434,9 +540,21 @@ const Landing: React.FC = () => {
                 playsInline
                 preload="metadata"
                 poster="/landing/hero-poster.jpg"
-                onError={() => setHeroLoopOk(false)}
+                // A <source> that fails (the phone cut before it exists) reports
+                // here too; only the video's own error or the last source
+                // failing means there is no reel at all.
+                onError={(e) => { if (e.target === e.currentTarget) setHeroLoopOk(false); }}
+                onLoadedMetadata={(e) => {
+                  const v = e.currentTarget;
+                  if (v.videoWidth && v.videoHeight) setReelAspect(`${v.videoWidth} / ${v.videoHeight}`);
+                }}
               >
-                <source src="/landing/hero-loop.mp4" type="video/mp4" />
+                {/* Phones: a 960px encode of the desktop reel (3MB instead of
+                    21.7MB). When the portrait After Effects cut lands, add it
+                    as the first source with the same media query; don't list
+                    a file that doesn't exist yet, iOS stalls on the 404 page. */}
+                <source src="/landing/hero-loop-960.mp4" type="video/mp4" media="(max-width: 600px)" />
+                <source src="/landing/hero-loop.mp4" type="video/mp4" onError={() => setHeroLoopOk(false)} />
               </video>
             ) : (
               <>
@@ -514,7 +632,7 @@ const Landing: React.FC = () => {
               className="ld-tab"
               role="tab"
               aria-selected={doorTab === 'outline'}
-              onClick={() => setDoorTab('outline')}
+              onClick={() => pickDoor('outline')}
             >
               I outline first
             </button>
@@ -522,7 +640,7 @@ const Landing: React.FC = () => {
               className="ld-tab"
               role="tab"
               aria-selected={doorTab === 'write'}
-              onClick={() => setDoorTab('write')}
+              onClick={() => pickDoor('write')}
             >
               I script first
             </button>
@@ -565,7 +683,7 @@ const Landing: React.FC = () => {
 
                 {/* Slide 2: sequence container + arc threads, streaming in */}
                 <div className={`ld-slide ld-slide-zoomfrom ${boardSlide === 1 ? 'on' : ''}`}>
-                  <div className="ld-board-grid">
+                  <div className="ld-board-grid" ref={boardGridRef}>
                     <div className="ld-seqbox ld-stream" style={{ animationDelay: '0.15s' }}>
                       <div className="ld-seqbox-head">
                         <span className="ld-seqbox-chev">▾</span>
@@ -589,12 +707,27 @@ const Landing: React.FC = () => {
                         <span className="ld-seqcard-dot"></span>
                       </div>
                     </div>
-                    <svg className="ld-arcs ld-stream" style={{ animationDelay: '2.05s' }} viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-                      <path d="M 50,28.9 C 88,34 82,86 50,87.4" fill="none" stroke="#a78bfa" strokeWidth="1.6" opacity="0.85" vectorEffect="non-scaling-stroke" />
-                      <path d="M 50,58.1 C 80,64 84,86 50,87.4" fill="none" stroke="#d4a03d" strokeWidth="1.6" opacity="0.85" vectorEffect="non-scaling-stroke" />
-                    </svg>
-                    <div className="ld-arc-label purple ld-stream-c" style={{ left: '71.7%', top: '41.7%', animationDelay: '2.35s' }}>the missing singer</div>
-                    <div className="ld-arc-label gold ld-stream-c" style={{ left: '73.7%', top: '77%', animationDelay: '2.55s' }}>the ledger thread</div>
+                    {arcLayout && (
+                      <svg className="ld-arcs ld-stream" style={{ animationDelay: '2.05s' }} viewBox={`0 0 ${arcLayout.w} ${arcLayout.h}`} aria-hidden="true">
+                        <path d={arcLayout.paths[0]} fill="none" stroke="#a78bfa" strokeWidth="1.6" opacity="0.85" />
+                        <path d={arcLayout.paths[1]} fill="none" stroke="#d4a03d" strokeWidth="1.6" opacity="0.85" />
+                      </svg>
+                    )}
+                    {(['purple', 'gold'] as const).map((tone, i) => (
+                      <div
+                        key={tone}
+                        ref={(el) => { arcLabelRefs.current[i] = el; }}
+                        className={`ld-arc-label ${tone} ld-stream-c`}
+                        style={{
+                          left: arcLayout ? arcLayout.labels[i].x : 0,
+                          top: arcLayout ? arcLayout.labels[i].y : 0,
+                          visibility: arcLayout ? 'visible' : 'hidden',
+                          animationDelay: i === 0 ? '2.35s' : '2.55s',
+                        }}
+                      >
+                        {i === 0 ? 'the missing singer' : 'the ledger thread'}
+                      </div>
+                    ))}
                   </div>
                 </div>
 
@@ -620,18 +753,24 @@ const Landing: React.FC = () => {
                   <button
                     className={boardSlide === 0 ? 'on' : ''}
                     aria-label="Show the braindump"
-                    onClick={() => setBoardSlide(0)}
-                  />
+                    onClick={() => pickBoardSlide(0)}
+                  >
+                    <span className="ld-dot-label">Braindump</span>
+                  </button>
                   <button
                     className={boardSlide === 1 ? 'on' : ''}
                     aria-label="Show the board"
-                    onClick={() => setBoardSlide(1)}
-                  />
+                    onClick={() => pickBoardSlide(1)}
+                  >
+                    <span className="ld-dot-label">Board</span>
+                  </button>
                   <button
                     className={boardSlide === 2 ? 'on' : ''}
                     aria-label="Show the characters"
-                    onClick={() => setBoardSlide(2)}
-                  />
+                    onClick={() => pickBoardSlide(2)}
+                  >
+                    <span className="ld-dot-label">Characters</span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -732,13 +871,17 @@ const Landing: React.FC = () => {
                   <button
                     className={writeSlide === 0 ? 'on' : ''}
                     aria-label="Show the writing"
-                    onClick={() => setWriteSlide(0)}
-                  />
+                    onClick={() => pickWriteSlide(0)}
+                  >
+                    <span className="ld-dot-label">Writing</span>
+                  </button>
                   <button
                     className={writeSlide === 1 ? 'on' : ''}
                     aria-label="Show the sequence and card"
-                    onClick={() => setWriteSlide(1)}
-                  />
+                    onClick={() => pickWriteSlide(1)}
+                  >
+                    <span className="ld-dot-label">Card</span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -945,16 +1088,13 @@ const Landing: React.FC = () => {
       </section>
 
       {/* Footer */}
-      <footer className="ld-footer">
-        <div className="ld-footer-inner">
-          <div>
-            <a href="#pricing" onClick={(e) => { e.preventDefault(); scrollTo(pricingSectionRef); }}>Pricing</a>
-            <a href="/privacy.html">Privacy Policy</a>
-            <a href="/terms.html">Terms of Service</a>
-          </div>
-          <div>© 2026 filmassistant.io · It's your story, not ours.</div>
-        </div>
-      </footer>
+      {/* Phone-only closer: the page otherwise ends on the last pricing card */}
+      <section className="ld-final">
+        <h2 className="ld-final-title">Your story.<br />Your writers room.</h2>
+        <BetaButton onClick={handleJoinBeta} disabled={isTransitioning} />
+      </section>
+
+      <Footer onPricingClick={() => scrollTo(pricingSectionRef)} />
     </div>
   );
 };
