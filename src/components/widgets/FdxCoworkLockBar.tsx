@@ -71,9 +71,8 @@ export function FdxCoworkLockBar({ lock, theme }: { lock: FdxCoworkLock; theme: 
           data-testid="cowork-lock-bar"
           style={{ ...bar, background: dark ? 'rgba(93,212,200,0.08)' : 'rgba(15,127,159,0.08)', color: dark ? '#c9c9d1' : '#2c2c28' }}
         >
-          <span aria-hidden>🔒</span>
           <span>
-            Read-only — this screenplay is coworking with <strong>{lock.coworkFile}</strong> in Final Draft. Edits made here would conflict with the file.
+            Read-only. This screenplay is coworking with <strong>{lock.coworkFile}</strong> in Final Draft. Edits made here would conflict with the file.
           </span>
           <button type="button" style={{ ...btn, marginLeft: 'auto' }} onClick={() => setConfirming(true)}>Enable editing…</button>
         </div>

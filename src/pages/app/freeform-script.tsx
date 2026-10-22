@@ -4335,6 +4335,12 @@ export default function FreeformScript() {
         )}
         </div></div>
 
+        {/* The page column: the cowork lock bar (when a .fdx coworks this
+            story) ABOVE the editor, full width. A column, not a row item: as a
+            direct child of the body row the bar became a third column beside
+            the editor (1.3.5/1.3.6). The review panel's margin lives here so
+            the bar and the pages both clear it. */}
+        <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column', marginRight: reviewOpen && !isFullscreen ? 484 : 0, transition: 'margin-right 240ms cubic-bezier(0.32,0.72,0,1)' }}>
         {/* COWORK LOCK: while a .fdx coworks this story the script is read-only
             here (the file is the source of truth); editing can be unlocked,
             with the conflict warning. */}
@@ -4476,7 +4482,7 @@ export default function FreeformScript() {
           .ff-rv-reopen { opacity: 0; transition: opacity 140ms; }
           .ff-rv-row:hover .ff-rv-reopen { opacity: 1; }
         `}</style>
-        <div className="ff-script-host" style={{ flex: 1, minHeight: 0, minWidth: 0, marginRight: reviewOpen && !isFullscreen ? 484 : 0, transition: 'margin-right 240ms cubic-bezier(0.32,0.72,0,1)' }}>
+        <div className="ff-script-host" style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
           <ScriptEditor
             key={`${storyId ?? ''}:${reloadTick}`}
             onEditorReady={handleEditorReady}
@@ -4504,6 +4510,7 @@ export default function FreeformScript() {
             showAIRail={false}
             extraExtensions={EXTRA_EXTENSIONS}
           />
+        </div>
         </div>
       </div>
 
