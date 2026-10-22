@@ -65,6 +65,11 @@ export const BALL_ID_ARCS = '__ball_arcs';
 
 export const BALL_ID_BACKSTORY = '__ball_backstory';
 
+// The Characters view's drawer for the minor cast (characterTiers.ts). Not in
+// CLUSTER_ORDER: it never rides the master board's ball row; the Characters
+// view places it under its web. Listed in CLUSTER_META so a click toggles it.
+export const BALL_ID_MINOR_CAST = '__ball_minor_cast';
+
 // Left-to-right order for the default row + per-category presentation. Balls are
 // horizontally draggable afterward, so this is just the initial placement.
 //   alwaysBalled — Backstory is a ball from the initial stage.
@@ -90,6 +95,7 @@ export const CLUSTER_META: Record<
   [BALL_ID_CHARACTERS]: { label: 'Characters', colorKey: 'character', noun: 'character', alwaysBalled: false },
   [BALL_ID_ARCS]: { label: 'Arcs', colorKey: 'arc', noun: 'arc', alwaysBalled: false },
   [BALL_ID_BACKSTORY]: { label: 'Backstory', colorKey: 'event', noun: 'backstory beat', alwaysBalled: true },
+  [BALL_ID_MINOR_CAST]: { label: 'Minor cast', colorKey: 'character', noun: 'minor character', alwaysBalled: true },
 };
 
 export const BALL_W = 156;

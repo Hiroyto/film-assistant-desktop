@@ -92,7 +92,19 @@ export interface ClassifyOptions {
 
 // ---- shared grammar --------------------------------------------------------
 
-const SLUG_LINE = /^(INT|EXT|EST|INT\.?\s*\/\s*EXT|I\/E)[.\s\-–]/i;
+const SLUG_LINE = /^(INT|EXT|EST|(INT|EXT)\.?\s*\/\s*(EXT|INT)|I\/E)[.\s\-–]/i;
+// A HEADING WITHOUT INT/EXT (2026-10-16, The Godfather: about 145 headings at
+// the left margin, 13 of them with INT/EXT; the rest read "THE DON'S OFFICE
+// \u2013 NIGHT"). Only the shape no other element has: an all-caps line that
+// ends in a time of day after a dash, or in a clock time in parentheses ("THE
+// HOSPITAL (10:30PM)"). A bare caps line ("OUTSIDE", "THE ROOF", "2ND TIER")
+// stays action: Shawshank and Schindler's List carry 78 of those and every
+// one is a shot heading or caps action. Case matters, so this is its own
+// pattern beside the case-blind SLUG_LINE.
+const BARE_HEADING = /^[A-Z0-9][^a-z]{0,70}\S\s+[-\u2013\u2014]{1,2}\s+(?:(?:EARLY|LATE|MID|VERY EARLY|VERY LATE)[ -])?(?:DAY|NIGHT|MORNING|EVENING|AFTERNOON|DAWN|DUSK|SUNSET|SUNRISE|TWILIGHT|NOON|MIDDAY|MIDNIGHT|MAGIC HOUR|CONTINUOUS|LATER|MOMENTS LATER|SAME|SAME TIME)(?:\s*\(\d{4}\))?$|^[A-Z0-9][^a-z]{0,70}\S\s*\(\d{1,2}(?::\d{2})?\s*[AP]\.?M\.?\)$/;
+// Structure lines may carry a time ("MONTAGE - NIGHT"); they stay what they are.
+const NOT_A_HEADING = /^(MONTAGE|SERIES OF SHOTS|INTERCUT|INSERT|TITLE|SUPER|(BEGIN|END|END OF)\s)/;
+const isSceneHeading = (t: string): boolean => SLUG_LINE.test(t) || (BARE_HEADING.test(t) && !NOT_A_HEADING.test(t) && !/[!?]/.test(t));
 const TRANSITION_RE = /^(CUT TO|SMASH CUT|MATCH CUT|WIPE TO|DISSOLVE TO|FADE (IN|OUT|TO|UP)|IRIS (IN|OUT)|TIME CUT)\b[.: ]*$|[A-Z ]+TO:$/;
 // (\d+\.?)+ also catches a page number stamped twice at one spot ("2.2.").
 const PAGE_ARTIFACT = /^\s*((\d+\.?)+|\(CONTINUED\)|CONTINUED:?( \(\d+\))?|\(MORE\))\s*$/i;
@@ -202,12 +214,18 @@ function stripMarginMarks(items: PdfTextItem[], pageWidth: number, charW: number
   while (body.length > 1 && /^\*+$/.test(body[body.length - 1].str.trim()) && body[body.length - 1].x > pageWidth * 0.75) {
     body = body.slice(0, -1);
   }
-  // A margin number stands APART from the heading (Final Draft prints them
-  // half an inch out); a number the writer typed ("EXT. HIGHWAY 61") sits
-  // one space from its words and stays.
+  // A trailing margin number stands APART from the heading (Final Draft prints
+  // them half an inch out); a number the writer typed ("EXT. HIGHWAY 61")
+  // sits one space from its words and stays.
   const apart = (a: PdfTextItem, b: PdfTextItem) => b.x - (a.x + (a.w || a.str.length * charW)) >= charW * 2.5;
+  // A LEADING number is a scene number whatever its gap: nothing a writer
+  // types goes before INT/EXT, and the slugline check below still guards the
+  // strip. Final Draft left-aligns the left number at a fixed x, so the gap
+  // shrinks as the number grows (2026-10-16, Casablanca: 23pt for "9", 16pt
+  // for "10", under the 18pt apart test; scenes 10+ kept their numbers, the
+  // backend saw 9 sluglines in 129 pages and filed the rest under scene 9).
   let lead = 0;
-  while (lead < body.length - 1 && SCENE_NO.test(body[lead].str.trim()) && apart(body[lead], body[lead + 1])) lead++;
+  while (lead < body.length - 1 && SCENE_NO.test(body[lead].str.trim())) lead++;
   // The right margin may carry the number twice: the RUN of numbers must
   // stand apart from the heading's last word.
   let tail = body.length;
@@ -215,7 +233,7 @@ function stripMarginMarks(items: PdfTextItem[], pageWidth: number, charW: number
   if (tail < body.length && !apart(body[tail - 1], body[tail])) tail = body.length;
   if (lead === 0 && tail === body.length) return body;
   const rest = body.slice(lead, tail).map((it) => it.str).join(' ').trim();
-  return SLUG_LINE.test(rest) ? body.slice(lead, tail) : body;
+  return isSceneHeading(rest) ? body.slice(lead, tail) : body;
 }
 
 function bodyLeftEdge(xs: number[]): number {
@@ -470,7 +488,7 @@ const toLines = (text: string): Line[] => text.split('\n').map((raw) => {
  *  grammar. null = no layout signal (flat text). */
 export function documentRoles(text: string): IndentRoles | null {
   const lines = toLines(text);
-  const firstSlug = lines.findIndex((l) => !l.blank && SLUG_LINE.test(l.text));
+  const firstSlug = lines.findIndex((l) => !l.blank && isSceneHeading(l.text));
   return detectIndentRoles(firstSlug > 0 ? lines.slice(firstSlug) : lines);
 }
 
@@ -481,7 +499,7 @@ export function documentRoles(text: string): IndentRoles | null {
  *  marker (a byline, a source credit, contact details, rights). Front matter
  *  with no marker is the cold open, not a title page. */
 function titlePageEnd(lines: Line[]): number {
-  const firstSlug = lines.findIndex((l) => !l.blank && SLUG_LINE.test(l.text));
+  const firstSlug = lines.findIndex((l) => !l.blank && isSceneHeading(l.text));
   if (firstSlug <= 0) return 0;
   let end = 0; let marker = false; let seen = 0;
   for (let i = 0; i < firstSlug; i++) {
@@ -565,7 +583,7 @@ export function classifyScriptText(text: string, opts: ClassifyOptions = {}): Sc
       continue;
     }
 
-    if (SLUG_LINE.test(t)) {
+    if (isSceneHeading(t)) {
       firstSlugSeen = true;
       inSpeech = false;
       start('scene', t);
@@ -801,7 +819,7 @@ export function classifyTypedText(text: string): ScriptBlock[] {
   lines.forEach((l, i) => {
     if (l.blank) { cur = null; return; }
     let type = byCol.get(l.indent) ?? 'description';
-    if (i === firstIdx && l.indent === 0 && !SLUG_LINE.test(l.text)) {
+    if (i === firstIdx && l.indent === 0 && !isSceneHeading(l.text)) {
       const next = lines.slice(i + 1).find((x) => !x.blank);
       type = next && byCol.get(next.indent) === 'title' ? 'title' : 'description';
     }
@@ -820,9 +838,9 @@ export function classifyTypedText(text: string): ScriptBlock[] {
  *  puts both at the same x). */
 export function isTypedLayout(text: string): boolean {
   const lines = toLines(text).slice(1).filter((l) => !l.blank); // line one is trimmed
-  const slugAt0 = lines.filter((l) => l.indent === 0 && SLUG_LINE.test(l.text)).length;
+  const slugAt0 = lines.filter((l) => l.indent === 0 && isSceneHeading(l.text)).length;
   const at1 = lines.filter((l) => l.indent === 1).length;
-  const actionAt0 = lines.filter((l) => l.indent === 0 && !SLUG_LINE.test(l.text)).length;
+  const actionAt0 = lines.filter((l) => l.indent === 0 && !isSceneHeading(l.text)).length;
   return slugAt0 >= 1 && at1 >= 2 && at1 > actionAt0 * 4;
 }
 

@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { toast } from 'react-hot-toast';
+import { clearAiPause, isAiPauseCode, markAiPaused } from './aiPause';
 
 interface ApiCallResult {
   success: boolean;
@@ -60,6 +61,13 @@ const USAGE_CODES = new Set(['rate_limited', 'import_too_long', 'ai_paused_user'
 // Requests the writer didn't directly ask for: a refusal here is not news.
 const QUIET_BACKGROUND_EVENTS = new Set(['enqueue-scene-extraction', 'check-scene-staleness']);
 
+// Routes the free-tier pause refuses (backend usage-limits.mjs). One of them
+// going through again means the pause has lifted.
+const AI_EVENTS = new Set([
+  'enqueue-scene-extraction', 'enqueue-card-extraction', 'enqueue-extraction-job', 'extract-braindump',
+  'enqueue-peer-first-pass', 'peer-first-pass', 'peer-continue', 'note-discuss', 'screenplay-notes',
+]);
+
 /**
  * Wrapper seguro de chamada de API. Trata erros graciosamente e nunca rejeita —
  * sempre retorna ApiCallResult.
@@ -99,6 +107,13 @@ export const safeApiCall = async (
           ...(idempotencyKey ? { 'X-Request-Id': idempotencyKey } : {}),
         },
       });
+      // Free-tier pause (FIL-663): a card answer saves even while paused, and
+      // says so; any other AI call that went through clears the banner.
+      if (isAiPauseCode(response.data?.extractionPaused)) {
+        markAiPaused(response.data.extractionPaused, response.data.extractionPausedMessage);
+      } else if (AI_EVENTS.has(data?.event)) {
+        clearAiPause();
+      }
       return { success: true, data: response.data };
     } catch (error: any) {
       const status: number | undefined = error?.response?.status;
@@ -130,12 +145,16 @@ export const safeApiCall = async (
       if (error.code === 'ERR_NETWORK') {
         toast.error('Network error. Please check your connection.');
       } else if (error.response && USAGE_CODES.has(error.response.data?.code)) {
-        // Usage limits (FIL-663). Background work the writer didn't start
-        // (scene sync on save) stays silent: the scene is still out of date
-        // and Sync board picks it up later. Everything else gets ONE toast
+        // Usage limits (FIL-663). A pause shows as the standing banner
+        // (AiPauseBanner), background refusals included, since the board stops
+        // following the pages. Otherwise background work the writer didn't
+        // start (scene sync on save) stays silent: the scene is still out of
+        // date and Sync board picks it up later. Everything else gets ONE toast
         // per kind, replaced rather than stacked.
-        if (!QUIET_BACKGROUND_EVENTS.has(data?.event)) {
-          const code = error.response.data.code;
+        const code = error.response.data.code;
+        if (isAiPauseCode(code)) {
+          markAiPaused(code, error.response.data.error);
+        } else if (!QUIET_BACKGROUND_EVENTS.has(data?.event)) {
           toast.error(error.response.data.error || 'Please try again in a moment.', { id: `usage-${code}` });
         }
       } else if (error.response) {

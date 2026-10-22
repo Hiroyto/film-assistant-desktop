@@ -612,9 +612,10 @@ export interface ProjectEdges {
     arc_id: string;
     character_id: string;
   }>;
-  /** D'-11 — CAUSES edges. Endpoints may each be an Event or Arc (four
-   *  combos). A causal connective layered ON TOP of PRECEDES (an Event→Event
-   *  pair can carry both). Enhancer signal, never a slice filter. */
+  /** Legacy CAUSES edges (Event|Arc -> Event|Arc). Cause and effect was
+   *  dropped 2026-10-05 (FIL-676/677): nothing writes these any more and the
+   *  board shows none; older stories may still carry some, read only by the
+   *  Peer slice (localSlice buildCausesForFocal) until that is retired too. */
   causes: Array<{
     from: string;
     to: string;
@@ -2414,61 +2415,6 @@ export async function untagEventPrecedes(
 }
 
 // ============================================
-// CAUSES tagging — D'-11. Causal edges between Events/Arcs (4 combos).
-// Endpoints are generic vertex ids (Event or Arc), so the request uses
-// fromId/toId rather than the precedes-style fromEventId/toEventId.
-// ============================================
-
-export interface TagCausesRequest {
-  fromId: string;
-  toId: string;
-  projectId: string;
-  evidenceQuote?: string;
-}
-export interface TagCausesResponse {
-  tagged: true;
-  fromId: string;
-  toId: string;
-}
-export interface UntagCausesRequest {
-  fromId: string;
-  toId: string;
-  projectId: string;
-}
-export interface UntagCausesResponse {
-  untagged: true;
-  fromId: string;
-  toId: string;
-  dropped: number;
-}
-
-/** Tag a CAUSES edge fromId → toId (Event|Arc → Event|Arc). Idempotent. */
-export async function tagCauses(
-  req: TagCausesRequest,
-  token: string,
-): Promise<TagCausesResponse> {
-  if (useMock) {
-    return Promise.resolve({ tagged: true, fromId: req.fromId, toId: req.toId });
-  }
-  const result = await freshApiCall(apiPath!, { event: 'tag-causes', ...req }, token);
-  if (!result.success) throw new Error(result.error || 'tag-causes failed');
-  return (result.data?.body ?? result.data) as TagCausesResponse;
-}
-
-/** Untag a CAUSES edge fromId → toId. */
-export async function untagCauses(
-  req: UntagCausesRequest,
-  token: string,
-): Promise<UntagCausesResponse> {
-  if (useMock) {
-    return Promise.resolve({ untagged: true, fromId: req.fromId, toId: req.toId, dropped: 1 });
-  }
-  const result = await freshApiCall(apiPath!, { event: 'untag-causes', ...req }, token);
-  if (!result.success) throw new Error(result.error || 'untag-causes failed');
-  return (result.data?.body ?? result.data) as UntagCausesResponse;
-}
-
-// ============================================
 // Information editing — Event sheet "Established here" tile.
 // ============================================
 
@@ -2568,6 +2514,25 @@ export async function listBraindumps(
   const result = await freshApiCall(apiPath!, { event: 'list-braindumps', ...req }, token);
   if (!result.success) throw new Error(result.error || 'list-braindumps failed');
   return (result.data?.body ?? result.data) as ListBraindumpsResponse;
+}
+
+/** Live card counts on one story's board (deleted, template and parked cards out). */
+export interface BoardSummary {
+  sequences: number;
+  scenes: number;
+  characters: number;
+  relationships: number;
+  locations: number;
+}
+export interface ListBoardSummariesResponse { summaries: Record<string, BoardSummary>; }
+
+/** Card counts for every story the signed-in writer owns that has a board,
+ *  keyed by storyId — powers the stories list on Home and Profile. */
+export async function listBoardSummaries(token: string): Promise<ListBoardSummariesResponse> {
+  if (useMock) return Promise.resolve({ summaries: {} });
+  const result = await freshApiCall(apiPath!, { event: 'list-board-summaries' }, token);
+  if (!result.success) throw new Error(result.error || 'list-board-summaries failed');
+  return (result.data?.body ?? result.data) as ListBoardSummariesResponse;
 }
 
 export interface DeleteInformationRequest { projectId: string; infoId: string; }

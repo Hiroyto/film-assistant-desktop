@@ -1,8 +1,9 @@
 import { useState, useContext, useEffect, useCallback } from "react";
 import { Header } from "../../components/header";
 import { UserContext } from "../../App";
-import UserInfoItem from "../../components/ui/UserInfo";
-import StoryGrid from "../../components/Profile/StoryGrid";
+import StoryList from "../../components/Profile/StoryList";
+import { TITLE_FONT, UI_FONT } from "../../components/Profile/BoardBreakdown";
+import { useBoardSummaries } from "../../lib/useBoardSummaries";
 import { Dialog } from '@radix-ui/themes';
 import { Theme, Flex, Text, Button, Tooltip } from '@radix-ui/themes';
 import { useMutation } from "react-query";
@@ -22,6 +23,8 @@ import { isLocalFirst } from "../../lib/localFirst";
 import { useStoryUI } from "../../components/ui/StoryUIContext";
 
 
+const STORIES_LIMIT = 35;
+
 function formatDate(dateString: string) {
     const date = new Date(dateString);
     return date.toLocaleString('en-US', { month: 'long', year: 'numeric' });
@@ -36,6 +39,8 @@ export default function Profile(props: any) {
     const [loading, setLoading] = useState(false);
     const navigate = useNavigate();
     const { setStoryChangeSource } = useStoryUI();
+    const boardSummaries = useBoardSummaries(token, user?.works);
+    const storyCount = Object.keys(user?.works ?? {}).length;
 
     const handleDynamoUser = useCallback(async () => {
         setLoading(true);
@@ -279,28 +284,41 @@ export default function Profile(props: any) {
                 <Header signOut={signOut} />
 
                 {/* CONTEÚDO PRINCIPAL */}
-                <div className="flex-1 p-8 pb-0 pt-[107px]">
-                    <h1 className="text-5xl font-bold text-white mb-12 text-center">
-                        Profile
-                    </h1>
+                <div className="flex-1 px-4 md:px-8 pb-0 pt-[107px]" style={{ fontFamily: UI_FONT }}>
+                    <h1 className="sr-only">Profile</h1>
 
-                    <div className="flex flex-col items-center max-w-[1400px] mx-auto gap-8 mb-20">
-                        <div className="w-full border-orangeBorder border-[2px] rounded-[16px] p-8 backdrop-blur-md bg-[linear-gradient(135deg,rgba(255,107,53,0.1)_0%,rgba(255,140,66,0.05)_100%)]">
-                            <div className="flex md:flex-row flex-col md:gap-0 gap-4 justify-between items-start mb-8 pb-6 border-b border-white/10">
-                                <div>
-                                    <h2 className="text-4xl mb-2 font-bold text-white">{token?.payload?.preferred_username}</h2>
-                                    <p className="text-sm text-white/60">Member since {formatDate(user?.sign_up_date)}</p>
+                    <div className="flex flex-col max-w-[1136px] mx-auto gap-10 mb-20 text-[#f2ede6]">
+                        <div className="flex flex-wrap items-center gap-5 px-6 py-5 rounded-[14px] border border-[#2c2722] bg-[#1b1816]">
+                            <div aria-hidden="true" className="w-[52px] h-[52px] rounded-full bg-[#2a201a] text-[#ffa27e] flex items-center justify-center text-2xl font-normal" style={{ fontFamily: TITLE_FONT }}>
+                                {(token?.payload?.preferred_username || token?.payload?.email || '?').slice(0, 1).toUpperCase()}
+                            </div>
+                            <div className="flex flex-col gap-[3px] flex-1 min-w-[200px]">
+                                <div className="text-lg font-semibold text-[#fbf7f1]">{token?.payload?.preferred_username}</div>
+                                <div className="text-sm text-[#a8a097]">
+                                    {token?.payload?.email}{user?.sign_up_date ? ` · Member since ${formatDate(user.sign_up_date)}` : ''}
                                 </div>
-
-                                {/* Settings buttons container */}
-                                <div className="flex flex-wrap gap-3">
+                            </div>
+                            <dl className="flex flex-wrap gap-7 items-center m-0">
+                                <div className="flex flex-col gap-0.5">
+                                    <dt className="text-xs text-[#7d756c] uppercase tracking-[0.06em] font-semibold">Plan</dt>
+                                    <dd className="m-0 text-[15px] font-semibold">{user?.subscription || 'Free'}</dd>
+                                </div>
+                                <div className="flex flex-col gap-0.5">
+                                    <dt className="text-xs text-[#7d756c] uppercase tracking-[0.06em] font-semibold">Tokens</dt>
+                                    <dd className="m-0 text-[15px] font-semibold">{user?.cap ?? 0}</dd>
+                                </div>
+                                <div className="flex flex-col gap-0.5">
+                                    <dt className="text-xs text-[#7d756c] uppercase tracking-[0.06em] font-semibold">Stories</dt>
+                                    <dd className="m-0 text-[15px] font-semibold">{storyCount} of {STORIES_LIMIT}</dd>
+                                </div>
+                            </dl>
+                                <div className="flex flex-wrap gap-2.5">
                                     {/* Manage Membership Button */}
                                     <button
                                         onClick={handleManageMembership}
-                                        className="flex items-center gap-2 px-6 py-3 rounded-lg text-sm text-[#ff6b35] bg-buttonPrivacy border border-[#ff6b354d] cursor-pointer transition-all duration-200 ease-in-out
-                                            hover:bg-[rgba(255,107,53,0.25)] hover:-translate-y-[1px]"
+                                        className="flex items-center gap-2 h-11 px-4 rounded-[10px] text-sm text-[#f2ede6] border border-[#3a332c] bg-transparent hover:border-[#5a5048] transition-colors"
                                     >
-                                        <CreditCard size={20} color="#ff6b35" />
+                                        <CreditCard size={18} />
                                         Manage Membership
                                     </button>
 
@@ -308,10 +326,9 @@ export default function Profile(props: any) {
                                     <Dialog.Root open={privacyDialogOpen} onOpenChange={setPrivacyDialogOpen}>
                                         <Dialog.Trigger>
                                             <button
-                                                className="flex items-center gap-2 px-6 py-3 rounded-lg text-sm text-[#ff6b35] bg-buttonPrivacy border border-[#ff6b354d] cursor-pointer transition-all duration-200 ease-in-out
-                                                    hover:bg-[rgba(255,107,53,0.25)] hover:-translate-y-[1px]"
+                                                className="flex items-center gap-2 h-11 px-4 rounded-[10px] text-sm text-[#f2ede6] border border-[#3a332c] bg-transparent hover:border-[#5a5048] transition-colors"
                                             >
-                                                <Settings size={20} color="#ff6b35" />
+                                                <Settings size={18} />
                                                 Privacy Settings
                                             </button>
                                         </Dialog.Trigger>
@@ -393,28 +410,16 @@ export default function Profile(props: any) {
                                         </Dialog.Content>
                                     </Dialog.Root>
                                 </div>
-                            </div>
-
-                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-4 gap-8 max-w-[900px] mx-auto">
-                                <UserInfoItem label="Email" value={token?.payload?.email} valueClassName="text-sm font-semibold text-white" />
-                                <UserInfoItem label="Tokens" value={user?.cap} valueClassName="text-xl font-semibold text-orange" />
-                                <UserInfoItem label="Subscription" value={user?.subscription} valueClassName="inline-block bg-[rgba(34,197,94,0.2)] text-[#22c55e] px-3 py-1 rounded-[12px] text-sm font-medium" />
-                                <UserInfoItem label="Sign Up Date" value={user?.sign_up_date} valueClassName="text-sm font-semibold text-white" />
-                            </div>
                         </div>
 
-                        <div className="w-full bg-[rgba(255,255,255,0.05)] border-[2px] border-orangeBorder rounded-[16px] p-8 backdrop-blur-[10px]">
-                            <div className="border-b border-white/10 mb-8 pb-4">
-                                <h3 className="text-2xl text-white font-bold">My Stories</h3>
-                            </div>
-
-                            <StoryGrid
-                                works={user?.works}
-                                loading={loading}
-                                onDeleteStory={handleDeleteStory}
-                                onNavigateStory={loadWork}
-                            />
-                        </div>
+                        <StoryList
+                            works={user?.works}
+                            summaries={boardSummaries}
+                            loading={loading}
+                            deleting={deletingItems}
+                            onDeleteStory={handleDeleteStory}
+                            onOpenStory={loadWork}
+                        />
                     </div>
                 </div>
 

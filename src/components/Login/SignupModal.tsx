@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import TermsAndConditionsModal from "./TermsDialog";
 import ConfirmCodeModal from "./ConfirmCodeModal"
 import { getCurrentUser, resendSignUpCode, signUp, signIn, confirmSignUp, type SignUpInput } from "aws-amplify/auth";
+import { friendlyAuthError } from "./authErrors";
 import GoogleSignInButton from "./GoogleSignInButton";
 
 interface SignupFormProps {
@@ -79,9 +80,13 @@ export default function SignupForm({ onSwitch, onSuccess, onOpenTerms }: SignupF
                     if (resendErr.code === 'NotAuthorizedException' || resendErr.name === 'NotAuthorizedException') {
                         return { success: false, reason: 'ALREADY_CONFIRMED', next: 'signIn' };
                     }
+                    setError(friendlyAuthError(resendErr, "We couldn't send a new code. Please try again in a moment."));
                     return { success: false, reason: 'RESEND_FAILED', error: resendErr };
                 }
             }
+            // A refusal (throwaway inbox, an inbox that already has an account,
+            // too many attempts) is shown, never swallowed (FIL-665).
+            setError(friendlyAuthError(err, "Sign-up didn't go through. Please try again."));
             return { success: false, reason: 'OTHER', error: err };
         } finally {
             setLoading(false);

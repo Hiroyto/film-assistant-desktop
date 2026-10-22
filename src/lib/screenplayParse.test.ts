@@ -668,4 +668,20 @@ describe('Layer 0: scene numbers in the margins', () => {
     ] };
     expect(parse(pdfPagesToIndentedText([p2])).find((x) => x.type === 'scene')?.text).toBe('EXT. HIGHWAY 61');
   });
+
+  // Ben, 2026-10-16, Casablanca: Final Draft left-aligns the left number at
+  // x=78 with the heading at x=108, so "10" sits 16pt from it, under the old
+  // 18pt apart test. Scenes 10+ kept their numbers and read as action.
+  it('a two- or three-digit number close to the heading still comes off', () => {
+    const p3: PdfPageItems = { width: 612, height: 792, items: [
+      ...row(720, [78, '9'], [108, 'EXT. OVERHEAD SHOT - DAY'], [540, '9']),
+      ...row(696, [108, 'A plane circles.']),
+      ...row(672, [78, '10'], [108, 'EXT. AIRFIELD - DAY'], [540, '10']),
+      ...row(648, [108, 'It lands.']),
+      ...row(624, [78, '104'], [108, 'INT. HANGAR - NIGHT'], [540, '104']),
+      ...row(600, [108, 'Fog.']),
+    ] };
+    expect(parse(pdfPagesToIndentedText([p3])).filter((x) => x.type === 'scene').map((x) => x.text))
+      .toEqual(['EXT. OVERHEAD SHOT - DAY', 'EXT. AIRFIELD - DAY', 'INT. HANGAR - NIGHT']);
+  });
 });

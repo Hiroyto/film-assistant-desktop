@@ -17,7 +17,7 @@
 //     the expanded card here is a temporary inline render of the raw props.
 //   - Respond-to-question flow (CardResponse + cascade).
 
-import React, { useState, useEffect, useMemo, useRef, useCallback, useContext } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, useContext } from 'react';
 import 'react-grid-layout/css/styles.css';
 import 'react-resizable/css/styles.css';
 import CascadeSummaryPanel from '../../components/Freeform/CascadeSummaryPanel';
@@ -44,7 +44,8 @@ import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { UserContext } from '../../App';
 import { CardBox, EditableDescription, EditableName } from '../../components/Freeform/corkboard/cards';
 import { ARC_THREAD_PALETTE, ConnectorLayer, buildArcThread, computeAutoLayout, computePeerPosition, toldOrderEvents, type ThreadRect } from '../../components/Freeform/corkboard/connectors';
-import { ARC_BALL_H, ARC_BALL_W, ARC_DOT, BALL_DISPLACE_GAP, BALL_H, BALL_ID_ARCS, BALL_ID_BACKSTORY, BALL_ID_CHARACTERS, BALL_RAIL_PAD, BALL_ROW_GAP, BALL_STACK_GAP, BALL_TRANSITION_MS, BALL_W, CANVAS_PAD, CHAR_PILL_H, CHAR_PILL_W, CLUSTER_META, CLUSTER_ORDER, COL_GAP, COLLAPSED_H, COLLAPSED_W, DRAG_THRESHOLD_PX, EXPANDED_W, PEER_CARD_W, PEER_GAP, EVENT_CARD_W, REL_COLLAPSED_H, REL_COLLAPSED_W, ROW_GAP, collapsedSizeOf, type Pos } from '../../components/Freeform/corkboard/constants';
+import { characterTiers, webGeometry, ovalPoints, fitZoom } from '../../components/Freeform/corkboard/characterTiers';
+import { ARC_BALL_H, ARC_BALL_W, ARC_DOT, BALL_DISPLACE_GAP, BALL_H, BALL_ID_ARCS, BALL_ID_BACKSTORY, BALL_ID_CHARACTERS, BALL_ID_MINOR_CAST, BALL_RAIL_PAD, BALL_ROW_GAP, BALL_STACK_GAP, BALL_TRANSITION_MS, BALL_W, CANVAS_PAD, CHAR_PILL_H, CHAR_PILL_W, CLUSTER_META, CLUSTER_ORDER, COL_GAP, COLLAPSED_H, COLLAPSED_W, DRAG_THRESHOLD_PX, EXPANDED_W, PEER_CARD_W, PEER_GAP, EVENT_CARD_W, REL_COLLAPSED_H, REL_COLLAPSED_W, ROW_GAP, collapsedSizeOf, type Pos } from '../../components/Freeform/corkboard/constants';
 import { CreateArcFromEventsModal, CreateCardModal, ResetProjectButton, SupersessionModal, type CreateModalKind } from '../../components/Freeform/corkboard/modals';
 import { BoardEmptyState, BraindumpIcon } from '../../components/Freeform/corkboard/emptyState';
 import { INFO_ACCENT, RightPanel, TrashOverlay } from '../../components/Freeform/corkboard/panels';
@@ -170,6 +171,17 @@ export default function FreeformCorkboard() {
   // while the pointer rests on one of their endpoints. Characters only, so the
   // board isn't re-rendering on every card hover.
   const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
+  // A hovered relationship LINE (or its pill): the pill shows and rides above
+  // other cards even when one covers the line's midpoint (Ben 2026-10-17: the
+  // badge appears on hover no matter what). Leaving waits a beat so the
+  // pointer can travel from the line onto the pill without it vanishing.
+  const [hoveredRelId, setHoveredRelId] = useState<string | null>(null);
+  const relHoverTimer = useRef<number | null>(null);
+  const setRelHover = useCallback((id: string | null) => {
+    if (relHoverTimer.current) { window.clearTimeout(relHoverTimer.current); relHoverTimer.current = null; }
+    if (id) setHoveredRelId(id);
+    else relHoverTimer.current = window.setTimeout(() => setHoveredRelId(null), 220);
+  }, []);
   // Wow-tour relationship beat: force ONE structural tie to full weight while
   // its coachmark spotlights it (demoted ties are invisible at rest). Set on
   // step enter, cleared on exit / tour end.
@@ -535,6 +547,50 @@ export default function FreeformCorkboard() {
   // the STUCK (fixed) bar; scrolling back to top always reveals the in-flow
   // bar again. A small top-right tab re-shows it / jumps to top meanwhile.
   const [toolbarHidden, setToolbarHidden] = useState(false);
+  // Toolbar fit (Ben 2026-10-17: the floating bar spilled out of its frame on
+  // a narrower window). 0 = every label shows; 1 = the view buttons fold to
+  // their icons (label slides out on hover, tooltip intact) while the create
+  // actions keep theirs; 2 = the bar may wrap to a second row. Picked by
+  // measuring overflow, not a breakpoint, since the bar's width depends on
+  // the board column and its labels. The widths each level needed are kept
+  // so widening steps back up only once the fuller bar truly fits (no flicker).
+  const [toolbarFit, setToolbarFit] = useState<0 | 1 | 2>(0);
+  const toolbarNeedRef = useRef({ full: 0, compact: 0 });
+  // The bar mounts after the board loads (and unmounts while hidden), so the
+  // observer follows the element itself through a stable callback ref.
+  const [toolbarEl, setToolbarEl] = useState<HTMLDivElement | null>(null);
+  const setToolbarNode = useCallback((node: HTMLDivElement | null) => {
+    toolbarRef.current = node;
+    setToolbarEl(node);
+  }, []);
+  useLayoutEffect(() => {
+    const el = toolbarEl;
+    if (!el) return;
+    const measure = () => {
+      const avail = el.clientWidth;
+      const need = el.scrollWidth;
+      setToolbarFit((fit) => {
+        const n = toolbarNeedRef.current;
+        if (fit < 2 && need > avail + 1) {
+          if (fit === 0) n.full = need; else n.compact = need;
+          return fit === 0 ? 1 : 2;
+        }
+        if (fit === 2 && n.compact && avail >= n.compact) return 1;
+        if (fit === 1 && n.full && avail >= n.full) return 0;
+        return fit;
+      });
+    };
+    // Just after folding, the labels are still sliding shut (160ms), so the
+    // bar would read as overflowing and jump straight to wrapping: let the
+    // fold settle before the next measure.
+    const settle = toolbarFit === 1 ? window.setTimeout(measure, 220) : 0;
+    if (toolbarFit !== 1) measure();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    ro?.observe(el);
+    window.addEventListener('resize', measure);
+    return () => { window.clearTimeout(settle); ro?.disconnect(); window.removeEventListener('resize', measure); };
+  }, [toolbarEl, toolbarStuck, toolbarFit]);
+  const toolbarCompact = toolbarFit >= 1;
 
   // Focused canvas views — transient layout PROJECTIONS over the same graph
   // (stored positions are never written; drags inside a view are transient via
@@ -1917,10 +1973,52 @@ export default function FreeformCorkboard() {
     return score;
   }, [aliveEntities, charByName, data]);
 
+  // The Characters view's tiers (characterTiers.ts): scenes each character is
+  // in (INVOLVES) and their ties (relationship cards 3, structural edges 2).
+  // Shared by the view's layout and its fit-to-web zoom. null = no cast.
+  const charTiers = useMemo(() => {
+    const chars = aliveEntities.filter((e) => e.type === 'character');
+    if (chars.length === 0) return null;
+    const presence = new Map<string, number>();
+    for (const iv of data?.edges?.involves ?? []) presence.set(iv.to, (presence.get(iv.to) ?? 0) + 1);
+    const ties = new Map<string, number>();
+    const tie = (id: string | undefined, by: number) => { if (id) ties.set(id, (ties.get(id) ?? 0) + by); };
+    for (const e of aliveEntities) {
+      if (e.type !== 'relationship') continue;
+      tie(charByName.get(e.character_a ?? '')?.id, 3);
+      tie(charByName.get(e.character_b ?? '')?.id, 3);
+    }
+    for (const st of data?.edges?.structural ?? []) { tie(st.from, 2); tie(st.to, 2); }
+    return characterTiers({
+      ids: chars.map((c) => c.id),
+      sceneCount: aliveEntities.filter((e) => e.type === 'event').length,
+      presence,
+      ties,
+    });
+  }, [aliveEntities, charByName, data]);
+
   // Throughline grid — the scene the surfaced arc cards are anchored to.
   // Expanding one of those arc cards moves expandedCardId to the ARC, which
   // would otherwise drop the anchor and hide the very card being opened.
   const lastGridArcAnchorRef = useRef<string | null>(null);
+
+  // Entering the Characters view opens at the largest zoom (100/75/50/25%)
+  // that fits the web, both rings; the minor drawer is not counted. Leaving
+  // it restores the zoom the writer had, so other views never inherit it.
+  const prevViewRef = useRef(viewMode);
+  const zoomBeforeCharsRef = useRef<number | null>(null);
+  useEffect(() => {
+    const prev = prevViewRef.current;
+    prevViewRef.current = viewMode;
+    if (viewMode === 'characters' && prev !== 'characters' && charTiers) {
+      zoomBeforeCharsRef.current = zoomRef.current;
+      const g = webGeometry(Math.max(0, charTiers.principals.length - 1), charTiers.supporting.length, CHAR_PILL_W, CHAR_PILL_H);
+      setZoom(fitZoom(g.width + CANVAS_PAD * 2, g.height + 72 + 40, viewportWH.w - 48, viewportWH.h - 140));
+    } else if (viewMode !== 'characters' && prev === 'characters' && zoomBeforeCharsRef.current != null) {
+      setZoom(zoomBeforeCharsRef.current);
+      zoomBeforeCharsRef.current = null;
+    }
+  }, [viewMode, charTiers, viewportWH]);
 
   const ballEffects = useMemo(() => {
     type Cluster = {
@@ -1999,41 +2097,83 @@ export default function FreeformCorkboard() {
     // repositioned cards get overrides (so drags are transient via webDrag and
     // edges/relationships track), everything off-view is hidden. --------
     if (viewMode === 'characters') {
-      // Splay the characters on a ring so every relationship line + pill has
-      // room to read. Events + arcs leave the stage.
+      // The cast, tiered (characterTiers.ts, Ben 2026-10-17): principals on an
+      // inner oval round the strongest character, supporting players on an
+      // outer oval, and the minor cast folded into one drawer under the web
+      // that deals out as a grid. One ring of everyone held a 25-person cast;
+      // a feature import brings 60+, and the ring grew until nobody could be
+      // read. Events + arcs leave the stage, as before.
       for (const e of aliveEntities) {
         if (e.type === 'event' || e.type === 'arc' || e.type === 'sequence') out.hiddenIds.add(e.id);
       }
-      // Most-connected character anchors the center; the rest spread on a wide
-      // ring around them (ordered by centrality so heavy hitters sit near the
-      // top of the ring).
-      const chars = [...aliveEntities.filter((e) => e.type === 'character')].sort(
-        (a, b) => (charCentrality.get(b.id) ?? 0) - (charCentrality.get(a.id) ?? 0) || a.id.localeCompare(b.id),
-      );
-      const n = chars.length;
-      if (n > 0) {
-        const [center, ...ring] = chars;
-        const m = ring.length;
-        // Ring radius = just enough arc for each pill + a small gap. Characters
-        // render as name pills, so the ring packs tight and the whole cast fits
-        // on screen; zoom covers an unusually large ensemble. The ring centers
-        // in the visible board (same width math as the throughline layouts).
-        const r = Math.max(170, (m * (CHAR_PILL_W + 24)) / (2 * Math.PI));
-        const ringAvailW = Math.max(CHAR_PILL_W, viewportWH.w / zoom - 48 - CANVAS_PAD * 2);
-        const cx = CANVAS_PAD + ringAvailW / 2;
-        const cy = 72 + r + CHAR_PILL_H / 2;
-        out.overrides.set(center.id, {
-          pos: webDrag[center.id] ?? { x: cx - CHAR_PILL_W / 2, y: cy - CHAR_PILL_H / 2 },
-        });
-        ring.forEach((c, i) => {
-          const th = (2 * Math.PI * i) / Math.max(m, 1) - Math.PI / 2;
-          out.overrides.set(c.id, {
-            pos: webDrag[c.id] ?? {
-              x: Math.max(0, cx + r * Math.cos(th) - CHAR_PILL_W / 2),
-              y: Math.max(0, cy + r * Math.sin(th) - CHAR_PILL_H / 2),
-            },
+      if (charTiers) {
+        const { principals, supporting, minor } = charTiers;
+        const [center, ...inner] = principals;
+        const geo = webGeometry(inner.length, supporting.length, CHAR_PILL_W, CHAR_PILL_H);
+        const outerRing = geo.outer ?? geo.inner;
+        // The web centers in the board frame it will sit in: the frame's floor
+        // is the window width (canvasMinW below, NOT divided by zoom) unless
+        // the web itself is wider, and a zoomed-out frame centers on screen.
+        // Centering on window/zoom instead pushed the web right of center.
+        const frameW = Math.max(Math.max(800, viewportWH.w - 48), geo.width + CANVAS_PAD * 2);
+        const availW = frameW - CANVAS_PAD * 2;
+        const cx = frameW / 2;
+        const cy = 72 + outerRing.ry + CHAR_PILL_H / 2;
+        const place = (id: string, p: Pos) => {
+          out.overrides.set(id, {
+            pos: webDrag[id] ?? { x: Math.max(0, p.x - CHAR_PILL_W / 2), y: Math.max(0, p.y - CHAR_PILL_H / 2) },
           });
-        });
+        };
+        if (center) place(center, { x: cx, y: cy });
+        ovalPoints(inner.length, geo.inner.rx, geo.inner.ry, cx, cy).forEach((p, i) => place(inner[i], p));
+        if (geo.outer) {
+          // Half a step round, so the outer pills sit in the inner ring's gaps.
+          ovalPoints(supporting.length, geo.outer.rx, geo.outer.ry, cx, cy, 0.5).forEach((p, i) => place(supporting[i], p));
+        }
+        // The minor cast: one drawer under the web. Collapsed, its members
+        // leave the stage (and so do relationship pills that point at them);
+        // opened, they deal out as a grid of name pills, busiest first.
+        if (minor.length > 0) {
+          const ballY = cy + outerRing.ry + CHAR_PILL_H / 2 + 56;
+          const expanded = ballExpanded[BALL_ID_MINOR_CAST] != null;
+          out.clusters.push({
+            id: BALL_ID_MINOR_CAST,
+            label: CLUSTER_META[BALL_ID_MINOR_CAST].label,
+            color: getEntityColor('character'),
+            count: minor.length,
+            balled: true,
+            pinned: false,
+            expanded,
+            pos: webDrag[BALL_ID_MINOR_CAST] ?? { x: cx - BALL_W / 2, y: ballY },
+          });
+          if (!expanded) {
+            for (const id of minor) out.hiddenIds.add(id);
+          } else {
+            const GAP_X = 16;
+            const GAP_Y = 18;
+            const gridW = Math.min(availW, Math.max(geo.width, CHAR_PILL_W * 4));
+            const cols = Math.max(1, Math.floor((gridW + GAP_X) / (CHAR_PILL_W + GAP_X)));
+            const rowW = cols * (CHAR_PILL_W + GAP_X) - GAP_X;
+            const x0 = cx - rowW / 2;
+            const y0 = ballY + BALL_H + 28;
+            minor.forEach((id, i) => {
+              out.overrides.set(id, {
+                pos: webDrag[id] ?? {
+                  x: Math.max(0, x0 + (i % cols) * (CHAR_PILL_W + GAP_X)),
+                  y: y0 + Math.floor(i / cols) * (CHAR_PILL_H + GAP_Y),
+                },
+              });
+            });
+          }
+        }
+        // A relationship pill renders at the midpoint of its two characters;
+        // with either one in the closed drawer it would float at a stale spot.
+        for (const e of aliveEntities) {
+          if (e.type !== 'relationship') continue;
+          const a = charByName.get(e.character_a ?? '')?.id;
+          const b = charByName.get(e.character_b ?? '')?.id;
+          if ((a && out.hiddenIds.has(a)) || (b && out.hiddenIds.has(b))) out.hiddenIds.add(e.id);
+        }
       }
       return out;
     }
@@ -2830,7 +2970,7 @@ export default function FreeformCorkboard() {
     }
 
     return out;
-  }, [aliveEntities, positions, ballExpanded, arcThreads, viewportCanvasTop, webDrag, viewMode, throughlineLayout, viewportWH.w, zoom, eventOrder, charCentrality, aliveEdges, data?.edges?.evokes, sequenceCollapsed, expandedCardId, expandedCardH, hideSequences, draggingId, autoPositions]);
+  }, [aliveEntities, positions, ballExpanded, arcThreads, viewportCanvasTop, webDrag, viewMode, throughlineLayout, viewportWH.w, zoom, eventOrder, charCentrality, aliveEdges, data?.edges?.evokes, charByName, charTiers, sequenceCollapsed, expandedCardId, expandedCardH, hideSequences, draggingId, autoPositions]);
 
   // Prune transient web-drag positions once a card is no longer dealt out (its
   // ball re-bunched or scrolled back to free cards) — so re-expanding resets it
@@ -3376,11 +3516,6 @@ export default function FreeformCorkboard() {
     /** Existing PRECEDES edge under the cursor as `${from}|${to}` —
      *  drop here splices the dragged event between the two endpoints. */
     overEdgeKey: string | null;
-    /** D'-11 — Alt held → this drag writes a CAUSES edge instead of
-     *  PRECEDES/EVOKES. Tracked live (updated on every move) so the ghost
-     *  arrow recolors as the writer holds/releases Alt mid-drag. The drop
-     *  decision itself reads the mouseup event's altKey for authority. */
-    causesMode: boolean;
   } | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
   // Transient success toast for link actions that don't leave a connector on the
@@ -3959,7 +4094,6 @@ export default function FreeformCorkboard() {
       moved: false,
       overCardId: null,
       overEdgeKey: null,
-      causesMode: e.altKey,
     });
     setLinkError(null);
   }, []);
@@ -4094,7 +4228,6 @@ export default function FreeformCorkboard() {
       if (!rect) return;
       const z = zoomRef.current || 1;
       const canvasPos = { x: (e.clientX - rect.left) / z, y: (e.clientY - rect.top) / z };
-      const causesMode = e.altKey;
       setLinkDrag((cur) => {
         if (!cur) return cur;
         const dx = canvasPos.x - cur.mouseCanvas.x;
@@ -4102,11 +4235,10 @@ export default function FreeformCorkboard() {
         const moved = cur.moved || Math.abs(dx) + Math.abs(dy) > DRAG_THRESHOLD_PX;
         const overCardId = moved ? hitTestCard(canvasPos) : null;
         // Card hit takes priority over edge hit — if cursor is on top of
-        // an event card, treat it as a connect target, not a splice. CAUSES
-        // (Alt) never splices, so don't hit-test arrows in causesMode.
+        // an event card, treat it as a connect target, not a splice.
         const overEdgeKey =
-          moved && !overCardId && !causesMode ? hitTestEdge(canvasPos) : null;
-        return { ...cur, mouseCanvas: canvasPos, moved, overCardId, overEdgeKey, causesMode };
+          moved && !overCardId ? hitTestEdge(canvasPos) : null;
+        return { ...cur, mouseCanvas: canvasPos, moved, overCardId, overEdgeKey };
       });
     };
 
@@ -4221,32 +4353,8 @@ export default function FreeformCorkboard() {
           return;
         }
         // Only Events are valid sources for the remaining edge types (PRECEDES /
-        // CAUSES / EVOKES). Anything else (e.g. character → arc) is a no-op.
+        // EVOKES). Anything else (e.g. character → arc) is a no-op.
         if (sType !== 'event') return;
-
-        // D'-11 — Alt held at drop → CAUSES. Target may be Event OR Arc.
-        // Layered on top of PRECEDES (an Event→Event pair can carry both),
-        // so this branch runs before the PRECEDES/EVOKES branches and skips
-        // the reverse-auto-flip / Q7 logic those carry.
-        if (e.altKey && (targetEnt.type === 'event' || targetEnt.type === 'arc')) {
-          const exists = (data?.edges.causes ?? []).some(
-            (c) => c.from === from && c.to === target,
-          );
-          if (exists) return;
-          setData((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  edges: {
-                    ...prev.edges,
-                    causes: [...prev.edges.causes, { from, to: target }],
-                  },
-                }
-              : prev,
-          );
-          queueStructOpGlobal(storyId, { kind: 'causes_tag', from, to: target });
-          return;
-        }
 
         if (targetEnt.type === 'event') {
           const exists = (data?.edges.precedes ?? []).some(
@@ -4311,11 +4419,10 @@ export default function FreeformCorkboard() {
 
       // Branch 2: dropped on an existing PRECEDES arrow → splice the
       // dragged event in. A→C becomes A→B + B→C atomically (sequential
-      // API calls; revert all if any leg fails). Suppressed in CAUSES mode —
-      // Alt+drag never splices. Event sources only (splicing inserts into the
+      // API calls; revert all if any leg fails). Event sources only (splicing inserts into the
       // PRECEDES chain — a character/other source has nothing to splice).
       const fromIsEvent = data?.entities.find((x) => x.id === from)?.type === 'event';
-      if (edgeKey && !e.altKey && fromIsEvent) {
+      if (edgeKey && fromIsEvent) {
         const [oldFrom, oldTo] = edgeKey.split('|');
         if (!oldFrom || !oldTo) return;
         if (oldFrom === from || oldTo === from) return; // belt + suspenders
@@ -4396,29 +4503,6 @@ export default function FreeformCorkboard() {
           : prev,
       );
       queueStructOpGlobal(storyId, { kind: 'precedes_untag', from: fromId, to: toId });
-    },
-    [auth, storyId],
-  );
-
-  // D'-11 — drop an existing CAUSES edge. Wired into the connector layer's
-  // CAUSES-line click handler. Endpoints are generic vertex ids (Event|Arc).
-  const onRemoveCauses = useCallback(
-    (fromId: string, toId: string) => {
-      if (!auth || !storyId) return;
-      setData((prev) =>
-        prev
-          ? {
-              ...prev,
-              edges: {
-                ...prev.edges,
-                causes: prev.edges.causes.filter(
-                  (c) => !(c.from === fromId && c.to === toId),
-                ),
-              },
-            }
-          : prev,
-      );
-      queueStructOpGlobal(storyId, { kind: 'causes_untag', from: fromId, to: toId });
     },
     [auth, storyId],
   );
@@ -4508,14 +4592,14 @@ export default function FreeformCorkboard() {
           return;
         }
         refreshEntitiesRef.current();
-        // Also re-pull arc suggestions — the worker writes them (+ CAUSES/EVOKES
+        // Also re-pull arc suggestions — the worker writes them (+ EVOKES
         // edges) AFTER the graph lands, so this is the only way the Panel fills
         // and the only way the completion check can see them still arriving.
         refreshArcSuggestionsRef.current();
         // Completion by STABILITY, over the WHOLE result — entities AND edges AND
         // arc suggestions. Watching entity count alone resolved the moment the
         // last window's cards landed, dropping the tracker while the PRECEDES
-        // spine, CAUSES edges, and arc suggestions were still being written (the
+        // spine and arc suggestions were still being written (the
         // "didn't wait for arcs / out a sequence" drop). Two guards before we
         // call it done: the graph must be non-empty AND the PRECEDES spine must
         // have landed (edges grew past submit), so we never resolve during the
@@ -6665,9 +6749,16 @@ export default function FreeformCorkboard() {
   // padding; 24 = breathing room at the bottom). Content extends it further.
   const canvasMinH = Math.max(480, viewportWH.h - canvasDocTop - 24);
   const canvasMinW = Math.max(800, viewportWH.w - 48);
+  // In the Characters view the frame measures only what is drawn where it is
+  // drawn: the hidden scenes keep their master positions, and relationship
+  // pills render at their characters' midpoint (always inside the web) while
+  // their STORED spot is a master one. Counting either stretched the frame off
+  // the web's center and left empty board around it.
+  const measured = (e: { id: string; type: string }) =>
+    !(viewMode === 'characters' && (ballEffects.hiddenIds.has(e.id) || e.type === 'relationship'));
   const canvasH = Math.max(
     canvasMinH,
-    ...aliveEntities.map((e) => {
+    ...aliveEntities.filter(measured).map((e) => {
       const p = sizePosOf(e.id);
       return p ? p.y + heightOf(e.id) + CANVAS_PAD : 0;
     }),
@@ -6675,7 +6766,7 @@ export default function FreeformCorkboard() {
   );
   const canvasW = Math.max(
     canvasMinW,
-    ...aliveEntities.map((e) => {
+    ...aliveEntities.filter(measured).map((e) => {
       const p = sizePosOf(e.id);
       return p ? p.x + widthOf(e.id) + CANVAS_PAD : 0;
     }),
@@ -6766,7 +6857,7 @@ export default function FreeformCorkboard() {
       >
       {!(toolbarStuck && toolbarHidden) && (
       <div
-        ref={toolbarRef}
+        ref={setToolbarNode}
         // The right panel's scrim covers the viewport; this marks the strip it
         // must not swallow clicks from, so the toolbar keeps working while the
         // panel is open (see RightPanel's outside-click listener).
@@ -6802,7 +6893,9 @@ export default function FreeformCorkboard() {
             : dark ? '0 2px 10px rgba(0,0,0,0.4)' : '0 2px 10px rgba(120,90,40,0.07)',
           display: 'flex',
           alignItems: 'center',
+          flexWrap: toolbarFit === 2 ? 'wrap' : 'nowrap',
           gap: 8,
+          rowGap: 6,
           fontFamily: 'system-ui, sans-serif',
         }}
       >
@@ -6998,6 +7091,7 @@ export default function FreeformCorkboard() {
             the free-form board; the others are transient (nothing persists). */}
         <ToolbarButton
           label="Master"
+          collapsed={toolbarCompact}
           icon="▦"
           tourId="toolbar-views"
           onClick={() => switchView('master')}
@@ -7007,6 +7101,7 @@ export default function FreeformCorkboard() {
         />
         <ToolbarButton
           label="Characters"
+          collapsed={toolbarCompact}
           icon="◎"
           onClick={() => switchView('characters')}
           active={viewMode === 'characters'}
@@ -7020,6 +7115,7 @@ export default function FreeformCorkboard() {
             reserved for an actual nutshell summary. (FIL-587, Paul) */}
         <ToolbarButton
           label="Beats"
+          collapsed={toolbarCompact}
           icon={
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
               <path d="M12 3v18" />
@@ -7083,6 +7179,7 @@ export default function FreeformCorkboard() {
         {aliveEntities.some((e) => e.type === 'sequence') && viewMode !== 'characters' && (
           <ToolbarButton
             label={hideSequences ? 'Show sequences' : 'Hide sequences'}
+            collapsed={toolbarCompact}
             icon={
               hideSequences ? (
                 // eye-off — sequences currently hidden
@@ -7106,6 +7203,7 @@ export default function FreeformCorkboard() {
         )}
         <ToolbarButton
           label="Arrange"
+          collapsed={toolbarCompact}
           icon={
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
               <path d="M21 6H3" />
@@ -7164,6 +7262,7 @@ export default function FreeformCorkboard() {
             return n > 0 ? `Arcs · ${n}` : 'Panel';
           })()}
           icon="ⓘ"
+          collapsed={toolbarCompact}
           onClick={() => { panelAutoRef.current = false; setRightPanelOpen(true); }}
           accent={
             stagedRows.length > 0
@@ -7237,6 +7336,7 @@ export default function FreeformCorkboard() {
             <div style={{ width: 1, height: 18, background: dark ? '#26262b' : '#ece5d7', margin: '0 2px' }} />
             <ToolbarButton
               label="Top"
+              collapsed={toolbarCompact}
               icon={
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
                   <path d="M12 19V5" />
@@ -7248,6 +7348,7 @@ export default function FreeformCorkboard() {
             />
             <ToolbarButton
               label="Hide"
+              collapsed={toolbarCompact}
               icon={
                 <svg
                   width="13"
@@ -7522,8 +7623,9 @@ export default function FreeformCorkboard() {
           overrides={connectorOverrides}
           linkDrag={linkDrag}
           onRemovePrecedes={onRemovePrecedes}
-          onRemoveCauses={onRemoveCauses}
           relMidpoints={relMidpoints}
+          hoveredRelationshipId={hoveredRelId}
+          onHoverRelationship={setRelHover}
           reifiedPairs={reifiedPairs}
           onEditStructural={openStructuralEditor}
           arcThreadGeo={arcThreadGeo}
@@ -7833,7 +7935,8 @@ export default function FreeformCorkboard() {
           // characters (tracking them), not at a stored position.
           const relMid = relMidpoints.get(entity.id);
           // Hide the bubble until it has clear space (no overlap at the midpoint).
-          if (relMid && expandedCardId !== entity.id && relOccluded.has(entity.id)) return null;
+          // A hovered line (or pill) always shows its badge, raised (below).
+          if (relMid && expandedCardId !== entity.id && relOccluded.has(entity.id) && hoveredRelId !== entity.id) return null;
           // Arcs with a thread ride a ball anchored ON the thread (instead of a
           // free-floating card).
           const arcBall = entity.type === 'arc' ? arcBallById.get(entity.id) : undefined;
@@ -7892,8 +7995,11 @@ export default function FreeformCorkboard() {
               onHoverChange={
                 entity.type === 'character'
                   ? (hovering) => setHoveredCardId((cur) => (hovering ? entity.id : cur === entity.id ? null : cur))
+                  : entity.type === 'relationship'
+                  ? (hovering) => setRelHover(hovering ? entity.id : null)
                   : undefined
               }
+              raised={entity.type === 'relationship' && hoveredRelId === entity.id}
               onLinkHandleMouseDown={
                 // The grid wall is about the order that's already set — no
                 // drag-to-connect there (write PRECEDES from column/master).

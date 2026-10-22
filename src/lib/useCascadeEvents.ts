@@ -17,6 +17,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CascadeEvent, RecentUpdateEntry } from '../components/Freeform';
+import { socketUrl } from './wsAuth';
 
 const MAX_TRAY_ENTRIES = 20;
 
@@ -148,66 +149,72 @@ export function useCascadeEvents({
     }
 
     let cancelled = false;
-    const ws = new WebSocket(wsEndpoint);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
+    // The server binds the socket to the login token's user (FIL-534).
+    let socket: WebSocket | null = null;
+    void socketUrl(wsEndpoint).then((url) => {
       if (cancelled) return;
-      setIsConnected(true);
-      // Identify ourselves to the WS server using the existing identification convention.
-      try {
-        ws.send(
-          JSON.stringify({
-            action: 'identify',
-            userId,
-            storyId: storyId ?? projectId,
-            timestamp: Date.now(),
-          }),
-        );
-      } catch {
-        /* ignore — connection may have just dropped */
-      }
-    };
+      const ws = new WebSocket(url);
+      socket = ws;
+      wsRef.current = ws;
 
-    ws.onmessage = (raw) => {
-      if (cancelled) return;
-      try {
-        const msg = JSON.parse(raw.data) as Partial<CascadeEvent> & { type?: string };
-        if (msg.type !== 'cascade_complete') return;
-        // Filter by current project (Lambda sends to all of user's connections regardless).
-        if (msg.projectId && msg.projectId !== projectId) return;
-        // Only render toast for cross-card landings (per Task #12 lock).
-        const event = msg as CascadeEvent;
-        if ((event.crossCardLandings?.length ?? 0) === 0) {
-          // Focal-only cascade — silent. Still add to tray? Per lock the tray
-          // tracks toasts, which only fire on cross-card. Skip tray too.
-          return;
+      ws.onopen = () => {
+        if (cancelled) return;
+        setIsConnected(true);
+        // Identify ourselves to the WS server using the existing identification convention.
+        try {
+          ws.send(
+            JSON.stringify({
+              action: 'identify',
+              userId,
+              storyId: storyId ?? projectId,
+              timestamp: Date.now(),
+            }),
+          );
+        } catch {
+          /* ignore — connection may have just dropped */
         }
-        setActiveToasts((toasts) => {
-          // Dedupe by cardResponseId in case server retries.
-          if (toasts.some((t) => t.cardResponseId === event.cardResponseId)) return toasts;
-          return [...toasts, event];
-        });
-      } catch (e) {
+      };
+
+      ws.onmessage = (raw) => {
+        if (cancelled) return;
+        try {
+          const msg = JSON.parse(raw.data) as Partial<CascadeEvent> & { type?: string };
+          if (msg.type !== 'cascade_complete') return;
+          // Filter by current project (Lambda sends to all of user's connections regardless).
+          if (msg.projectId && msg.projectId !== projectId) return;
+          // Only render toast for cross-card landings (per Task #12 lock).
+          const event = msg as CascadeEvent;
+          if ((event.crossCardLandings?.length ?? 0) === 0) {
+            // Focal-only cascade — silent. Still add to tray? Per lock the tray
+            // tracks toasts, which only fire on cross-card. Skip tray too.
+            return;
+          }
+          setActiveToasts((toasts) => {
+            // Dedupe by cardResponseId in case server retries.
+            if (toasts.some((t) => t.cardResponseId === event.cardResponseId)) return toasts;
+            return [...toasts, event];
+          });
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.error('[useCascadeEvents] parse error', e);
+        }
+      };
+
+      ws.onclose = () => {
+        if (cancelled) return;
+        setIsConnected(false);
+      };
+
+      ws.onerror = () => {
         // eslint-disable-next-line no-console
-        console.error('[useCascadeEvents] parse error', e);
-      }
-    };
-
-    ws.onclose = () => {
-      if (cancelled) return;
-      setIsConnected(false);
-    };
-
-    ws.onerror = () => {
-      // eslint-disable-next-line no-console
-      console.warn('[useCascadeEvents] WS error');
-    };
+        console.warn('[useCascadeEvents] WS error');
+      };
+    });
 
     return () => {
       cancelled = true;
       try {
-        ws.close(1000, 'unmount');
+        socket?.close(1000, 'unmount');
       } catch {
         /* ignore */
       }

@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import ConfirmCodeModal from "./ConfirmCodeModal"
 import { resendSignUpCode, getCurrentUser } from "aws-amplify/auth";
 import { signInUser } from "../../features/auth/model/useAuth";
+import { friendlyAuthError } from "./authErrors";
 import GoogleSignInButton from "./GoogleSignInButton";
 
 interface LoginFormProps {
@@ -63,7 +64,7 @@ export default function LoginForm({ onSwitch, onSuccess, onForgotPassword }: Log
             } else if (err.name === 'NotAuthorizedException' || err.name === 'UserNotFoundException') {
                 setError("Invalid username or password.");
             } else {
-                setError(err.message || "Login failed");
+                setError(friendlyAuthError(err, "Login failed"));
             }
 
         } finally {

@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { getEntityColor, hexToRgba } from '../../../components/Freeform/entityColors';
 import { NOTE_FONT_SERIF, PEER_BLUE } from '../../../components/Freeform/tokens';
 import { queueEditGlobal } from '../../../lib/storySession';
-import { EVOKES_TRANSITIONS, buildArcRun, buildCharacterArc, createArc, setCharacterDevelopment, type BuildArcRunResponse, type BuildCharacterArcResponse, type StopConflict, createInformation, listCardQuestions, setKnowledge, tagArcInvolvesCharacter, tagEventEvokes, unlinkInformation, untagArcInvolvesCharacter, untagEventEvokes, setSequenceColor, tagCauses, tagEventInvolvesCharacter, tagEventOccursIn, tagSequenceContains, untagCauses, untagEventInvolvesCharacter, untagEventOccursIn, untagSequenceContains, updateArc, updateCardDescription, updateEventSubEvents, updateRelationshipKind, type ArcKind, type EvokesTransition, type NarrativeStatus, type PersistedQuestion, type ProjectEdges, type ProjectEntity, type ProjectInformation, type SubEvent } from '../../../lib/freeformApi';
+import { EVOKES_TRANSITIONS, buildArcRun, buildCharacterArc, createArc, setCharacterDevelopment, type BuildArcRunResponse, type BuildCharacterArcResponse, type StopConflict, createInformation, listCardQuestions, setKnowledge, tagArcInvolvesCharacter, tagEventEvokes, unlinkInformation, untagArcInvolvesCharacter, untagEventEvokes, setSequenceColor, tagEventInvolvesCharacter, tagEventOccursIn, tagSequenceContains, untagEventInvolvesCharacter, untagEventOccursIn, untagSequenceContains, updateArc, updateCardDescription, updateEventSubEvents, updateRelationshipKind, type ArcKind, type EvokesTransition, type NarrativeStatus, type PersistedQuestion, type ProjectEdges, type ProjectEntity, type ProjectInformation, type SubEvent } from '../../../lib/freeformApi';
 import { OrbitSheet } from './orbit';
 import InternIcon from '../InternIcon';
 import { toldOrderEvents } from './connectors';
@@ -2690,19 +2690,8 @@ export function EventSheet({
   const knowledgeFactCandidates = (information ?? [])
     .filter((i) => !shownKnowledgeIds.has(i.id))
     .map((i) => ({ id: i.id, summary: i.summary, hidden: !!i.irony_hidden }));
-  const causesOut = (edges.causes ?? []).filter((c) => c.from === entity.id);
-  const causesIn = (edges.causes ?? []).filter((c) => c.to === entity.id);
   const knowStateColor = (s: string) =>
     s === 'knows' ? '#059669' : s === 'suspects' ? '#d97706' : '#dc2626';
-  // Events + arcs this scene can be causally linked to (editable Causality
-  // chips). Excludes self + deleted nodes; caller also excludes existing links.
-  const linkableNodes = allEntities.filter(
-    (e) => (e.type === 'event' || e.type === 'arc') && !e.deleted_at && e.id !== entity.id,
-  );
-  const causalCandidates = (excludeIds: Set<string>): ChipCandidate[] =>
-    linkableNodes
-      .filter((n) => !excludeIds.has(n.id))
-      .map((n) => ({ id: n.id, label: resolveName(n.id), sublabel: n.type }));
   const characterCandidates = (excludeIds: Set<string>): ChipCandidate[] =>
     allEntities
       .filter((e) => e.type === 'character' && !e.deleted_at && !excludeIds.has(e.id))
@@ -2986,42 +2975,6 @@ export function EventSheet({
           }))}
               accent="#64748b"
               onChanged={onEntitiesChanged}
-            />
-          </div>
-        </div>
-      ),
-    },
-    {
-      id: 'causality', label: 'Causality', summary: `${causesIn.length + causesOut.length}`, accent: '#e8833a', defaultW: 2, defaultExpanded: (causesIn.length + causesOut.length) > 0,
-      hint: 'CAUSES links into and out of this scene, layered over sequence.',
-      content: (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div>
-            <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: '#c2410c', marginBottom: 5 }}>
-              Causes →
-            </div>
-            <EdgeChips
-              accent="#e8833a"
-              addLabel="effect"
-              emptyHint="nothing yet"
-              items={causesOut.map((c) => ({ id: c.to, label: resolveName(c.to) }))}
-              candidates={causalCandidates(new Set(causesOut.map((c) => c.to)))}
-              onAdd={(id) => tagCauses({ fromId: entity.id, toId: id, projectId }, auth.token).then(() => onEntitiesChanged())}
-              onRemove={(id) => untagCauses({ fromId: entity.id, toId: id, projectId }, auth.token).then(() => onEntitiesChanged())}
-            />
-          </div>
-          <div>
-            <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: '#c2410c', marginBottom: 5 }}>
-              ← Caused by
-            </div>
-            <EdgeChips
-              accent="#e8833a"
-              addLabel="cause"
-              emptyHint="nothing yet"
-              items={causesIn.map((c) => ({ id: c.from, label: resolveName(c.from) }))}
-              candidates={causalCandidates(new Set(causesIn.map((c) => c.from)))}
-              onAdd={(id) => tagCauses({ fromId: id, toId: entity.id, projectId }, auth.token).then(() => onEntitiesChanged())}
-              onRemove={(id) => untagCauses({ fromId: id, toId: entity.id, projectId }, auth.token).then(() => onEntitiesChanged())}
             />
           </div>
         </div>

@@ -103,8 +103,67 @@ ambígua), `idp_email_not_verified`, `provider_not_enabled`, `unknown_provider`,
 
 ## Não coberto
 
-- **Caminho inverso.** Quem criou a conta pelo Google e depois tenta se cadastrar
-  com e-mail e senha no mesmo endereço ganha um segundo usuário. Resolver exige
-  bloquear esse cadastro no próprio trigger (`PreSignUp_SignUp`) ou oferecer
-  "definir senha" para contas Google.
+- ~~Caminho inverso.~~ Coberto pelo FIL-665 (seção abaixo): o cadastro por senha
+  numa caixa que já entra pelo Google é recusado com "Use Continue with Google".
 - **Desvincular.** `AdminDisableProviderForUser`, manual.
+
+## FIL-665: verificações contra abuso no cadastro (2026-10-16)
+
+O saldo grátis é por conta, então criar conta não pode ser barato. O cadastro por
+**e-mail e senha** (`PreSignUp_SignUp`) passa por `signup-guard.mjs`:
+
+- **Domínio descartável é recusado.** Lista em `disposable-domains.txt` (cópia de
+  `github.com/disposable-email-domains/disposable-email-domains`, ~9.900 domínios;
+  subdomínios também valem).
+- **Uma caixa de entrada, uma conta.** O endereço vira a caixa que recebe o e-mail
+  (minúsculas, sem `+tag`, sem pontos no Gmail; `googlemail.com` = `gmail.com`). Se
+  uma conta viva (confirmada ou Google, habilitada) já tem essa caixa, o cadastro é
+  recusado. O Cognito já recusa o endereço idêntico; isto pega as variações.
+- **Conta Google nova reserva a caixa** (`reserveExternal`), então o cadastro por
+  senha depois, no mesmo endereço, recebe "Use Continue with Google".
+- **Falha aberta.** Erro de consulta deixa o cadastro passar (log sem o e-mail); o
+  WAF por IP é o reforço. O login Google continua com a regra dele (fail closed).
+
+As reservas ficam em `FilmUsage<env>` (`userId = "inbox#<caixa>"`, `sk = "account"`,
+`username` = quem tem a caixa). Pool de prod → `FilmUsageProd`; pool de dev →
+`FilmUsageDev`. Um dono que nunca confirmou, foi apagado ou desabilitado é trocado.
+
+Mensagens ao usuário (o app tira o prefixo `PreSignUp failed with error`, em
+`my-app/src/components/Login/authErrors.ts`):
+
+- "Please use a permanent email address. Temporary inboxes can't hold a FilmAssistant account."
+- "An account already uses this email inbox. Sign in instead, or reset your password if you have forgotten it."
+- "This email already signs in with Google. Use Continue with Google."
+
+### Deploy
+
+O zip agora leva **três** arquivos: `index.mjs`, `signup-guard.mjs` e
+`disposable-domains.txt`. Permissão extra na role (policy inline `signup-guard`):
+`dynamodb:GetItem` e `dynamodb:PutItem` na tabela `FilmUsage<env>` do pool, e
+`cognito-idp:AdminGetUser` no pool.
+
+Contas antigas não têm reserva: rodar uma vez por pool (com o seu login AWS):
+
+```
+node backfill-inboxes.mjs --pool dev            # simulação
+node backfill-inboxes.mjs --pool dev --apply    # grava
+```
+
+Atualizar a lista de domínios descartáveis:
+
+```
+curl -sS https://raw.githubusercontent.com/disposable-email-domains/disposable-email-domains/main/disposable_email_blocklist.conf | grep -v '^#' | tr 'A-Z' 'a-z' | sort -u > /tmp/d.txt
+```
+
+e trocar o corpo de `disposable-domains.txt` (manter o cabeçalho).
+
+### WAF (limite por IP)
+
+Web ACL `filmassistant-signup-limit` (REGIONAL, us-east-1), regra `signup-per-ip`:
+**10 chamadas por IP em 5 minutos** a `SignUp`, `ResendConfirmationCode` e
+`ConfirmSignUp` (pelo header `x-amz-target`); login normal e login Google não
+contam. Associada ao pool em Cognito → Security → AWS WAF. Bloqueio chega ao app
+como `ForbiddenException` e aparece como "Too many attempts from your network.
+Wait a few minutes, then try again."
+
+Testes: `node --test index.test.mjs signup-guard.test.mjs`.

@@ -168,7 +168,7 @@ export const buildCharacterBentoLayout = makeDesignedBentoLayout(
 // knowledge + arcs, then the structural tiles.
 export const buildEventBentoLayout = makeDesignedBentoLayout(
   'summary', 'working',
-  ['subevents', 'knowledge', 'arcs', 'throughline', 'sequence', 'causality', 'established', 'cast', 'location'],
+  ['subevents', 'knowledge', 'arcs', 'throughline', 'sequence', 'established', 'cast', 'location'],
 );
 
 // Arc + Relationship have no peer workspace, so the centerId (the tile beside

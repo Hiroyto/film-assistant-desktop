@@ -5,14 +5,14 @@ import { toast, Toaster } from 'react-hot-toast';
 import { useMutation } from "react-query";
 import Header from './header';
 import Footer from './footer';
-import StoryGrid from './Profile/StoryGrid';
+import StoriesHome from './Profile/StoriesHome';
+import { useBoardSummaries } from '../lib/useBoardSummaries';
 import NewStoryModal from './Home/NewStoryModal';
 import './HomePage.css';
 import axios from 'axios';
 import { User } from '../models/user';
 import { ErrorModal } from './ui/ErrorModal';
 import { useError } from './Error/useError';
-import { Layers } from 'lucide-react';
 import { markStoryWorkflow, resolveStoryWorkflow } from '../lib/storyWorkflows';
 import { isLocalFirst } from '../lib/localFirst';
 import { saveStory } from '../features/story-workspace/model/storySave';
@@ -65,6 +65,23 @@ const EXAMPLE_PROMPTS = [
   "A Victorian scientist creates a serum to experience other lives but becomes addicted..."
 ];
 
+const LAST_STORY_COUNT_KEY = (userId: string) => `fa-home-story-count:${userId}`;
+
+function readLastStoryCount(userId: string | undefined): number | null {
+  if (!userId) return null;
+  try {
+    const raw = localStorage.getItem(LAST_STORY_COUNT_KEY(userId));
+    const n = raw === null ? NaN : Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLastStoryCount(userId: string, n: number) {
+  try { localStorage.setItem(LAST_STORY_COUNT_KEY(userId), String(n)); } catch { /* storage unavailable */ }
+}
+
 export function HomePage(props: HomePageProps) {
   const STORIES_LIMIT = 35;
   // ============================================================
@@ -102,24 +119,29 @@ export function HomePage(props: HomePageProps) {
   const [userHasInteracted, setUserHasInteracted] = useState(false);
   const [currentPromptIndex, setCurrentPromptIndex] = useState(0);
   const [isInputFocused, setIsInputFocused] = useState(false);
-  const [deletingItems, setDeletingItems] = useState(new Set<string>());
   const { showError } = useError();
-  const [storiesCount, setStoriesCount] = useState(0);
   const [openNewStory, setOpenNewStory] = useState(false);
   const pendingBrainstormRef = useRef<string>("");
   const [loading, setLoading] = useState(false);
   const [loadingWorks, setLoadingWorks] = useState(true);
-
+  // Read straight off the works list (not mirrored into state) so the layout
+  // never renders a frame with the list loaded and a stale count of zero.
+  const storiesCount = Object.keys(user?.works ?? {}).length;
+  // How many stories this writer had last visit, per browser: picks the right
+  // layout before the list arrives (full front page for none) and gives the
+  // stories skeleton their shape. null = never seen, assume a returning writer.
+  const homeUserId: string | undefined = token?.payload?.['cognito:username'];
+  const [lastStoryCount] = useState<number | null>(() => readLastStoryCount(homeUserId));
   useEffect(() => {
-    if (!user?.works) {
-      setStoriesCount(0);
-      return;
-    }
-
-    const count = Object.keys(user.works).length;
-    setStoriesCount(count);
-
-  }, [user?.works]);
+    if (!loadingWorks && homeUserId) writeLastStoryCount(homeUserId, storiesCount);
+  }, [loadingWorks, homeUserId, storiesCount]);
+  // A writer with stories gets the hero as a compact bar with their stories
+  // right under it. With no stories saved (first
+  // login, or every story deleted) the full front page shows. While the list
+  // loads we assume a returning writer (most visits), so a new writer sees a
+  // brief skeleton rather than a returning writer seeing the hero jump away.
+  const returning = storiesCount > 0 || (loadingWorks && lastStoryCount !== 0);
+  const atStoryLimit = storiesCount >= STORIES_LIMIT;
 
   const canCreateStory = useCallback(() => {
     const currentCount = user?.works ? Object.keys(user.works).length : 0;
@@ -206,18 +228,6 @@ export function HomePage(props: HomePageProps) {
   const handleClearBrainstorm = () => {
     setBrainstormText('');
     // Keep userHasInteracted true so autofill doesn't restart
-  };
-
-  // ============================================================
-  // SCROLL TO PROJECTS
-  // ============================================================
-  const handleScrollToProjects = () => {
-    const projectsSection = document.querySelector('.projects-section');
-    if (projectsSection) {
-      const yOffset = -80; // Negative offset to account for header height
-      const y = projectsSection.getBoundingClientRect().top + window.pageYOffset + yOffset;
-      window.scrollTo({ top: y, behavior: 'smooth' });
-    }
   };
 
   // ============================================================
@@ -413,7 +423,7 @@ export function HomePage(props: HomePageProps) {
 
     if (form.workflow === 'freeform') {
       // FIL-514: seed the corkboard braindump ONLY from pendingBrainstormRef
-      // (set by "Build Your Story"). "Blank Outline" / "+ New Story" leave it
+      // (set by "Build Your Story"). "Start blank" / "+ New Story" leave it
       // empty, so they open a blank corkboard instead of inheriting the rotating
       // hero placeholder or leftover text. (Reading brainstormText was the bug.)
       const seed = pendingBrainstormRef.current.trim();
@@ -533,6 +543,15 @@ export function HomePage(props: HomePageProps) {
     navigate('/home');
     toast.success(`Loaded story: ${storyData.title}`);
   }, [user, setData, debouncedSave, navigate]);
+
+  const boardSummaries = useBoardSummaries(token, user?.works);
+
+  // The list's New story tile: up to the new-story bar, ready to type.
+  const handleNewStoryFromList = useCallback(() => {
+    const box = document.querySelector<HTMLTextAreaElement>('[data-tour="hero-brainstorm"] textarea');
+    box?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    box?.focus({ preventScroll: true });
+  }, []);
 
   // FIL-506 — create a REAL corkboard story for the wow sample so it's saved and
   // shows up in the writer's grid (not a hidden sandbox), then hand off into it.
@@ -661,113 +680,6 @@ export function HomePage(props: HomePageProps) {
     handleDynamoUser();
   }, [token, handleDynamoUser]);
 
-  // Grade depois de um delete. Na web o refetch da nuvem já reflete a remoção;
-  // no desktop a grade é local-first (o refetch não a toca mais), e o delete
-  // legado só chama a Lambda — então some-se localmente também, senão a story
-  // volta do SQLite no próximo render.
-  const refreshWorksAfterDelete = useCallback(async (storyIds: string[]) => {
-    if (!isLocalFirst()) {
-      await handleDynamoUser();
-      return;
-    }
-    const userId = token?.payload['cognito:username'] as string;
-    const at = new Date().toISOString();
-    try {
-      for (const sid of storyIds) await storyRepo.softDelete(sid, at);
-      const works = await worksFromLocal(userId);
-      setUser((prev: any) => (prev ? { ...prev, works } : prev));
-    } catch (e) {
-      console.error('[home] delete local falhou', e);
-    }
-  }, [handleDynamoUser, token, setUser]);
-
-  // ============================================================
-  // DELETE STORY
-  // ============================================================
-  const handleDeleteStory = useCallback(async (storyId: string) => {
-    try {
-      deleteWork.mutate(storyId);
-      toast.success('Story deleted');
-
-      // If this is a real implementation, you'd call your delete API here
-      // and update the user's works list
-    } catch (error) {
-      toast.error('Failed to delete story');
-    }
-  }, []);
-
-  const deleteWork = useMutation({
-    mutationFn: async (storyIds: Set<string> | string) => {
-      const storyIdsArray = storyIds instanceof Set ? Array.from(storyIds) : [storyIds];
-      const isDeletingCurrentWork = storyIdsArray.includes(data.storyId);
-      const res = await handleDeletion(storyIds)
-      return { res, isDeletingCurrentWork, storyIdsArray };
-    },
-    onMutate: (storyIds: Set<string> | string) => {
-      if (storyIds instanceof Set) {
-        setDeletingItems(new Set([...deletingItems, ...storyIds]));
-      } else {
-        setDeletingItems(new Set([...deletingItems, storyIds]));
-      }
-    },
-    onSuccess: async (result: { res: any; isDeletingCurrentWork: boolean; storyIdsArray: string[] }) => {
-      const { res, isDeletingCurrentWork, storyIdsArray } = result;
-
-      if (res.data.statusCode === 200) {
-        toast.success("Work deleted!");
-
-        await refreshWorksAfterDelete(storyIdsArray);
-        if (isDeletingCurrentWork) {
-          const generateStoryId = () => `story_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-
-          const empty = {
-            storyId: generateStoryId(),
-            title: "",
-            M: "",
-            T: "",
-            G: "",
-            CQ: "",
-            SUM: "",
-            S1: "",
-            S2: "",
-            S3: "",
-            S4: "",
-            S5: "",
-            S6: "",
-            S7: "",
-            S8: "",
-            S9: "",
-          };
-
-          setData(empty);
-          debouncedSave(empty);
-        }
-
-        setDeletingItems(new Set());
-      } else if (res.data.statusCode === 400) {
-        toast.error(res.data.body.error);
-      } else {
-        toast.error("error");
-      }
-    },
-    onError: (error: any) => {
-      toast.error("error");
-      setDeletingItems(new Set());
-    },
-  });
-
-  const handleDeletion = async (storyIds: Set<string> | string) => {
-    const storyIdsToDelete = storyIds instanceof Set ? Array.from(storyIds) : [storyIds];
-
-    return await axios.post(`${process.env.REACT_APP_URL}/works`, {
-      "event": "delete", // Tells the Lambda function what to do
-      "storyIds": storyIdsToDelete, // Array of story IDs to delete
-      "userId": token?.payload['cognito:username'], // User authentication
-    },
-      { headers: { "Authorization": token.toString() } } // JWT token for auth
-    );
-  }
-
   const autoResizeTextarea = (el: HTMLTextAreaElement) => {
     el.style.height = 'auto';          // reseta
     el.style.height = `${el.scrollHeight}px`; // ajusta ao conteúdo
@@ -857,22 +769,25 @@ export function HomePage(props: HomePageProps) {
         </div>
 
         {/* ========================================
-        HERO BANNER
-        Full-width banner with centered content
+        HERO: full banner for a new writer; for a returning
+        writer the same line, smaller, as a bar above the stories
         ======================================== */}
-        <div className="hero-banner">
+        <div className={returning ? 'hero-banner hero-banner--compact' : 'hero-banner'}>
           <div className="hero-content">
-            <h1 className="hero-title">
+            <h1 className={returning ? 'hero-title hero-title--compact' : 'hero-title'}>
               Start with <span className="gradient-text">what you have</span>
             </h1>
-            <p className="hero-subtitle">
-              A line, a treatment, a finished draft. It all becomes your living outline.
-            </p>
+            {!returning && (
+              <p className="hero-subtitle">
+                A line, a treatment, a finished draft. It all becomes your living outline.
+              </p>
+            )}
 
             {/* Brainstorm input field with auto-typing */}
             <div className="hero-input-container" data-tour="hero-brainstorm">
               <textarea
                 className="hero-input"
+                aria-label="Your story idea"
                 placeholder="Let your creativity flow freely..."
                 value={brainstormText}
                 onChange={(e) => {
@@ -903,16 +818,12 @@ export function HomePage(props: HomePageProps) {
 
             {/* Build Story button */}
             <div className="hero-button-container">
-            <button
-              className="btn-build-story"
-              data-tour="build-story"
-              onClick={handleBuildStory}
-              disabled={storiesCount >= STORIES_LIMIT}
-              style={{
-                opacity: storiesCount >= STORIES_LIMIT ? 0.5 : 1,
-                cursor: storiesCount >= STORIES_LIMIT ? 'not-allowed' : 'pointer'
-              }}
-            >
+              <button
+                className="btn-build-story"
+                data-tour="build-story"
+                onClick={handleBuildStory}
+                disabled={atStoryLimit}
+              >
                 <span className="btn-story-text">Build Your Story</span>
               </button>
 
@@ -921,73 +832,36 @@ export function HomePage(props: HomePageProps) {
               </div>
 
               <button
-              className="btn-jump-outline"
-              onClick={() => { pendingBrainstormRef.current = ""; setOpenNewStory(true); }}
-              disabled={storiesCount >= STORIES_LIMIT}
-              style={{
-                opacity: storiesCount >= STORIES_LIMIT ? 0.5 : 1,
-                cursor: storiesCount >= STORIES_LIMIT ? 'not-allowed' : 'pointer'
-              }}
-            >
-                Blank Outline
+                className="btn-jump-outline"
+                onClick={() => { pendingBrainstormRef.current = ""; setOpenNewStory(true); }}
+                disabled={atStoryLimit}
+              >
+                Start blank
               </button>
             </div>
+
+            {atStoryLimit && (
+              <p className="hero-limit" role="status">
+                You have {STORIES_LIMIT} stories, the most one account holds. Delete one in Profile to start another.
+              </p>
+            )}
           </div>
-
-          {/* Floating scroll button - positioned relative to hero-banner */}
-          <button
-            className="btn-scroll-to-stories hidden md:inline-flex"
-            onClick={handleScrollToProjects}
-            aria-label="View Your Stories"
-          >
-            <span>View Your Stories</span>
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 16 16"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path
-                d="M8 3V13M8 13L12 9M8 13L4 9"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </button>
-
         </div>
 
         {/* ========================================
-        PROJECTS SECTION
-        Story cards using StoryGrid component
+        STORIES (returning writer): right under the new-story bar
         ======================================== */}
-        <div className="projects-section">
-          <div className="projects-container">
-            <h2 className="projects-header">Continue Building
-              <span
-                className={`
-                  ml-3 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium
-                  ${storiesCount >= STORIES_LIMIT
-                    ? 'bg-red-500/10 text-red-400'
-                    : 'bg-neutral-700/40 text-neutral-400'
-                  }
-                `}
-              >
-                <Layers size={14} />
-                {storiesCount} / {STORIES_LIMIT}
-              </span>
-
-            </h2>
-            <StoryGrid
-              works={user?.works || {}}
-              onNavigateStory={handleLoadStory}
-              onDeleteStory={handleDeleteStory}
-              loading={loadingWorks} />
+        {returning && (
+          <div className="projects-section projects-section--top">
+            <StoriesHome
+              works={user?.works}
+              summaries={boardSummaries}
+              loading={loadingWorks}
+              expectedCount={storiesCount || lastStoryCount || undefined}
+              onOpenStory={handleLoadStory}
+              onNewStory={handleNewStoryFromList} />
           </div>
-        </div>
+        )}
 
         {/* ========================================
         TIPS SECTION

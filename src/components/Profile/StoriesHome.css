@@ -1,0 +1,27 @@
+/* Home's stories: one entrance once everything they show is ready (no pop-in),
+   and a skeleton in the same shape while they wait. */
+
+@keyframes sh-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes sh-tile {
+  from { opacity: 0; transform: translateY(4px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes sh-breathe {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 0.9; }
+}
+
+.sh-rise { animation: sh-rise 460ms cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.sh-tile { animation: sh-tile 320ms cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.sh-ghost { animation: sh-breathe 1.6s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .sh-rise,
+  .sh-tile,
+  .sh-ghost { animation: none; }
+}

@@ -103,6 +103,7 @@ export function CardBox({
   processing,
   onMouseDown,
   onHoverChange,
+  raised,
   sceneNo,
   onLinkHandleMouseDown,
   isLinkSource,
@@ -147,6 +148,9 @@ export function CardBox({
   /** Hover in/out on the card — the page tracks the hovered node so demoted
    *  connectors (structural ties) light up while the pointer is on an endpoint. */
   onHoverChange?: (hovering: boolean) => void;
+  /** Lift above the other collapsed cards (a hovered relationship's pill,
+   *  shown over whatever card covers its line's midpoint). */
+  raised?: boolean;
   /** Event's position in the PRECEDES (story) order — renders as the "SC n"
    *  kicker in place of the EVENT type label, notecard-style. */
   sceneNo?: number;
@@ -304,7 +308,7 @@ export function CardBox({
         // An EXPANDED card also rides above the container chrome + every other
         // card: it opens IN PLACE over whatever is around its node, never
         // clipped or shoved by neighbors.
-        zIndex: isDragging ? 110 : isFocal ? 120 : expanded ? 60 : 1,
+        zIndex: isDragging ? 110 : isFocal ? 120 : raised ? 70 : expanded ? 60 : 1,
         // Focus mode is board-native — neighbors move aside and the scrim
         // (z144) dims everything once, so the per-card dim stays light: the
         // board should still read as the board, not vanish behind an overlay.
@@ -534,7 +538,7 @@ export function CardBox({
             ? 'Drag to connect: to another character (relationship), to an event (adds them to the scene)'
             : type === 'sequence'
             ? 'Drag to connect: to a scene or a sequence (it follows this sequence in the story)'
-            : 'Drag to connect: to an event (PRECEDES / Alt=CAUSES), an arc (EVOKES), a character (in the scene), or a sequence (member)'}
+            : 'Drag to connect: to an event (PRECEDES), an arc (EVOKES), a character (in the scene), or a sequence (member)'}
           style={{
             position: 'absolute',
             right: isCharPill ? 9 : 6,

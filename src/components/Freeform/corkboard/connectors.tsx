@@ -3,7 +3,7 @@ import React, { useMemo, useState } from 'react';
 import { getEntityColor } from '../../../components/Freeform/entityColors';
 import { type ProjectEdges, type ProjectEntity } from '../../../lib/freeformApi';
 import { CANVAS_PAD, CHAR_PILL_H, CHAR_PILL_W, COLLAPSED_H, COLLAPSED_W, COL_GAP, EVENT_CARD_W, EXPANDED_W, PEER_GAP, REL_COLLAPSED_H, REL_COLLAPSED_W, ROW_GAP, collapsedSizeOf, type Pos } from './constants';
-import { DARK_ORANGE, useThemeMode } from './theme';
+import { useThemeMode } from './theme';
 
 // =====================================================================
 // Position calc — place peer to the right of the parent card; fall back
@@ -34,13 +34,14 @@ export function ConnectorLayer({
   edges,
   expandedCardId,
   hoveredCardId,
+  hoveredRelationshipId,
+  onHoverRelationship,
   forcedTie,
   expandedCardH,
   focusMode,
   hiddenIds,
   linkDrag,
   onRemovePrecedes,
-  onRemoveCauses,
   displacements,
   overrides,
   relMidpoints,
@@ -59,6 +60,11 @@ export function ConnectorLayer({
   /** Hovered character node — demoted structural ties light up while the
    *  pointer rests on one of their endpoints. */
   hoveredCardId?: string | null;
+  /** The reified relationship whose line is hovered (its pill shows above
+   *  any card covering the midpoint; the line brightens). */
+  hoveredRelationshipId?: string | null;
+  /** Hover in/out on a reified relationship's line. */
+  onHoverRelationship?: (relId: string | null) => void;
   /** Force ONE structural tie to full weight regardless of hover/expand —
    *  the wow tour's relationship beat spotlights a demoted tie with this. */
   forcedTie?: { from: string; to: string } | null;
@@ -74,12 +80,9 @@ export function ConnectorLayer({
     moved: boolean;
     overCardId: string | null;
     overEdgeKey: string | null;
-    causesMode: boolean;
   } | null;
   /** Click handler on an existing PRECEDES line — drops the edge. */
   onRemovePrecedes?: (fromId: string, toId: string) => void;
-  /** D'-11 — click handler on an existing CAUSES line — drops the edge. */
-  onRemoveCauses?: (fromId: string, toId: string) => void;
   /** Per-card displacement (ball cluster push). When set, line endpoints
    *  use the rendered position, not the natural one. */
   displacements?: Map<string, { dx: number; dy: number }>;
@@ -238,21 +241,8 @@ export function ConnectorLayer({
           orient="auto-start-reverse"
         >
           {/* Dark: PRECEDES head is VIOLET (the chronological throughline reads
-              as the violet dashed line; CAUSES takes orange). Light unchanged. */}
+              as the violet dashed line). Light unchanged. */}
           <path d="M 0 0 L 10 5 L 0 10 z" fill={dark ? '#a78bfa' : '#94a3b8'} opacity={dark ? 0.85 : 1} />
-        </marker>
-        {/* D'-11 — CAUSES arrowhead. Light: warm orange vs the gray PRECEDES
-            head. Dark: orange (swapped — violet now belongs to PRECEDES). */}
-        <marker
-          id="cb-causes-arrow"
-          viewBox="0 0 10 10"
-          refX="9"
-          refY="5"
-          markerWidth={dark ? 5.5 : 7}
-          markerHeight={dark ? 5.5 : 7}
-          orient="auto-start-reverse"
-        >
-          <path d="M 0 0 L 10 5 L 0 10 z" fill={dark ? DARK_ORANGE : '#e8833a'} opacity={dark ? 0.85 : 1} />
         </marker>
         {/* Soft glow for dark-mode connectors (from ScenesCanvasWorkspace's
             subtleGlow): blur the line and merge it back under itself. */}
@@ -367,7 +357,7 @@ export function ConnectorLayer({
             )}
             {/* Dark: wide soft halo painted UNDER the core (ScenesCanvas).
                 Violet — the chronological throughline owns the violet dashed
-                look in dark mode (CAUSES is orange). */}
+                look in dark mode. */}
             {dark && !straight && (
               <line
                 x1={p1.x}
@@ -469,106 +459,7 @@ export function ConnectorLayer({
         );
       })}
 
-      {/* D'-11 — CAUSES. NOT drawn on the board: the master view shows ORDER
-          only (the PRECEDES spine); causal links stay in the graph and read on
-          the card sheets (Causality tile). Alt+drag still writes them. Flip
-          this to true (or wire a toolbar toggle) to draw them again — the v11
-          design intent was always chronology-default, causality-as-a-layer. */}
-      {false && (edges.causes ?? []).map((e, i) => {
-        const fr = rectOf(e.from);
-        const tr = rectOf(e.to);
-        if (!fr || !tr) return null;
-        const p1 = edgePoint(fr, tr);
-        const p2 = edgePoint(tr, fr);
-        const straight = isStraightLine(p1, p2);
-        const removable = !!onRemoveCauses;
-        const edgeKey = `causes|${e.from}|${e.to}`;
-        const isHovered = !linkDrag && hoveredEdgeKey === edgeKey;
-        const allowClickRemove = removable && !linkDrag;
-        const mx = (p1.x + p2.x) / 2;
-        const my = (p1.y + p2.y) / 2;
-        return (
-          <g key={`c-${i}`} style={{ animation: 'cb-edge-in 420ms ease-out' }}>
-            {/* Dark: orange halo + glow (swapped — violet now belongs to the
-                chronological PRECEDES throughline). */}
-            {dark && !straight && (
-              <line
-                x1={p1.x}
-                y1={p1.y}
-                x2={p2.x}
-                y2={p2.y}
-                stroke={DARK_ORANGE}
-                strokeWidth={isHovered ? 6 : 4}
-                opacity={isHovered ? 0.16 : 0.08}
-                strokeLinecap="round"
-              />
-            )}
-            <line
-              x1={p1.x}
-              y1={p1.y}
-              x2={p2.x}
-              y2={p2.y}
-              stroke={dark ? (isHovered ? '#ffb088' : DARK_ORANGE) : isHovered ? '#c2410c' : '#e8833a'}
-              strokeWidth={dark ? (isHovered ? 2.4 : 1.6) : isHovered ? 2.5 : 1.6}
-              strokeDasharray={dark ? undefined : '2 4'}
-              opacity={dark ? (isHovered ? 0.95 : 0.75) : isHovered ? 1 : 0.85}
-              strokeLinecap="round"
-              filter={dark && !straight ? 'url(#cb-glow)' : undefined}
-              markerEnd="url(#cb-causes-arrow)"
-              style={{ transition: 'stroke 120ms, stroke-width 120ms' }}
-            />
-            {allowClickRemove && (
-              <line
-                x1={p1.x}
-                y1={p1.y}
-                x2={p2.x}
-                y2={p2.y}
-                stroke="transparent"
-                strokeWidth={16}
-                style={{ cursor: 'pointer', pointerEvents: 'stroke' }}
-                onMouseEnter={() => setHoveredEdgeKey(edgeKey)}
-                onMouseLeave={() => setHoveredEdgeKey((cur) => (cur === edgeKey ? null : cur))}
-                onClick={(ev) => {
-                  ev.stopPropagation();
-                  setHoveredEdgeKey(null);
-                  onRemoveCauses!(e.from, e.to);
-                }}
-              >
-                <title>Click to remove this CAUSES link</title>
-              </line>
-            )}
-            {allowClickRemove && isHovered && (
-              <g
-                style={{ cursor: 'pointer', pointerEvents: 'auto' }}
-                onMouseEnter={() => setHoveredEdgeKey(edgeKey)}
-                onMouseLeave={() => setHoveredEdgeKey((cur) => (cur === edgeKey ? null : cur))}
-                onClick={(ev) => {
-                  ev.stopPropagation();
-                  setHoveredEdgeKey(null);
-                  onRemoveCauses!(e.from, e.to);
-                }}
-              >
-                <circle cx={mx} cy={my} r={9} fill="#fff" stroke="#c2410c" strokeWidth={1.5} />
-                <text
-                  x={mx}
-                  y={my + 3.5}
-                  fontSize={11}
-                  fontFamily="system-ui, sans-serif"
-                  fill="#c2410c"
-                  textAnchor="middle"
-                  style={{ userSelect: 'none' }}
-                >
-                  ✕
-                </text>
-                <title>Remove this CAUSES link</title>
-              </g>
-            )}
-          </g>
-        );
-      })}
-
-      {/* Ghost arrow while link-dragging. Orange + tighter dash in CAUSES
-          mode (Alt held), blue otherwise. */}
+      {/* Ghost arrow while link-dragging: blue over a valid target. */}
       {linkDrag && linkDrag.moved && (() => {
         const fr = rectOf(linkDrag.fromCardId);
         if (!fr) return null;
@@ -576,14 +467,7 @@ export function ConnectorLayer({
         const p1 = edgePoint(fr, targetPoint);
         const validTarget =
           linkDrag.overCardId && linkDrag.overCardId !== linkDrag.fromCardId;
-        const causesMode = linkDrag.causesMode;
-        const stroke = causesMode
-          ? validTarget
-            ? '#e8833a'
-            : '#f0c4a0'
-          : validTarget
-          ? '#3b82f6'
-          : '#cbd5e1';
+        const stroke = validTarget ? '#3b82f6' : '#cbd5e1';
         return (
           <line
             x1={p1.x}
@@ -592,9 +476,9 @@ export function ConnectorLayer({
             y2={linkDrag.mouseCanvas.y}
             stroke={stroke}
             strokeWidth={2}
-            strokeDasharray={causesMode ? '2 4' : '6 4'}
+            strokeDasharray="6 4"
             opacity={0.9}
-            markerEnd={causesMode ? 'url(#cb-causes-arrow)' : 'url(#cb-arrow)'}
+            markerEnd="url(#cb-arrow)"
           />
         );
       })()}
@@ -744,12 +628,30 @@ export function ConnectorLayer({
         if (!ar || !br) return null;
         const s = edgePoint(ar, br);
         const t = edgePoint(br, ar);
+        const hot = hoveredRelationshipId === relId;
         return (
-          <line
-            key={`rel-${relId}`}
-            x1={s.x} y1={s.y} x2={t.x} y2={t.y}
-            stroke={REL_STUB_COLOR} strokeWidth={dark ? 1.2 : 1.4} strokeDasharray="4 3" opacity={dark ? 0.4 : 0.55}
-          />
+          <g key={`rel-${relId}`}>
+            <line
+              x1={s.x} y1={s.y} x2={t.x} y2={t.y}
+              stroke={REL_STUB_COLOR}
+              strokeWidth={hot ? 2.2 : dark ? 1.2 : 1.4}
+              strokeDasharray="4 3"
+              opacity={hot ? 0.95 : dark ? 0.4 : 0.55}
+              style={{ transition: 'stroke-width 120ms, opacity 120ms' }}
+            />
+            {/* Hover target: hovering the line always shows its badge (the
+                relationship pill), even where a card covers the midpoint and
+                the pill would otherwise stay hidden (Ben 2026-10-17). */}
+            {onHoverRelationship && !linkDrag && (
+              <line
+                x1={s.x} y1={s.y} x2={t.x} y2={t.y}
+                stroke="transparent" strokeWidth={14}
+                style={{ pointerEvents: 'stroke', cursor: 'default' }}
+                onMouseEnter={() => onHoverRelationship(relId)}
+                onMouseLeave={() => onHoverRelationship(null)}
+              />
+            )}
+          </g>
         );
       })}
 

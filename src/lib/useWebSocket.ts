@@ -1,6 +1,7 @@
 // lib/useWebSocket.ts
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { isCharacterWsChannelArmed, subscribeTestWs } from './wsTestChannel';
+import { socketUrl } from './wsAuth';
 
 interface CharacterUpdateData {
     characters: any[];
@@ -47,6 +48,10 @@ export const useWebSocket = (userId: string, storyId: string) => {
     const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
     const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const reconnectAttemptsRef = useRef(0);
+    // A connect waits on a fresh login token (FIL-534); disconnect bumps the
+    // generation so a token that resolves after unmount opens nothing.
+    const connectingRef = useRef(false);
+    const generationRef = useRef(0);
     const maxReconnectAttempts = 5; // base online; depois degrada (computeReconnectDelay)
     
     // 🆕 Cleanup function to clear all intervals and timeouts
@@ -99,124 +104,133 @@ export const useWebSocket = (userId: string, storyId: string) => {
         // Clean up any previous connection
         cleanup();
         
-        try {
-            ws.current = new WebSocket(wsUrl);
+        if (connectingRef.current) return;
+        connectingRef.current = true;
+        const generation = generationRef.current;
+        void socketUrl(wsUrl).then((authedUrl) => {
+            connectingRef.current = false;
+            if (generation !== generationRef.current) return; // disconnected meanwhile
+            try {
+                ws.current = new WebSocket(authedUrl);
             
-            ws.current.onopen = () => {
-                console.log('✅ WebSocket connected');
-                setIsConnected(true);
-                setError(null);
-                reconnectAttemptsRef.current = 0; // Reset reconnect attempts on successful connection
+                ws.current.onopen = () => {
+                    console.log('✅ WebSocket connected');
+                    setIsConnected(true);
+                    setError(null);
+                    reconnectAttemptsRef.current = 0; // Reset reconnect attempts on successful connection
                 
-                // Send identification message
-                ws.current?.send(JSON.stringify({
-                    action: 'identify',
-                    userId,
-                    storyId,
-                    timestamp: Date.now()
-                }));
+                    // Send identification message
+                    ws.current?.send(JSON.stringify({
+                        action: 'identify',
+                        userId,
+                        storyId,
+                        timestamp: Date.now()
+                    }));
                 
-                // 🆕 Start ping interval (every 5 minutes to keep connection alive)
-                console.log('🏓 Starting keep-alive ping interval (every 5 minutes)');
-                pingIntervalRef.current = setInterval(() => {
-                    if (ws.current?.readyState === WebSocket.OPEN) {
-                        console.log('🏓 Sending ping to keep connection alive');
-                        ws.current.send(JSON.stringify({
-                            action: 'ping',
-                            timestamp: Date.now()
-                        }));
-                    } else {
-                        console.log('⚠️ Cannot send ping - WebSocket not open');
-                    }
-                }, 5 * 60 * 1000); // 5 minutes
-            };
+                    // 🆕 Start ping interval (every 5 minutes to keep connection alive)
+                    console.log('🏓 Starting keep-alive ping interval (every 5 minutes)');
+                    pingIntervalRef.current = setInterval(() => {
+                        if (ws.current?.readyState === WebSocket.OPEN) {
+                            console.log('🏓 Sending ping to keep connection alive');
+                            ws.current.send(JSON.stringify({
+                                action: 'ping',
+                                timestamp: Date.now()
+                            }));
+                        } else {
+                            console.log('⚠️ Cannot send ping - WebSocket not open');
+                        }
+                    }, 5 * 60 * 1000); // 5 minutes
+                };
             
-            ws.current.onmessage = (event) => {
-                console.log('📥 WebSocket message received:', event.data);
-                try {
-                    const message: WebSocketMessage = JSON.parse(event.data);
+                ws.current.onmessage = (event) => {
+                    console.log('📥 WebSocket message received:', event.data);
+                    try {
+                        const message: WebSocketMessage = JSON.parse(event.data);
                     
-                    switch (message.type) {
-                        case 'character-update':
-                            console.log('Character update received:', {
-                              characterCount: message.data.characters?.length,
-                              storyId: message.data.storyId,
-                              analysisComplete: message.data.analysisComplete,
-                              timestamp: message.data.timestamp
-                            });
-                            // Force new reference by spreading
-                            setLastUpdate({ ...message.data, _receivedAt: Date.now() });
-                            break;
+                        switch (message.type) {
+                            case 'character-update':
+                                console.log('Character update received:', {
+                                  characterCount: message.data.characters?.length,
+                                  storyId: message.data.storyId,
+                                  analysisComplete: message.data.analysisComplete,
+                                  timestamp: message.data.timestamp
+                                });
+                                // Force new reference by spreading
+                                setLastUpdate({ ...message.data, _receivedAt: Date.now() });
+                                break;
                             
-                        case 'character-error':
-                            console.error('❌ Character analysis error:', message.data);
-                            setError(`Character analysis failed: ${message.data.error}`);
-                            break;
+                            case 'character-error':
+                                console.error('❌ Character analysis error:', message.data);
+                                setError(`Character analysis failed: ${message.data.error}`);
+                                break;
                             
-                        case 'connection-ack':
-                            console.log('🤝 Connection acknowledged by server');
-                            break;
+                            case 'connection-ack':
+                                console.log('🤝 Connection acknowledged by server');
+                                break;
                             
-                        case 'pong':
-                            console.log('🏓 Pong received from server');
-                            break;
+                            case 'pong':
+                                console.log('🏓 Pong received from server');
+                                break;
                             
-                        default:
-                            console.log('📨 Unknown message type:', message.type);
+                            default:
+                                console.log('📨 Unknown message type:', message.type);
+                        }
+                    } catch (error) {
+                        console.error('💥 Failed to parse WebSocket message:', error);
+                        setError('Failed to parse message');
                     }
-                } catch (error) {
-                    console.error('💥 Failed to parse WebSocket message:', error);
-                    setError('Failed to parse message');
-                }
-            };
+                };
             
-            ws.current.onclose = (event) => {
-                console.log('🔌 WebSocket disconnected:', {
-                    code: event.code,
-                    reason: event.reason,
-                    wasClean: event.wasClean
-                });
+                ws.current.onclose = (event) => {
+                    console.log('🔌 WebSocket disconnected:', {
+                        code: event.code,
+                        reason: event.reason,
+                        wasClean: event.wasClean
+                    });
                 
-                setIsConnected(false);
-                cleanup(); // Clear intervals when connection closes
+                    setIsConnected(false);
+                    cleanup(); // Clear intervals when connection closes
                 
-                // Reconnection com backoff (BR-MIGRAR-046): online 5x/3000ms, depois
-                // estendido (30s/1min/5min) — NÃO desiste; degrada para "offline mode".
-                if (event.code !== 1000 && event.code !== 1001) { // Not a normal closure
-                    reconnectAttemptsRef.current++;
-                    const delay = computeReconnectDelay(reconnectAttemptsRef.current);
-                    const extended = reconnectAttemptsRef.current > maxReconnectAttempts;
+                    // Reconnection com backoff (BR-MIGRAR-046): online 5x/3000ms, depois
+                    // estendido (30s/1min/5min) — NÃO desiste; degrada para "offline mode".
+                    if (event.code !== 1000 && event.code !== 1001) { // Not a normal closure
+                        reconnectAttemptsRef.current++;
+                        const delay = computeReconnectDelay(reconnectAttemptsRef.current);
+                        const extended = reconnectAttemptsRef.current > maxReconnectAttempts;
 
-                    if (extended) {
-                        // Degradou para offline mode — sinaliza, mas continua tentando.
-                        setError('Offline — retrying connection in background');
+                        if (extended) {
+                            // Degradou para offline mode — sinaliza, mas continua tentando.
+                            setError('Offline — retrying connection in background');
+                        }
+                        console.log(
+                            `🔄 Reconnection attempt ${reconnectAttemptsRef.current}` +
+                            `${extended ? ' (extended/offline)' : `/${maxReconnectAttempts}`} in ${delay}ms`,
+                        );
+
+                        reconnectTimeoutRef.current = setTimeout(() => {
+                            connect();
+                        }, delay);
+                    } else {
+                        console.log('✅ Normal WebSocket closure');
                     }
-                    console.log(
-                        `🔄 Reconnection attempt ${reconnectAttemptsRef.current}` +
-                        `${extended ? ' (extended/offline)' : `/${maxReconnectAttempts}`} in ${delay}ms`,
-                    );
-
-                    reconnectTimeoutRef.current = setTimeout(() => {
-                        connect();
-                    }, delay);
-                } else {
-                    console.log('✅ Normal WebSocket closure');
-                }
-            };
+                };
             
-            ws.current.onerror = (error) => {
-                console.error('💥 WebSocket error:', error);
-                setError('WebSocket connection error');
-                setIsConnected(false);
-            };
+                ws.current.onerror = (error) => {
+                    console.error('💥 WebSocket error:', error);
+                    setError('WebSocket connection error');
+                    setIsConnected(false);
+                };
             
-        } catch (error) {
-            console.error('💥 Failed to create WebSocket:', error);
-            setError('Failed to create WebSocket connection');
-        }
+            } catch (error) {
+                console.error('💥 Failed to create WebSocket:', error);
+                setError('Failed to create WebSocket connection');
+            }
+        });
     }, [userId, storyId, cleanup]);
     
     const disconnect = useCallback(() => {
+        generationRef.current += 1;
+        connectingRef.current = false;
         if (ws.current) {
             console.log('🔌 Manually disconnecting WebSocket');
             cleanup(); // Clear intervals before disconnecting

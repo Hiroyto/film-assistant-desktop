@@ -324,42 +324,9 @@
     transform: translateY(0);
   }
   
-  /* Floating scroll button - bottom right of hero */
-  .btn-scroll-to-stories {
-    position: absolute;
-    bottom: 2rem;
-    right: 3.5rem;
-    background: rgba(255, 140, 66, 0.1);
-    color: #ff8c42;
-    border: 2px solid rgba(255, 140, 66, 0.4);
-    border-radius: 50px;
-    padding: 0.75rem 1.5rem;
-    font-size: 0.95rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-    align-items: center;
-    gap: 0.5rem;
-    backdrop-filter: blur(10px);
-    box-shadow: 0 4px 15px rgba(255, 140, 66, 0.2);
-    animation: float-button 3s ease-in-out infinite;
-  }
 
-  .btn-scroll-to-stories:hover {
-    background: rgba(255, 140, 66, 0.2);
-    border-color: rgba(255, 140, 66, 0.6);
-    box-shadow: 0 6px 20px rgba(255, 140, 66, 0.3);
-    transform: translateY(-2px);
-  }
 
-  .btn-scroll-to-stories:active {
-    transform: translateY(0);
-  }
 
-  .btn-scroll-to-stories svg {
-    animation: bounce-arrow 2s ease-in-out infinite;
-  }
 
   @keyframes float-button {
     0%, 100% {
@@ -392,97 +359,112 @@
     min-height: 60vh;
   }
 
-  .projects-container {
-    max-width: 1280px;
-    margin: 0 auto;
-    padding: 2rem 1.5rem;
-    width: 100%;
-    box-sizing: border-box;
-    background: rgba(42, 42, 42, 0.6);
-    border-radius: 1.5rem;
-    backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 107, 53, 0.1);
-    position: relative;
-    /* Subtle orange glow underneath */
-    box-shadow: 
-      0 8px 30px rgba(255, 140, 66, 0.15),
-      0 15px 60px rgba(255, 107, 53, 0.08),
-      0 0 80px rgba(255, 140, 66, 0.06);
+  /* Returning writer: the hero as a compact bar, the stories right under it. */
+  .projects-section.projects-section--top {
+    min-height: 0;
+    padding: 0 2rem 3rem;
   }
-  
-  /* Additional diffused glow underneath the container */
-  .projects-container::after {
-    content: '';
-    position: absolute;
-    bottom: -40px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 85%;
-    height: 40px;
-    background: radial-gradient(ellipse at center, rgba(255, 140, 66, 0.3) 0%, rgba(255, 107, 53, 0.15) 40%, transparent 80%);
-    filter: blur(20px);
-    pointer-events: none;
-    z-index: -1;
+
+  .hero-banner.hero-banner--compact {
+    min-height: 0;
+    max-height: none;
+    display: block;
+    padding: calc(74px + 3.5rem) 2rem 3rem;
+    border-bottom: none;
   }
-  
-  .projects-header {
+
+  .hero-banner--compact .hero-content {
+    max-width: 1136px;
+    padding-top: 0;
+    text-align: left;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 1.25rem 1rem;
+    align-items: start;
+  }
+
+  .hero-title.hero-title--compact {
+    grid-column: 1 / -1;
+    margin: 0 !important;
+    font-size: 2.5rem;
+    line-height: 1.1;
+    text-align: left;
+  }
+
+  .hero-banner--compact .hero-input-container {
+    margin: 0;
+  }
+
+  .hero-banner--compact .hero-input {
+    min-height: 56px;
+    padding: 0.9rem 1.25rem;
+    font-size: 1rem;
+    box-shadow: none;
+  }
+
+  .hero-banner--compact .hero-input:focus {
+    height: 140px;
+  }
+
+  .hero-banner--compact .hero-button-container {
+    flex-direction: row;
+    width: auto;
+    gap: 0.75rem;
+  }
+
+  .hero-banner--compact .button-divider {
+    display: none;
+  }
+
+  .hero-banner--compact .btn-build-story,
+  .hero-banner--compact .btn-jump-outline {
+    height: 56px;
+    padding: 0 1.5rem;
+    font-size: 1rem;
+    white-space: nowrap;
+  }
+
+  .btn-jump-outline:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+  }
+
+  .hero-limit {
+    grid-column: 1 / -1;
+    margin: 0.5rem 0 0;
+    font-size: 0.9rem;
+    color: #f19b8b;
+  }
+
+  .hero-banner:not(.hero-banner--compact) .hero-limit {
+    margin-top: 1.25rem;
     text-align: center;
-    font-size: 1.8rem;
-    font-weight: 600;
-    color: #e0e0e0;
-    margin-bottom: 1.5rem;
-    z-index: 10;
   }
 
-  /* Ensure StoryCard glassmorphic effect works on HomePage */
-  /* Force all elements in projects section to not have white backgrounds */
-  .projects-section *,
-  .projects-section *::before,
-  .projects-section *::after {
-    background-color: transparent !important;
-    z-index: 10;
+  @media (max-width: 720px) {
+    .projects-section.projects-section--top {
+      padding: 0 1rem 2rem;
+    }
+
+    .hero-banner.hero-banner--compact {
+      padding: calc(74px + 1.5rem) 1rem 2rem;
+    }
+
+    .hero-title.hero-title--compact {
+      font-size: 1.75rem;
+    }
+
+    .hero-banner--compact .hero-content {
+      grid-template-columns: 1fr;
+    }
+
+    .hero-banner--compact .hero-button-container {
+      flex-wrap: wrap;
+    }
   }
 
-  /* Ensure grid has no extra margin/padding */
-  .projects-section .grid {
-    margin: 0 !important;
-    padding: 0 !important;
-    grid-auto-rows: min-content !important;
-    align-items: start !important;
-    gap: 1rem !important;
-  }
-
-  /* Ensure grid items (card wrappers) have no extra spacing */
-  .projects-section .grid > div {
-    margin: 0 !important;
-    padding: 0 !important;
-    height: auto !important;
-    min-height: auto !important;
-  }
-
-  /* Apply dark glassmorphic background only to the card button element */
-  .projects-section [role="button"] {
-    background: rgba(30, 30, 30, 0.6) !important;
-    border: 1px solid rgba(255, 107, 53, 0.3) !important;
-    backdrop-filter: blur(10px);
-    width: 100%;
-    height: auto !important;
-    box-sizing: border-box;
-  }
-
-  /* Override StoryCard's hover state */
-  .projects-section [role="button"]:hover {
-    background: rgba(40, 40, 40, 0.8) !important;
-    border-color: rgba(255, 107, 53, 0.5) !important;
-    box-shadow: 0 8px 16px rgba(255, 107, 53, 0.2) !important;
-  }
-
-  /* Keep the projects container with its dark background */
-  .projects-container {
-    background: rgba(42, 42, 42, 0.6) !important;
-    z-index: 10;
-  }
-  
   /* ============================================================
      EMPTY STATE
      ============================================================ */
@@ -793,12 +775,6 @@
       padding: 0.875rem 2rem;
     }
 
-    .btn-scroll-to-stories {
-      bottom: 1.5rem;
-      right: 2rem;
-      padding: 0.65rem 1.25rem;
-      font-size: 0.85rem;
-    }
   
     /* .projects-section {
       padding: 3rem 0;
@@ -916,10 +892,6 @@
       animation: none !important;
     }
 
-    .btn-scroll-to-stories,
-    .btn-scroll-to-stories svg {
-      animation: none !important;
-    }
   }
 
   /* ============================================================

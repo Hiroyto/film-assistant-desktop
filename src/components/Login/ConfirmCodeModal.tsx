@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Loader2, X } from 'lucide-react';
 import { confirmAndSignIn, resendCode } from '../../features/auth/model/useAuth';
+import { friendlyAuthError } from './authErrors';
 
 interface ConfirmCodeModalProps {
     email: string;
@@ -42,7 +43,7 @@ export default function ConfirmCodeModal({
             } else if (err.name === 'LimitExceededException') {
                 setError("Attempt limit exceeded. Please try again later.");
             } else {
-                setError(err.message || "An error occurred during confirmation.");
+                setError(friendlyAuthError(err, "An error occurred during confirmation."));
             }
 
         } finally {
@@ -71,7 +72,7 @@ export default function ConfirmCodeModal({
             }, 1000);
         } catch (err: any) {
             console.error("Resend error:", err);
-            setError(err.message || "Could not resend code. Please wait a moment and try again.");
+            setError(friendlyAuthError(err, "Could not resend code. Please wait a moment and try again."));
         }
     };
 

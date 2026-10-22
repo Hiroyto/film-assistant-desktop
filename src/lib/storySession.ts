@@ -27,14 +27,13 @@ import {
   tagSequenceContains,
   untagSequenceContains,
   tagEventInvolvesCharacter,
-  tagCauses,
-  untagCauses,
   tagEventEvokes,
   setStructuralEdge,
   deleteStructuralEdge,
   type ListProjectEntitiesResponse,
 } from './freeformApi';
 import { mergeGraphDelta, saveStoredGraph, type GraphDelta } from './localGraphStore';
+import { socketUrl } from './wsAuth';
 
 type EditField = 'working_name' | 'description';
 export type QueuedEdit = {
@@ -71,8 +70,6 @@ export type StructOp =
   | { kind: 'contains_move'; sequenceId: string; eventId: string }
   | { kind: 'contains_untag'; sequenceId: string; eventId: string }
   | { kind: 'involves_tag'; eventId: string; characterId: string }
-  | { kind: 'causes_tag'; from: string; to: string }
-  | { kind: 'causes_untag'; from: string; to: string }
   | { kind: 'evokes_tag'; eventId: string; arcId: string }
   | { kind: 'structural_set'; from: string; to: string; predicate: string }
   | { kind: 'structural_delete'; from: string; to: string };
@@ -93,6 +90,8 @@ type Session = {
   refs: number;
   ws: WebSocket | null;
   wsWanted: boolean;
+  /** A connect is waiting on a fresh login token (see openWs). */
+  wsOpening: boolean;
   /** When the current socket OPENED (null while closed) — consumers use it to
    *  apply an identify-write grace before enqueueing streamed work. */
   wsOpenedAt: number | null;
@@ -210,6 +209,7 @@ function getSession(storyId: string): Session {
       refs: 0,
       ws: null,
       wsWanted: false,
+      wsOpening: false,
       wsOpenedAt: null,
       reconnectDelayMs: 2000,
       lingerTimer: null,
@@ -319,12 +319,6 @@ function applyStructOpToPayload(payload: ListProjectEntitiesResponse, op: Queued
       return e.involves.some((i) => i.from === op.eventId && i.to === op.characterId)
         ? payload
         : { ...payload, edges: { ...e, involves: [...e.involves, { from: op.eventId, to: op.characterId }] } };
-    case 'causes_tag':
-      return e.causes.some((c) => c.from === op.from && c.to === op.to)
-        ? payload
-        : { ...payload, edges: { ...e, causes: [...e.causes, { from: op.from, to: op.to }] } };
-    case 'causes_untag':
-      return { ...payload, edges: { ...e, causes: e.causes.filter((c) => !(c.from === op.from && c.to === op.to)) } };
     case 'evokes_tag':
       return e.evokes.some((ev) => ev.event_id === op.eventId && ev.arc_id === op.arcId)
         ? payload
@@ -360,14 +354,21 @@ function notifyPayload(s: Session) {
 }
 
 function openWs(s: Session) {
-  if (!s.wsWanted || s.ws || !s.userId) return;
+  if (!s.wsWanted || s.ws || s.wsOpening || !s.userId) return;
   const wsEndpoint = process.env.REACT_APP_WEBSOCKET_ENDPOINT;
   if (!wsEndpoint) return;
-  // Pass the Cognito idToken on connect so a $connect authorizer can verify the
-  // socket's identity server-side (browsers can't set WS headers, so the token
-  // rides the query string). The stored userId must come from this verified
-  // token, not the client-sent identify frame.
-  const wsUrl = s.token ? `${wsEndpoint}?token=${encodeURIComponent(s.token)}` : wsEndpoint;
+  // The server binds the socket to the user in the login token sent on
+  // connect, not the identify frame (FIL-534). The token is fetched fresh on
+  // every (re)connect; s.token is only the fallback.
+  s.wsOpening = true;
+  void socketUrl(wsEndpoint, s.token).then((wsUrl) => {
+    s.wsOpening = false;
+    if (!s.wsWanted || s.ws) return; // closed, or opened meanwhile
+    connectWs(s, wsUrl);
+  });
+}
+
+function connectWs(s: Session, wsUrl: string) {
   const ws = new WebSocket(wsUrl);
   s.ws = ws;
   ws.onopen = () => {
@@ -550,12 +551,6 @@ async function pushStructOp(s: Session, op: QueuedStructOp): Promise<void> {
       return;
     case 'involves_tag':
       await tagEventInvolvesCharacter({ eventId: op.eventId, characterId: op.characterId, projectId }, token);
-      return;
-    case 'causes_tag':
-      await tagCauses({ fromId: op.from, toId: op.to, projectId }, token);
-      return;
-    case 'causes_untag':
-      await untagCauses({ fromId: op.from, toId: op.to, projectId }, token);
       return;
     case 'evokes_tag':
       await tagEventEvokes({ eventId: op.eventId, arcId: op.arcId, projectId }, token);
