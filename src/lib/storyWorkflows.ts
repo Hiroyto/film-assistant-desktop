@@ -36,6 +36,14 @@ function readMap(): Record<string, StoryWorkflow> {
   }
 }
 
+/** The local tag alone — no record, no default. Desktop-only addition: the
+ *  local-first layer stores only the POSITIVE (`stories.workflow` is freeform
+ *  or null) and must never push or display a workflow it only inferred from
+ *  the default, or an outline story would turn into a corkboard. */
+export function taggedStoryWorkflow(storyId: string): StoryWorkflow | undefined {
+  return readMap()[storyId];
+}
+
 /** Record a story's workflow locally (call at creation time). */
 export function markStoryWorkflow(storyId: string, workflow: StoryWorkflow): void {
   try {
@@ -47,22 +55,16 @@ export function markStoryWorkflow(storyId: string, workflow: StoryWorkflow): voi
   }
 }
 
-/** The workflow a story belongs to. A `freeform` tag from EITHER source wins;
- *  only then does the record's field decide; default is outline.
- *
- *  Why freeform wins over a record that says `outline`: the local tag is written
- *  once, at creation, from the writer's explicit choice, and a story never
- *  converts from corkboard to outline. A work record claiming `outline` for a
- *  story this device tagged as freeform is a LOST FIELD, not a conversion — and
- *  obeying it strands the board (the corkboard's graph lives in the freeform
- *  backend, so the outline editor opens an empty template over real work). The
- *  desktop hits exactly this: its local-first save never sends `workflow` to
- *  /works, so the cloud record answers for a field it never received. */
+/** The workflow a story belongs to. Work-record field wins; localStorage
+ *  fallback covers a backend that drops the field; default is the corkboard
+ *  (2026-10-18, Ben: nothing defaults to outline). Records that predate the
+ *  field were backfilled to an explicit workflow, outline where they hold
+ *  outline content. */
 export function resolveStoryWorkflow(
   story: { workflow?: string | null } | undefined | null,
   storyId: string,
 ): StoryWorkflow {
   if (story?.workflow === 'freeform') return 'freeform';
-  if (readMap()[storyId] === 'freeform') return 'freeform';
-  return 'outline';
+  if (story?.workflow === 'outline') return 'outline';
+  return readMap()[storyId] === 'outline' ? 'outline' : 'freeform';
 }

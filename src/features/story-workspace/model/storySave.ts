@@ -5,7 +5,7 @@ import { storyRepo } from '../../../data/local-db/repositories';
 import { enqueueMutation } from '../../../data/sync-queue';
 import { canonicalToRow, canonicalToWire } from './storySerialization';
 import { clock, TimerHandle } from '../../../lib/clock';
-import { resolveStoryWorkflow } from '../../../lib/storyWorkflows';
+import { taggedStoryWorkflow } from '../../../lib/storyWorkflows';
 import type { CanonicalStory } from '../../../models/story';
 import type { SyncOperation } from '../../../data/local-db/rows';
 
@@ -36,12 +36,14 @@ async function enqueuePush(story: CanonicalStory, operation: SyncOperation, user
     // device, ou o pull deste) reabriria o corkboard no editor de outline.
     // canonicalToWire já emite o positivo quando a coluna local (stories.workflow)
     // diz freeform; a tag em localStorage cobre linhas anteriores à coluna. Só o
-    // positivo: `outline` é o default do backend e não precisa ser reafirmado.
+    // positivo, e só por EVIDÊNCIA (coluna ou tag): o resolver compartilhado
+    // (resolveStoryWorkflow) hoje assume corkboard quando não sabe, e empurrar
+    // esse default para o /works transformaria uma story de outline em freeform.
     payload: {
       event: 'save',
       userId,
       ...canonicalToWire(story),
-      ...(resolveStoryWorkflow(story, story.storyId) === 'freeform' ? { workflow: 'freeform' } : {}),
+      ...(story.workflow === 'freeform' || taggedStoryWorkflow(story.storyId) === 'freeform' ? { workflow: 'freeform' } : {}),
     },
   });
 }

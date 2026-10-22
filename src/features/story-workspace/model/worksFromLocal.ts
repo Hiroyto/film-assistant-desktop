@@ -10,6 +10,7 @@
 // caller deve checar isLocalFirst(). Repos injetáveis p/ teste sem Electron/DB.
 import { storyRepo, characterRepo } from '../../../data/local-db/repositories';
 import { rowToCanonical, canonicalToWire } from './storySerialization';
+import { taggedStoryWorkflow } from '../../../lib/storyWorkflows';
 import { toCanonicalCharacterArray, Character } from '../../../models/character';
 import type { StoryRow, CharacterRow } from '../../../data/local-db/rows';
 
@@ -60,6 +61,11 @@ export function buildStoryValue(row: StoryRow, charRows: CharacterRow[]): Record
   const canonical = rowToCanonical(row, characters);
   return {
     ...canonicalToWire(canonical),
+    // Sempre EXPLÍCITO: a coluna local guarda só o positivo (freeform ou null) e
+    // o resolver compartilhado assume corkboard quando o record não diz nada —
+    // uma linha de outline sem o campo abriria o corkboard. A tag em localStorage
+    // cobre linhas de corkboard anteriores à coluna.
+    workflow: canonical.workflow === 'freeform' || taggedStoryWorkflow(row.story_id) === 'freeform' ? 'freeform' : 'outline',
     characters: charactersToMap(characters),
     lastModified: row.updated_at,
     createdAt: row.created_at,

@@ -1,5 +1,6 @@
 // B2 — worksFromLocal: monta o mapa `works` (shape legado) a partir do SQLite.
 import { worksFromLocal } from './model/worksFromLocal';
+import { markStoryWorkflow } from '../../lib/storyWorkflows';
 import type { StoryRow, CharacterRow } from '../../data/local-db/rows';
 
 const storyRow = (over: Partial<StoryRow> = {}): StoryRow => ({
@@ -48,14 +49,21 @@ describe('worksFromLocal (B2 — works do SQLite)', () => {
     expect(w.characters.Bia.locked).toBe(false);
   });
 
-  it('expõe workflow:"freeform" quando a linha diz corkboard — e omite quando não', async () => {
-    const works = await worksFromLocal('u1', {
+  it('workflow sempre explícito: "freeform" pela coluna ou pela tag local; senão "outline"', async () => {
+    localStorage.clear();
+    const repos = {
       listActiveStories: async () => [storyRow({ workflow: 'freeform' }), storyRow({ story_id: 'story_2' })],
       listByStory: async () => [],
-    });
+    };
+    const works = await worksFromLocal('u1', repos);
     // É o que resolveStoryWorkflow lê para rotear ao corkboard e badgear "Corkboard".
     expect(works['story_1'].workflow).toBe('freeform');
-    expect('workflow' in works['story_2']).toBe(false);
+    // Sem coluna e sem tag: outline explícito — o resolver compartilhado assume
+    // corkboard para um record sem o campo, e isso não pode valer para o SQLite.
+    expect(works['story_2'].workflow).toBe('outline');
+    // Linha anterior à coluna, marcada neste device: a tag ainda vale.
+    markStoryWorkflow('story_2', 'freeform');
+    expect((await worksFromLocal('u1', repos))['story_2'].workflow).toBe('freeform');
   });
 
   it('retorna {} quando não há stories (caller cai p/ backend)', async () => {
