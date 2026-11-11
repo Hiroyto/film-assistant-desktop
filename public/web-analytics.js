@@ -13,6 +13,18 @@
   window.dataLayer = window.dataLayer || [];
   function gtag() { window.dataLayer.push(arguments); }
   window.gtag = gtag;
+  // Consent Mode (FIL-621): everything denied until the visitor says yes in the
+  // cookie banner (components/ConsentBanner); a choice made on an earlier visit
+  // applies now. Mirrors the inline block of the web repo's index.html.
+  gtag('consent', 'default', { ad_storage: 'denied', ad_user_data: 'denied', ad_personalization: 'denied', analytics_storage: 'denied', wait_for_update: 500 });
+  try {
+    var fa = JSON.parse(localStorage.getItem('fa-consent') || 'null');
+    if (fa && fa.v === 1) {
+      // Global Privacy Control: the browser has opted out of ad sharing.
+      var ad = fa.ads && navigator.globalPrivacyControl !== true ? 'granted' : 'denied';
+      gtag('consent', 'update', { ad_storage: ad, ad_user_data: ad, ad_personalization: ad, analytics_storage: fa.analytics ? 'granted' : 'denied' });
+    }
+  } catch (e) { /* storage unavailable: stays denied */ }
   gtag('js', new Date());
   gtag('config', 'G-5Q1VS7MNJ9');
   var ga = document.createElement('script');

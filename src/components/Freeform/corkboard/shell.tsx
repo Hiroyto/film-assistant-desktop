@@ -164,12 +164,15 @@ export function Shell({
   onOpenScript,
   onPrefetchScript,
   headerExtra,
+  headerRight,
   children,
 }: {
   storyId?: string;
   /** Rendered on the title row, right of the title and left of "Script →".
    *  The story-facts strip lives here so it costs the board no height. */
   headerExtra?: React.ReactNode;
+  /** Rendered at the title row's right end, over the toolbar's right side. */
+  headerRight?: React.ReactNode;
   /** The story's title from the user's works record; falls back to "Corkboard". */
   title?: string;
   /** Real freeform stories can be renamed inline; demo/wow can't. */
@@ -380,6 +383,7 @@ export function Shell({
         )}
         {headerExtra}
         <div style={{ flex: 1 }} />
+        {headerRight}
         {onOpenScript && (
           <button
             data-tour="toolbar-script"

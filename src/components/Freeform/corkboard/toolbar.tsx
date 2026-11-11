@@ -133,6 +133,8 @@ export function ToolbarButton({
   prominent,
   collapsed,
   large,
+  paper,
+  iconOnly,
 }: {
   label: string;
   icon?: React.ReactNode;
@@ -158,20 +160,32 @@ export function ToolbarButton({
   /** Prominent SIZING without the fill (Ben 2026-08-23): Import rides the
    *  create group at New/Braindump's height but keeps the quiet outline. */
   large?: boolean;
+  /** The master's darker light mode (Otavio, Ben 2026-10-15): a quiet button
+   *  on warm paper; pressed reads as a beige fill and a darker edge, not a
+   *  colour. Dark mode is unchanged. */
+  paper?: boolean;
+  /** The icon alone, the label only for screen readers and the tooltip
+   *  (Ben 2026-11-04: the sandbox's Board is just a home button). */
+  iconOnly?: boolean;
 }) {
   const [hover, setHover] = useState(false);
-  const folded = !!collapsed && !!icon && !hover;
+  const folded = (!!collapsed && !!icon && !hover) || (!!iconOnly && !!icon);
   const dark = useThemeMode() === 'dark';
   const solid = !!prominent && !!accent && !disabled;
   const tinted = !!accent && !solid;
+  const warm = !!paper && !dark && !tinted && !solid;
   const bg = disabled
     ? 'transparent'
     : solid
     ? createGradient(accent!, active || hover)
     : tinted
     ? hexToRgba(accent!, active || hover ? (dark ? 0.22 : 0.16) : dark ? 0.14 : 0.1)
+    : warm
+    // On reads as on (FIL-704, Marko: he could not tell what was on): an
+    // ink fill, never orange (orange is the create actions' colour).
+    ? active ? '#3d3f45' : hover ? '#f7f4ee' : '#fff'
     : active
-    ? dark ? '#26262c' : '#ebe4d6'
+    ? dark ? '#d8d8de' : '#ebe4d6'
     : hover
     ? dark ? '#222227' : '#f7f3ea'
     : dark ? '#1a1a1e' : '#fff';
@@ -181,8 +195,10 @@ export function ToolbarButton({
     ? accent!
     : tinted
     ? hexToRgba(accent!, 0.55)
+    : warm
+    ? active ? '#3d3f45' : hover ? '#cfc9bd' : '#e1ddd5'
     : active
-    ? dark ? '#3c3c44' : '#b5a98f'
+    ? dark ? '#d8d8de' : '#b5a98f'
     : hover
     ? dark ? '#3c3c44' : '#cfc6b6'
     : dark ? '#2a2a30' : '#e6dfd2';
@@ -192,15 +208,19 @@ export function ToolbarButton({
     ? '#fff'
     : tinted
     ? accent!
+    : warm
+    ? active ? '#fff' : '#3d3f45'
     // Light's selected state is NEUTRAL (ink on a warm fill) rather than an
     // orange tint, so orange stays the color of the two create actions only.
     : active
-    ? dark ? '#c8c8d0' : '#1d2230'
+    ? dark ? '#16161a' : '#1d2230'
     : dark ? '#c8c8d0' : '#3d4250';
   const btn = (
     <button
       data-tour={tourId}
       onClick={onClick}
+      aria-pressed={active === undefined ? undefined : !!active}
+      aria-label={iconOnly ? label : undefined}
       disabled={disabled}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
@@ -209,7 +229,7 @@ export function ToolbarButton({
         alignItems: 'center',
         gap: 6,
         height: solid || large ? 34 : 30,
-        padding: solid || large ? '0 16px' : folded ? '0 8px' : '0 12px',
+        padding: folded ? (large ? '0 10px' : '0 8px') : solid || large ? '0 16px' : '0 12px',
         fontSize: solid || large ? 12.5 : 12,
         fontWeight: solid || large ? 700 : 600,
         letterSpacing: 0.1,
@@ -225,7 +245,7 @@ export function ToolbarButton({
       }}
     >
       {icon && <span style={{ fontSize: 13, lineHeight: 1 }}>{icon}</span>}
-      {collapsed && icon ? (
+      {iconOnly && icon ? null : collapsed && icon ? (
         <span
           aria-label={label}
           style={{

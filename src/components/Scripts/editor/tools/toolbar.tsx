@@ -198,6 +198,8 @@ const Toolbar: React.FC<ToolbarProps> = ({
         </div>
 
         <div className="toolbar-group-end">
+          {/* No handler, no button: embedded in a sandbox card the theme is the board's. */}
+          {onThemeToggle && (
           <div
             className={`toolbar-button${editorTheme === "light" ? " active" : ""}`}
             onClick={onThemeToggle}
@@ -205,6 +207,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
           >
             {editorTheme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
           </div>
+          )}
 
           {isFullscreen
             ? onMinimize && (

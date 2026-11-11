@@ -180,7 +180,54 @@ const useOnScreen = (ref: React.RefObject<HTMLElement>) => {
 
 type ArcLayout = { w: number; h: number; paths: string[]; labels: { x: number; y: number }[] };
 
+// Ad message match (FIL-635). Each paid ad links to /?v=<id>; the hero swaps
+// its headline and subhead to the ad's angle so the click lands on the same
+// promise. A missing or unknown v shows the default hero, so organic visitors
+// see no change. The ad copy lives with the Reddit drafts (FIL-620).
+// downloadBadge: the ad's promise lives in the desktop app, so the visitor's own
+// OS download button says so (Final Draft sync) instead of "Your OS".
+type HeroCopy = { h1: [string, string]; sub: string; downloadBadge?: string };
+const AD_HEROES: Record<string, HeroCopy> = {
+  // Ad 2, the corkboard: starting from ideas
+  A: {
+    h1: ['Your ideas.', 'Already a board.'],
+    sub: 'Type whatever you have, as messy as it is. FilmAssistant turns it into scene cards, characters and the ties between them, built only from what you wrote.',
+  },
+  // Ad 3, lost in your own draft
+  B: {
+    h1: ['Page 70.', 'Still on track.'],
+    sub: 'FilmAssistant reads every page you write and keeps track of who is in each scene, what each character knows, and which subplot every scene belongs to.',
+  },
+  // Ad 1, outline upkeep: writing in Final Draft
+  C: {
+    h1: ['Keep writing.', 'The board follows.'],
+    sub: 'Keep Final Draft. FilmAssistant follows your script as you write, and every save lands on your board, scene by scene.',
+    downloadBadge: 'Final Draft sync',
+  },
+  // Ad 4, the Peer's notes on your lines
+  D: {
+    h1: ['Notes on the line.', 'Never a rewrite.'],
+    sub: 'The FilmAssistant Peer reads your whole story and pins each note next to the line it is about. Discuss it, mark it addressed, or dismiss it.',
+  },
+};
+// The free beta banner: full access for everyone until December 15, 2026.
+// It takes itself down after that date, so a stale offer never shows.
+const BETA_ENDS = new Date(2026, 11, 16); // local midnight starting Dec 16
+const betaOpen = () => Date.now() < BETA_ENDS.getTime();
+
+function adHeroFromUrl(): HeroCopy | null {
+  try {
+    const v = new URLSearchParams(window.location.search).get('v');
+    return v ? AD_HEROES[v.trim().toUpperCase()] ?? null : null;
+  } catch {
+    return null;
+  }
+}
+
 const Landing: React.FC = () => {
+  // Read once: the ad angle this visit came in on (FIL-635).
+  const [adHero] = useState<HeroCopy | null>(adHeroFromUrl);
+  const [showBeta] = useState<boolean>(betaOpen);
   const navigate = useNavigate();
   const flowSectionRef = useRef<HTMLDivElement>(null);
   const philosophySectionRef = useRef<HTMLElement>(null);
@@ -445,7 +492,16 @@ const Landing: React.FC = () => {
   };
 
   return (
-    <div className="landing-page">
+    <div className={`landing-page${showBeta ? ' ld-has-beta' : ''}`}>
+      {showBeta && (
+        <div className="ld-beta-banner" role="note">
+          <span className="ld-beta-tag">Free beta</span>
+          <span className="ld-beta-text">
+            Full access, no strings attached, until December 15.
+          </span>
+          <span className="ld-beta-text-short">Full access, no strings, until Dec 15.</span>
+        </div>
+      )}
       {/* Hero Section */}
       <section className={`hero-container ld-hero ${isTransitioning ? 'transitioning' : ''}`}>
         <div className="hero-light-container">
@@ -478,12 +534,21 @@ const Landing: React.FC = () => {
         <div className="hero-main-content">
           <div className="ld-eyebrow">Screenwriting software that outlines as you write</div>
 
-          <h1 className="ld-h1">Your story.<br />Your writers room.</h1>
+          {adHero ? (
+            <>
+              <h1 className="ld-h1">{adHero.h1[0]}<br />{adHero.h1[1]}</h1>
+              <p className="ld-hero-sub">{adHero.sub}</p>
+            </>
+          ) : (
+            <>
+              <h1 className="ld-h1">Your story.<br />Your writers room.</h1>
 
-          <p className="ld-hero-sub">
-            Just write, and your board takes shape as you go. A story-aware reader
-            follows along, ready with notes whenever you want them.
-          </p>
+              <p className="ld-hero-sub">
+                Just write, and your board takes shape as you go. A story-aware reader
+                follows along, ready with notes whenever you want them.
+              </p>
+            </>
+          )}
 
           <div className="ld-hero-ctas">
             <BetaButton onClick={handleJoinBeta} disabled={isTransitioning} />
@@ -495,7 +560,7 @@ const Landing: React.FC = () => {
           <p className="ld-hero-mobile-note">Best on a laptop or desktop. Sign up here, write there.</p>
 
           {/* Download do app desktop (Windows + macOS) — só aparece na web */}
-          <DesktopDownloadButtons className="hero-download" />
+          <DesktopDownloadButtons className="hero-download" badge={adHero?.downloadBadge} />
         </div>
 
         <div className="hero-scroll-hint" onClick={() => scrollTo(showreelRef)}>

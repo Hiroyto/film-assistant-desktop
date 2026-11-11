@@ -209,6 +209,12 @@
   animation: heroFadeIn 1s ease-out 0.7s both;
 }
 
+/* The OS tag on the hero download buttons means nothing on a phone (an iPhone
+   even reports "Mac OS"), so phones get the plain buttons. */
+@media (max-width: 600px) {
+  .hero-download .ddl-badge { display: none; }
+}
+
 .ld-hero-sub {
   font-family: 'Inter', sans-serif;
   font-size: 1.125rem;
@@ -2627,4 +2633,46 @@
     justify-content: center;
     align-items: center;
   }
+}
+
+/* ---------- free beta banner (until Dec 15, 2026) ---------- */
+.ld-beta-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 45;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 0 16px;
+  border: none;
+  border-bottom: 1px solid rgba(255, 140, 66, 0.35);
+  background: linear-gradient(90deg, #2a1408 0%, #3a1c0b 50%, #2a1408 100%);
+  color: rgba(255, 255, 255, 0.9);
+  font-family: 'Inter', sans-serif;
+  font-size: 0.9rem;
+}
+.ld-beta-tag {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #1a0d05;
+  background: #ff9970;
+  padding: 3px 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.ld-beta-text-short { display: none; }
+/* The floating nav sits under the banner while it shows. */
+.ld-has-beta .ld-nav { top: 56px; }
+
+@media (max-width: 600px) {
+  .ld-beta-banner { height: auto; min-height: 40px; padding: 8px 12px; font-size: 0.8rem; gap: 8px; }
+  .ld-beta-text { display: none; }
+  .ld-beta-text-short { display: inline; white-space: nowrap; }
+  .ld-has-beta .ld-nav { top: 52px; }
 }

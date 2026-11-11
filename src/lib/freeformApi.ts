@@ -225,6 +225,14 @@ export interface ExtractBraindumpJobFields {
    *  dump's new cards at the target (inside a Sequence / after an Event);
    *  'aside' parks them all in the strip. Omitted = the system decides. */
   declaredPlacement?: { targetId: string; containment?: 'none'; position?: 'before'; action?: 'merge' } | 'aside';
+  /** FIL-641: the dump was made on the sandbox board. What it mints is
+   *  parked (`state: 'parked'`), nothing is positioned on the master, and
+   *  its story facts wait as stickies. Omitted = a master dump. */
+  board?: 'sandbox';
+  /** Focused dump (anchor section 2): typed into this card's corner. The
+   *  extractor is told, the card keeps its writer fields, fragments with no
+   *  other home attach to it, the graft is skipped. */
+  focalCardId?: string;
   /** Dev-only: stream entities over WS as they extract (card-by-card reveal).
    *  Set by the dev FE; prod leaves it unset and runs the batch path. */
   streaming?: boolean;
@@ -516,6 +524,13 @@ export interface ProjectEntity {
   /** §9 soft-delete tombstone. Absent / falsy = alive. FE renders canvas from
    *  alive entities, Trash overlay from deleted ones. */
   deleted_at?: string;
+  /** FIL-641: 'parked' = the writer's sandbox holds it; it is not on the
+   *  master. Absent = placed (or held via `staged`). */
+  state?: 'parked' | string;
+  /** Storyline labels: the id of the one label on this scene, if any. */
+  storyline_label?: string;
+  /** Card colour (2026-10-09): one of LABEL_PALETTE on a scene, by the writer's hand. */
+  card_color?: string;
   // Relationship-specific
   character_a?: string;
   character_b?: string;
@@ -661,12 +676,156 @@ export interface StoryFact {
   updated_at?: string;
 }
 
+// FIL-657 / FIL-638: the sandbox's material, under its own keys. Never inside
+// `entities` (an unknown entity type reaching the card renderer took the
+// whole board down once), so an older client ignores it and the backend can
+// promote first. Mirrors freeform-workflow-app/lib/graph-blob.mjs
+// serveBoardPayload's `fragments` mapping.
+export type SandboxFragmentKind = 'idea' | 'dialogue' | 'note' | 'question' | 'story';
+
+export interface SandboxFragment {
+  id: string;
+  /** Template material (2026-10-14) until the writer edits it. */
+  template?: boolean;
+  /** A template world note: the scene it comes into play in, where the layout puts it. */
+  near?: string;
+  kind: SandboxFragmentKind | string;
+  /** 'extractor' | 'writer' | 'peer'. A fragment the writer edited is theirs. */
+  author: string;
+  /** The reader's distilled statement (third person, the writer's frame out). */
+  text: string;
+  /** The dump sentence(s) it came from. "Where did this come from." */
+  source: string;
+  /** The writer's own short label, or ''. The system never writes one. */
+  label: string;
+  /** Who the fragment is about, as a fact, even while it floats in a huddle. */
+  about: string;
+  /** World stickies: history | rule | faction | place | thing. */
+  worldKind?: string;
+  /** Story stickies (FIL-652): the story-fact kind it was read as. */
+  factKind?: string;
+  open: boolean;
+  dumpId: string;
+  /** Entity id it hangs on, or null when it floats. */
+  attachedTo: string | null;
+  /** Dialogue (2026-10-11): the character who says the line, or null. */
+  speaker?: string | null;
+  /** Shared by the floating fragments of one huddle, null when alone. */
+  clusterId: string | null;
+  createdAt: string;
+  /** A Peer question (author 'peer', 2026-10-20): what it asks about. */
+  peer?: PeerQuestionInfo;
+  /** A sticky an answer to a Peer question left: that question's id. Never a dump's. */
+  fromAnswer?: string;
+  /** The writer's colour for it: a sticky paper key (STICKY_PAPER), or ''
+   *  for its kind's own (2026-10-31). */
+  color?: string;
+  /** Client only: the size the writer dragged a loose sticky to (free
+   *  resize, 2026-10-31), from the saved layout (sandbox#size#<id>). */
+  size?: { w: number; h: number };
+}
+
+/** The Peer on the sandbox (2026-10-20): a question the Peer left on the
+ *  board. Its `text` is the question, `source` the writer's words it quotes. */
+export interface PeerQuestionInfo {
+  key: string;
+  kind: string;
+  family: 'gap' | 'development' | string;
+  /** The writer's own words the question rests on. */
+  quote: string;
+  /** Card, world entry or sticky ids it is about; the first sandbox card is its home (attachedTo). */
+  about: string[];
+  /** open | answering | answered | dismissed | closed (its gap no longer holds, or its card is gone). */
+  state: 'open' | 'answering' | 'answered' | 'dismissed' | 'closed' | string;
+  passId: string;
+  /** The writer's answer, kept on the question, and when. */
+  answer?: string;
+  answeredAt?: string;
+  /** What the answer added, once it landed. */
+  receipt?: PeerAnswerReceipt | null;
+}
+export interface PeerAnswerReceipt {
+  stickies: Array<{ id: string; text: string; on: string | null; onTitle: string }>;
+  cards: Array<{ id: string; type: string; title: string }>;
+  /** The answer read (2026-10-21): each placement, by kind. Older receipts
+   *  (the dump lane) carry only stickies and cards. */
+  notes?: Array<{ id: string; on: string; onTitle: string; onType: string; text: string }>;
+  ties?: Array<{ from: string; to: string; fromTitle: string; toTitle: string; label: string }>;
+  world?: Array<{ id: string; kind: string; title: string }>;
+  /** Where the answer pulls against the board: asked back as a new Peer question. */
+  offered?: Array<{ id: string; question: string; against: string; onTitle: string }>;
+  /** The Peer could not read it; the answer is kept on the question. */
+  failed?: boolean;
+  /** Undo took back what it placed. */
+  undone?: boolean;
+}
+export const isPeerQuestion = (f: { author?: string }) => f.author === 'peer';
+
+/** FIL-653: a world entry. Something true inside the fiction that is not a
+ *  scene and is on no page: history, a rule, a faction, a place, a thing.
+ *  The writer's words under a system title; TOUCHES edges with a role;
+ *  intent until a placed scene establishes it. */
+export type WorldKind = 'history' | 'rule' | 'faction' | 'place' | 'thing' | 'other';
+export interface WorldEntry {
+  id: string;
+  /** Template material (2026-10-14) until the writer edits it. */
+  template?: boolean;
+  /** A sample's entry: the scene it comes into play in, where the layout puts it. */
+  near?: string;
+  kind: WorldKind | string;
+  title: string;
+  text: string;
+  label: string;
+  /** A restatement (the badge's summary) when the entry came from a huddle. */
+  source: string;
+  touches: Array<{ id: string; type: string; role: string }>;
+  establishedIn: string[];
+  createdAt: string;
+}
+
+/** FIL-640: a badge is the one-breath re-read of a huddle proposing a kind,
+ *  never a card. */
+export interface SandboxBadge {
+  clusterId: string;
+  kind: 'scene' | 'character' | 'world' | string;
+  /** When kind is world: history | rule | faction | place | thing | other. */
+  worldKind?: string;
+  title: string;
+  summary: string;
+  touches: string[];
+  /** The huddle's members, in dump order. */
+  fragmentIds?: string[];
+  at?: string;
+  /** 2026-10-12: the card that already exists which at least half the
+   *  members are about. The badge then offers "Add to" it, not a new card. */
+  addTo?: { id: string; title: string; type: 'event' | 'sequence' | 'character' } | null;
+}
+
 export interface ListProjectEntitiesResponse {
+  /** Sandbox reads only (includeParked): braindump ids whose whole job has
+   *  finished (the worker's markers). The sandbox finishes a dump on this. */
+  doneDumps?: string[];
   projectId: string;
   entities: ProjectEntity[];
   edges: ProjectEdges;
   /** Absent from a backend that predates story facts. */
   storyFacts?: StoryFact[];
+  /** Absent from a backend that predates fragments, or one with FRAGMENTS unset.
+   *  The writer's material only: Peer questions come under `peerQuestions`. */
+  fragments?: SandboxFragment[];
+  /** The Peer's questions on the sandbox (2026-10-20), split out of `fragments`
+   *  on read so no sheet, count or receipt ever takes one for the writer's. */
+  peerQuestions?: SandboxFragment[];
+  /** The Peer pill's last read per card (2026-10-20), by card id. */
+  peerReads?: Record<string, { text: string; at: string; model: string }>;
+  badges?: SandboxBadge[];
+  /** FIL-653: world entries, their own key. Absent from older backends. */
+  world?: WorldEntry[];
+  /** Storyline labels (2026-10-08): the writer's label set. Absent from older backends. */
+  labelSet?: LabelSet;
+  /** FIL-707: every set, the first (`id: 'main'`) being `labelSet`, and the one that paints the frames. */
+  labelSets?: StorySet[];
+  paintSet?: string;
   /** Information vertices — not rendered as cards, but used for Knowledge arcs on Character cards. */
   information: ProjectInformation[];
   latencyMs: number;
@@ -727,6 +886,19 @@ export interface CreateCardRequest {
    *  Backend writes a PRECEDES edge from that event → the new event so the
    *  beat lands in the throughline immediately. Best-effort. */
   precededByEventId?: string;
+  /** 'parked' makes the card on the sandbox, not the master (2026-10-09).
+   *  Leave `position` off then: it writes the MASTER's layout row; the
+   *  sandbox keeps its own under the sandbox# prefix. */
+  state?: 'parked';
+  /** With state 'parked': an untitled card, opened at once (2026-10-12). */
+  untitled?: boolean;
+  /** With untitled: the id becomes <prefix>_new_<nonce>_<project slug>. */
+  nonce?: string;
+  /** Made from a sticky: its paper (a STICKY_PAPER key), so the card turned
+   *  back gives the sticky its colour again (2026-11-01). */
+  stickyColor?: string;
+  /** Made from a sticky: its id, so the card turned back reopens it (FIL-718). */
+  fromSticky?: string;
 }
 
 export type CreateCardResponse =
@@ -770,6 +942,9 @@ export interface UpdateCardNameRequest {
   cardId: string;
   projectId: string;
   workingName: string;
+  /** The name with the writer's formatting marks (a sticky's first line); the
+   *  card keeps it so turning it back gives the sticky its formatted line. */
+  marked?: string;
 }
 
 export type NarrativeStatus = 'on_screen' | 'backstory' | 'offstage';
@@ -866,6 +1041,8 @@ export interface CreateArcRequest {
   /** Character-primary arc: the owner. Its presence IS the primary marker —
    *  the FE hides such arcs from the Arcs tab and board threads. */
   characterId?: string;
+  /** FIL-711: made on the sandbox, the subplot is parked (off the master board). */
+  board?: 'sandbox';
   arcFrom?: string;
   arcSoFar?: string;
   arcToward?: string;
@@ -886,6 +1063,8 @@ export interface CreateArcFromEventsRequest {
   openDimensions?: Array<{ tension: string; why_it_matters: string }>;
   eventIds: string[];
   position?: { x: number; y: number };
+  /** FIL-711: made on the sandbox, the subplot is parked (off the master board). */
+  board?: 'sandbox';
 }
 
 export interface CreateArcFromEventsResponse {
@@ -1167,9 +1346,69 @@ export async function listProjectEntities(
   token: string,
 ): Promise<ListProjectEntitiesResponse> {
   if (useMock) return mockListProjectEntities(req);
-  const result = await freshApiCall(apiPath!, { event: 'list-project-entities', ...req }, token);
+  // includeParked (2026-10-16): the server leaves the sandbox's parked cards
+  // out of the board read unless asked, so the master board never sees them.
+  // This client is the sandbox's: it filters them on the corkboard itself and
+  // the sandbox page and receipts need them.
+  const result = await freshApiCall(apiPath!, { event: 'list-project-entities', includeParked: true, ...req }, token);
   if (!result.success) throw new Error(result.error || 'list-project-entities failed');
-  return (result.data?.body ?? result.data) as ListProjectEntitiesResponse;
+  const body = (result.data?.body ?? result.data) as ListProjectEntitiesResponse;
+  // A Peer question is never the writer's material (2026-10-20): out of
+  // `fragments` for every reader, under its own key for the sandbox.
+  if (Array.isArray(body?.fragments)) {
+    body.peerQuestions = body.fragments.filter(isPeerQuestion);
+    body.fragments = body.fragments.filter((f) => !isPeerQuestion(f));
+  }
+  return body;
+}
+
+/** Answer a Peer question (2026-10-20): saved on the question at once, then
+ *  the answer read places it on the board (2026-10-21), wherever the
+ *  question hangs. Not a dump. `sandbox_peer_answer` says what it placed. */
+export async function answerPeerQuestion(req: { projectId: string; userId: string; questionId: string; text: string }, token: string): Promise<{ queued: boolean; questionId: string; braindumpId: string; cardId: string }> {
+  if (useMock) return Promise.resolve({ queued: true, questionId: req.questionId, braindumpId: 'mock', cardId: '' });
+  const result = await freshApiCall(apiPath!, { event: 'answer-peer-question', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'answer-peer-question failed');
+  return (result.data?.body ?? result.data) as { queued: boolean; questionId: string; braindumpId: string; cardId: string };
+}
+
+/** Ad attribution (FIL-621): what brought this writer here, onto their
+ *  record. `recorded: false` = no account record yet (try again later);
+ *  `newSignup` is true once, for a brand-new account. */
+export async function recordAttribution(req: { userId: string; first: unknown; last: unknown; visitorId: string; consent: { ads: boolean; analytics: boolean }; gaClientId: string; fbp: string; fbc: string; obref?: string; heard?: string }, token: string): Promise<{ recorded: boolean; newSignup: boolean; retry?: boolean }> {
+  if (useMock) return Promise.resolve({ recorded: true, newSignup: false });
+  const result = await freshApiCall(apiPath!, { event: 'record-attribution', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'record-attribution failed');
+  return (result.data?.body ?? result.data) as { recorded: boolean; newSignup: boolean; retry?: boolean };
+}
+
+/** Take back what an answer placed (2026-10-21): its stickies, ties, world
+ *  entries and the questions it asked back. The answer stays on the question. */
+export async function undoPeerAnswer(req: { projectId: string; userId: string; questionId: string }, token: string): Promise<{ undone: boolean }> {
+  if (useMock) return Promise.resolve({ undone: true });
+  const result = await freshApiCall(apiPath!, { event: 'undo-peer-answer', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'undo-peer-answer failed');
+  return (result.data?.body ?? result.data) as { undone: boolean };
+}
+
+/** The Peer pill on an opened sandbox card (2026-10-20). Queued: a short
+ *  read and up to 3 question stickies about this card; a `sandbox_peer_card`
+ *  WS event says how it went (asked | nothing_new | not_found | failed). */
+export async function sandboxPeerCard(req: { projectId: string; userId: string; cardId: string; /** both (the Peer button: the read and questions) | questions | read. */ mode?: 'both' | 'questions' | 'read' }, token: string): Promise<{ queued: boolean; askId: string }> {
+  if (useMock) return Promise.resolve({ queued: true, askId: 'mock' });
+  const result = await freshApiCall(apiPath!, { event: 'sandbox-peer-card', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'sandbox-peer-card failed');
+  return (result.data?.body ?? result.data) as { queued: boolean; askId: string };
+}
+
+/** The Peer's board-wide pass on the sandbox (2026-10-20). Queued: the
+ *  questions land as stickies and a `sandbox_peer_pass` WS event says how
+ *  it went (asked | nothing_new | empty | failed). */
+export async function sandboxPeerPass(req: { projectId: string; userId: string }, token: string): Promise<{ queued: boolean; passId: string }> {
+  if (useMock) return Promise.resolve({ queued: true, passId: 'mock' });
+  const result = await freshApiCall(apiPath!, { event: 'sandbox-peer-pass', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'sandbox-peer-pass failed');
+  return (result.data?.body ?? result.data) as { queued: boolean; passId: string };
 }
 
 /**
@@ -2760,6 +2999,8 @@ export interface AcceptArcSuggestionRequest {
   description?: string;
   evidenceQuote?: string;
   position?: { x: number; y: number };
+  /** FIL-711: accepted on the sandbox, the subplot is parked there. */
+  board?: 'sandbox';
 }
 export interface AcceptArcSuggestionResponse {
   accepted: true;
@@ -3430,9 +3671,44 @@ function mockListProjectEntities(
     contains: [],
   };
 
+  // FIL-657: what a FRAGMENTS=1 backend returns beside the cards. One huddle
+  // of two floating ideas, one floating story fragment, one idea attached to
+  // a character. Invented for the mock story; never a real dump's words.
+  const fId = (slug: string) => `frag_${slug}_${pid}`;
+  const fragments: SandboxFragment[] = [
+    {
+      id: fId('negatives_in_the_glovebox'), kind: 'idea', author: 'extractor',
+      text: 'The detective keeps the negatives in his glovebox instead of handing them over.',
+      source: 'I think he keeps the negatives in the glovebox, he never hands them over.',
+      label: '', about: 'the Detective', open: true, dumpId: 'dump_mock_1',
+      attachedTo: null, clusterId: 'cluster_mock_negatives', createdAt: '2026-10-01T12:00:00Z',
+    },
+    {
+      id: fId('husband_asks_for_the_negatives'), kind: 'idea', author: 'extractor',
+      text: 'The husband asks for the negatives and the detective says there are none.',
+      source: 'Later the husband asks about the negatives and he just says there weren\'t any.',
+      label: '', about: 'the Husband', open: true, dumpId: 'dump_mock_2',
+      attachedTo: null, clusterId: 'cluster_mock_negatives', createdAt: '2026-10-02T12:00:00Z',
+    },
+    {
+      id: fId('maybe_a_two_hander'), kind: 'story', author: 'extractor',
+      text: 'The piece could be a two-hander between the detective and the woman.',
+      source: 'Maybe this is really a two-hander, him and her, everyone else offstage.',
+      label: '', about: '', open: true, dumpId: 'dump_mock_2',
+      attachedTo: null, clusterId: null, createdAt: '2026-10-02T12:00:00Z',
+    },
+    {
+      id: fId('she_notices_the_car'), kind: 'idea', author: 'extractor',
+      text: 'The woman notices the same car outside for the third day.',
+      source: 'She notices the car, it has been there three days now.',
+      label: '', about: 'the Woman', open: true, dumpId: 'dump_mock_1',
+      attachedTo: cId('the_woman'), clusterId: null, createdAt: '2026-10-01T12:00:00Z',
+    },
+  ];
+
   return new Promise((resolve) =>
     setTimeout(
-      () => resolve({ projectId: req.projectId, entities, edges, information: [], latencyMs: 140 }),
+      () => resolve({ projectId: req.projectId, entities, edges, information: [], fragments, badges: [], latencyMs: 140 }),
       140,
     ),
   );
@@ -3607,4 +3883,261 @@ export function adaptPeerQuestions(
     createdAt,
     updatedAt: createdAt,
   }));
+}
+
+
+// ============================================
+// FIL-644 — stickies (fragments) by the writer's hand. Backend routes in
+// freeform-workflow-app/lib/fragment-edits.mjs. Editing a sticky's text makes
+// it the writer's (author: writer); the dump sentence stays as its source.
+// ============================================
+
+export interface UpdateFragmentRequest {
+  projectId: string;
+  fragmentId: string;
+  text?: string;
+  label?: string;
+  open?: boolean;
+  /** A line's speaker (character id); '' clears it. Dialogue only. */
+  speaker?: string;
+  /** A sticky paper key, or '' for the kind's own paper (2026-10-31). */
+  color?: string;
+  /** The card it hangs on (2026-10-12: dropped on a card by hand); '' sets it loose. */
+  attachTo?: string;
+  /** Its group (2026-11-02): a sticky's id puts it in that sticky's group
+   *  (a loose one starts a group); '' takes it out of its group. */
+  huddle?: string;
+  /** A world strip's kind, and for a piece of the world its kind (2026-10-15). */
+  factKind?: string;
+  worldKind?: string;
+}
+
+/** leftGroup: the head of the group a sticky left, when two or more stay. */
+export async function updateFragment(req: UpdateFragmentRequest, token: string): Promise<{ updated: boolean; fragment?: SandboxFragment; leftGroup?: string | null }> {
+  if (useMock) return Promise.resolve({ updated: true });
+  const result = await freshApiCall(apiPath!, { event: 'update-fragment', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'update-fragment failed');
+  return (result.data?.body ?? result.data) as { updated: boolean; fragment?: SandboxFragment; leftGroup?: string | null };
+}
+
+export async function deleteFragment(req: { projectId: string; fragmentId: string }, token: string): Promise<{ deleted: boolean }> {
+  if (useMock) return Promise.resolve({ deleted: true });
+  const result = await freshApiCall(apiPath!, { event: 'delete-fragment', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'delete-fragment failed');
+  return (result.data?.body ?? result.data) as { deleted: boolean };
+}
+
+/** Sandbox templates (2026-10-14): a ready board from a known film, one per
+ *  way of building a story. Template material carries `template: '1'` on the
+ *  board read until the writer edits it. */
+export interface SandboxTemplate {
+  id: string;
+  label: string;
+  film: string;
+  year: number;
+  blurb: string;
+  counts: { scenes: number; characters: number; world: number; stickies: number; ties?: number };
+  /** What the panel's hover preview draws (2026-10-15). */
+  preview?: {
+    characters: Array<{ key: string; name: string }>;
+    ties: Array<{ from: string; to: string; predicate: string }>;
+    scenes: Array<{ key: string; title: string; act: number; color: string }>;
+    world: Array<{ key: string; kind: string; text: string }>;
+  };
+}
+export async function listTemplates(req: { projectId: string }, token: string): Promise<{ templates: SandboxTemplate[] }> {
+  if (useMock) return Promise.resolve({ templates: [] });
+  const result = await freshApiCall(apiPath!, { event: 'list-templates', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'list-templates failed');
+  return (result.data?.body ?? result.data) as { templates: SandboxTemplate[] };
+}
+export async function applyTemplate(req: { projectId: string; templateId: string }, token: string): Promise<{ applied: boolean; counts: SandboxTemplate['counts'] }> {
+  const result = await freshApiCall(apiPath!, { event: 'apply-template', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'apply-template failed');
+  return (result.data?.body ?? result.data) as { applied: boolean; counts: SandboxTemplate['counts'] };
+}
+/** The writer is about to dump into a template card: it becomes theirs. */
+export async function claimTemplateCard(req: { projectId: string; cardId: string }, token: string): Promise<void> {
+  const result = await freshApiCall(apiPath!, { event: 'claim-template-card', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'claim-template-card failed');
+}
+export async function clearTemplate(req: { projectId: string }, token: string): Promise<{ cleared: number }> {
+  const result = await freshApiCall(apiPath!, { event: 'clear-template', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'clear-template failed');
+  return (result.data?.body ?? result.data) as { cleared: number };
+}
+
+export async function saveFragment(
+  req: { projectId: string; text: string; kind?: 'note' | 'dialogue'; label?: string; attachTo?: string; speaker?: string; id?: string },
+  token: string,
+): Promise<{ saved: boolean; fragment: SandboxFragment }> {
+  if (useMock) {
+    return Promise.resolve({ saved: true, fragment: { id: `frag_mock_${Date.now()}`, kind: req.kind ?? 'note', author: 'writer', text: req.text, source: req.text, label: req.label ?? '', about: '', open: true, dumpId: '', attachedTo: req.attachTo ?? null, speaker: req.speaker ?? null, clusterId: null, createdAt: new Date().toISOString() } });
+  }
+  const result = await freshApiCall(apiPath!, { event: 'save-fragment', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'save-fragment failed');
+  return (result.data?.body ?? result.data) as { saved: boolean; fragment: SandboxFragment };
+}
+
+
+// ============================================
+// FIL-640 — the badge: the writer's answer to a huddle read as one breath.
+// ============================================
+
+export async function makeHuddleCard(req: { projectId: string; clusterId: string; kind: 'scene' | 'character' | 'world'; title?: string; worldKind?: string }, token: string): Promise<{ made: boolean; cardId: string; kind: string; title: string; attached: string[] }> {
+  if (useMock) return Promise.resolve({ made: true, cardId: `evt_mock_${Date.now()}`, kind: req.kind, title: req.title ?? 'Mock', attached: [] });
+  const result = await freshApiCall(apiPath!, { event: 'make-huddle-card', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'make-huddle-card failed');
+  return (result.data?.body ?? result.data) as { made: boolean; cardId: string; kind: string; title: string; attached: string[] };
+}
+
+/** A huddle about a card that exists goes onto that card (2026-10-12). */
+export async function addHuddleToCard(req: { projectId: string; clusterId: string; cardId: string }, token: string): Promise<{ added: boolean; cardId: string; attached: string[] }> {
+  if (useMock) return Promise.resolve({ added: true, cardId: req.cardId, attached: [] });
+  const result = await freshApiCall(apiPath!, { event: 'add-huddle-to-card', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'add-huddle-to-card failed');
+  return (result.data?.body ?? result.data) as { added: boolean; cardId: string; attached: string[] };
+}
+
+export async function undoAddHuddleToCard(req: { projectId: string; clusterId: string; cardId: string; fragmentIds: string[]; badge?: { kind: string; worldKind?: string; title: string; summary: string; touches?: string[] } }, token: string): Promise<{ undone: boolean }> {
+  if (useMock) return Promise.resolve({ undone: true });
+  const result = await freshApiCall(apiPath!, { event: 'undo-add-huddle-to-card', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'undo-add-huddle-to-card failed');
+  return (result.data?.body ?? result.data) as { undone: boolean };
+}
+
+/** Read a group again, as a dump does (2026-11-02: its members changed by hand). */
+export async function rereadHuddle(req: { projectId: string; clusterId: string }, token: string): Promise<{ kind: string }> {
+  if (useMock) return Promise.resolve({ kind: 'none' });
+  const result = await freshApiCall(apiPath!, { event: 'reread-huddle', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'reread-huddle failed');
+  return (result.data?.body ?? result.data) as { kind: string };
+}
+
+export async function dismissBadge(req: { projectId: string; clusterId: string }, token: string): Promise<{ dismissed: boolean }> {
+  if (useMock) return Promise.resolve({ dismissed: true });
+  const result = await freshApiCall(apiPath!, { event: 'dismiss-badge', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'dismiss-badge failed');
+  return (result.data?.body ?? result.data) as { dismissed: boolean };
+}
+
+
+// ============================================
+// FIL-653 — world entries by the writer's hand.
+// ============================================
+
+export async function saveWorldEntry(req: { projectId: string; kind: WorldKind; title?: string; text: string; label?: string; touches?: Array<{ id: string; role?: string }>; /** made from a sticky: its paper */ stickyColor?: string; /** title taken from inside the text */ nameInWords?: boolean; /** made from a sticky: its id (FIL-718) */ fromSticky?: string }, token: string): Promise<{ saved: boolean; id: string }> {
+  if (useMock) return Promise.resolve({ saved: true, id: `world_mock_${Date.now()}` });
+  const result = await freshApiCall(apiPath!, { event: 'save-world-entry', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'save-world-entry failed');
+  return (result.data?.body ?? result.data) as { saved: boolean; id: string };
+}
+
+/** Storyline labels (2026-10-08): a writer-named dimension and up to eight
+ *  labels, one per scene. The system never assigns one. */
+export interface StoryLabel { id: string; name: string; color: string }
+export interface LabelSet { dimension: string; labels: StoryLabel[] }
+/** FIL-707: one of the story's sets. */
+export interface StorySet extends LabelSet { id: string }
+export const LABEL_PALETTE = ['#7e22ce', '#b45309', '#be123c', '#334155', '#7c2d12', '#c026d3', '#4d7c0f', '#0f172a'];
+export async function saveLabelSet(req: { projectId: string; userId: string; dimension?: string; labels?: Array<{ id?: string; name: string; color: string }>;
+  /** FIL-707: absent or 'main' = the first set; 'new' makes one; else that set. */ setId?: string; /** make this set colour the frames */ paint?: boolean; /** delete this set (never the first) */ remove?: boolean }, token: string): Promise<{ saved: boolean; labelSet?: LabelSet; set?: StorySet; paint?: string; cleared?: number }> {
+  if (useMock) return Promise.resolve({ saved: true, labelSet: { dimension: req.dimension ?? 'Label', labels: (req.labels ?? []).map((l, i) => ({ id: l.id ?? `lab_${i}`, name: l.name, color: l.color })) }, cleared: 0 });
+  const result = await freshApiCall(apiPath!, { event: 'save-label-set', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'save-label-set failed');
+  return (result.data?.body ?? result.data) as { saved: boolean; labelSet?: LabelSet; set?: StorySet; paint?: string; cleared?: number };
+}
+export async function setCardColor(req: { projectId: string; userId: string; cardId: string; color: string; /** FIL-707: another set than the first */ setId?: string }, token: string): Promise<{ set: boolean }> {
+  if (useMock) return Promise.resolve({ set: true });
+  const result = await freshApiCall(apiPath!, { event: 'set-card-color', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'set-card-color failed');
+  return (result.data?.body ?? result.data) as { set: boolean };
+}
+export async function setCardLabel(req: { projectId: string; userId: string; cardId: string; labelId: string }, token: string): Promise<{ set: boolean }> {
+  if (useMock) return Promise.resolve({ set: true });
+  const result = await freshApiCall(apiPath!, { event: 'set-card-label', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'set-card-label failed');
+  return (result.data?.body ?? result.data) as { set: boolean };
+}
+
+export async function updateWorldEntry(req: { projectId: string; id: string; text?: string; title?: string; label?: string; /** history | rule | faction | place | thing | other */ kind?: string }, token: string): Promise<{ updated: boolean }> {
+  if (useMock) return Promise.resolve({ updated: true });
+  const result = await freshApiCall(apiPath!, { event: 'update-world-entry', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'update-world-entry failed');
+  return (result.data?.body ?? result.data) as { updated: boolean };
+}
+
+/** A scene card made a sequence card or back (the master's altitude
+ *  convert). The card is minted again under the other altitude's id. */
+export async function convertCardAltitude(req: { projectId: string; userId: string; cardId: string; to: 'event' | 'sequence' }, token: string): Promise<{ converted: boolean; fromId: string; toId: string }> {
+  if (useMock) return Promise.resolve({ converted: true, fromId: req.cardId, toId: req.cardId.replace(/^evt_/, 'seq_') });
+  const result = await freshApiCall(apiPath!, { event: 'convert-card-altitude', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'convert-card-altitude failed');
+  return (result.data?.body ?? result.data) as { converted: boolean; fromId: string; toId: string };
+}
+
+export async function deleteWorldEntry(req: { projectId: string; id: string }, token: string): Promise<{ deleted: boolean }> {
+  if (useMock) return Promise.resolve({ deleted: true });
+  const result = await freshApiCall(apiPath!, { event: 'delete-world-entry', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'delete-world-entry failed');
+  return (result.data?.body ?? result.data) as { deleted: boolean };
+}
+
+
+// ============================================
+// FIL-641 — place, park, demote.
+// ============================================
+
+export async function parkCard(req: { projectId: string; userId: string; cardId: string }, token: string): Promise<{ parked: boolean; cardId: string; wasHeld?: boolean }> {
+  if (useMock) return Promise.resolve({ parked: true, cardId: req.cardId });
+  const result = await freshApiCall(apiPath!, { event: 'park-card', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'park-card failed');
+  return (result.data?.body ?? result.data) as { parked: boolean; cardId: string; wasHeld?: boolean };
+}
+
+export async function placeParkedCard(req: { projectId: string; userId: string; cardId: string; placement?: StagedPlacement }, token: string): Promise<{ placed: boolean; cardId: string; loose?: boolean; retracted?: { from: string; to: string } | null }> {
+  if (useMock) return Promise.resolve({ placed: true, cardId: req.cardId });
+  const result = await freshApiCall(apiPath!, { event: 'place-parked-card', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'place-parked-card failed');
+  return (result.data?.body ?? result.data) as { placed: boolean; cardId: string; loose?: boolean; retracted?: { from: string; to: string } | null };
+}
+
+/** fragmentId: the sticky it became (the original it was made from, reopened,
+ *  when restored: FIL-718); addition: a sticky holding what was added as a
+ *  card; huddle: the group they and its released stickies form. */
+export type DemoteResult = { demoted: boolean; cardId: string; fragmentId: string; released: number; restored?: boolean; addition?: string | null; huddle?: string };
+export async function demoteCard(req: { projectId: string; userId: string; cardId: string }, token: string): Promise<DemoteResult> {
+  if (useMock) return Promise.resolve({ demoted: true, cardId: req.cardId, fragmentId: `frag_mock_${Date.now()}`, released: 0 });
+  const result = await freshApiCall(apiPath!, { event: 'demote-card', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'demote-card failed');
+  return (result.data?.body ?? result.data) as DemoteResult;
+}
+
+
+/** The writer's second thoughts (2026-10-08): invert a demote or a Make it. */
+export async function undoDemoteCard(req: { projectId: string; userId: string; cardId: string; fragmentId: string }, token: string): Promise<{ undone: boolean }> {
+  if (useMock) return Promise.resolve({ undone: true });
+  const result = await freshApiCall(apiPath!, { event: 'undo-demote-card', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'undo-demote-card failed');
+  return (result.data?.body ?? result.data) as { undone: boolean };
+}
+export async function undoMakeHuddleCard(req: { projectId: string; userId: string; clusterId: string; cardId: string; kind: string; badge?: { kind: string; worldKind?: string; title: string; summary: string; touches?: string[] } }, token: string): Promise<{ undone: boolean }> {
+  if (useMock) return Promise.resolve({ undone: true });
+  const result = await freshApiCall(apiPath!, { event: 'undo-make-huddle-card', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'undo-make-huddle-card failed');
+  return (result.data?.body ?? result.data) as { undone: boolean };
+}
+
+export async function establishWorldEntry(req: { projectId: string; id: string; cardId: string; undo?: boolean }, token: string): Promise<{ established: boolean }> {
+  if (useMock) return Promise.resolve({ established: !req.undo });
+  const result = await freshApiCall(apiPath!, { event: req.undo ? 'unestablish-world-entry' : 'establish-world-entry', projectId: req.projectId, id: req.id, cardId: req.cardId }, token);
+  if (!result.success) throw new Error(result.error || 'establish-world-entry failed');
+  return (result.data?.body ?? result.data) as { established: boolean };
+}
+
+export async function makeSceneFromWorld(req: { projectId: string; userId: string; id: string; title?: string }, token: string): Promise<{ made: boolean; cardId: string; title: string }> {
+  if (useMock) return Promise.resolve({ made: true, cardId: `evt_mock_${Date.now()}`, title: req.title ?? 'Mock' });
+  const result = await freshApiCall(apiPath!, { event: 'make-scene-from-world', ...req }, token);
+  if (!result.success) throw new Error(result.error || 'make-scene-from-world failed');
+  return (result.data?.body ?? result.data) as { made: boolean; cardId: string; title: string };
 }

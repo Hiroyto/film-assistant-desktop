@@ -56,18 +56,32 @@ export function BoardEmptyState({
   onCreate,
   onImport,
   onCowork,
-  importTitle = 'Read a PDF, Final Draft (.fdx) or Fade In (.fadein) screenplay into cards, once',
-  coworkTitle = 'Watch a Final Draft (.fdx) file: every save becomes a per-scene save + extraction on this board',
+  importTitle = 'Read a PDF, Final Draft (.fdx), Fade In (.fadein) or Fountain (.fountain) screenplay into cards, once',
+  coworkTitle = 'Watch a Final Draft (.fdx) or Fountain (.fountain) file: every save becomes a per-scene save + extraction on this board',
+  starters,
+  blurb,
+  leftInset = 0,
 }: {
   onBraindump: () => void;
   onCreate: (kind: CreateModalKind) => void;
-  /** One-shot import: the file is read into cards once (PDF, .fdx, .fadein). */
-  onImport: () => void;
-  /** Desktop only: open a .fdx and keep it in sync (the cowork). Absent on the
+  /** One-shot import: the file is read into cards once (PDF, .fdx, .fadein, .fountain).
+   *  Optional: with neither this nor onCowork there is no screenplay section
+   *  at all (the sandbox, 2026-10-15: not for now). */
+  onImport?: () => void;
+  /** Desktop only: open a .fdx or .fountain and keep it in sync (the cowork). Absent on the
    *  web, where there is no file watcher — the section then offers import alone. */
   onCowork?: () => void;
   importTitle?: string;
   coworkTitle?: string;
+  /** The by-hand starters, when a board offers its own (the sandbox makes
+   *  scenes, characters and stickies; the master, characters, scenes and
+   *  locations). Each starter's key is what onCreate receives. */
+  starters?: Array<{ key: string; label: string; hint: string; color: string }>;
+  /** The line under the Braindump button, when a board says it its own way. */
+  blurb?: string;
+  /** Room kept on the left (the sandbox's templates panel), so the card
+   *  centres in what is left of the board. */
+  leftInset?: number;
 }) {
   const dark = useThemeMode() === 'dark';
   const [hoverDump, setHoverDump] = useState(false);
@@ -86,6 +100,7 @@ export function BoardEmptyState({
         zIndex: 5,
         fontFamily: 'system-ui, sans-serif',
         padding: 24,
+        paddingLeft: 24 + leftInset,
         boxSizing: 'border-box',
       }}
     >
@@ -156,8 +171,7 @@ export function BoardEmptyState({
             color: dark ? '#6e6e78' : '#736b5e',
           }}
         >
-          Paste an outline, a treatment, a few notes, or just write freely.
-          It comes back as cards you can move around.
+          {blurb ?? 'Paste an outline, a treatment, a few notes, or just write freely. It comes back as cards you can move around.'}
         </div>
 
         <div
@@ -179,14 +193,17 @@ export function BoardEmptyState({
         </div>
 
         <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
-          {STARTERS.map((s) => (
+          {(starters ?? STARTERS.map((s) => ({ key: s.kind as string, label: s.label, hint: s.hint, color: getEntityColor(s.kind as any, dark ? 'dark' : 'light') }))).map((s) => (
             <StarterButton
-              key={s.kind}
+              key={s.key}
               label={s.label}
               hint={s.hint}
-              color={getEntityColor(s.kind as any, dark ? 'dark' : 'light')}
+              color={s.color}
               dark={dark}
-              onClick={() => onCreate(s.kind)}
+              // The sandbox's own starters show no browser tooltip (Ben,
+              // 2026-11-08): it only repeated the hint printed on the card.
+              tip={!starters}
+              onClick={() => onCreate(s.key as CreateModalKind)}
             />
           ))}
         </div>
@@ -200,45 +217,52 @@ export function BoardEmptyState({
             here) or a one-shot import (the script is read into cards once).
             Still quiet next to the orange CTA, because a writer WITH a
             screenplay knows to look for it and one without should not be
-            pulled toward it. */}
-        <h3
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            margin: '22px 0 12px',
-            fontSize: 11,
-            textTransform: 'uppercase',
-            letterSpacing: 0.7,
-            fontWeight: 600,
-            color: dark ? '#5c5c66' : '#736b5e',
-          }}
-        >
-          <span style={{ flex: 1, height: 1, background: dark ? '#26262b' : '#ece5d7' }} />
-          Already have a screenplay?
-          <span style={{ flex: 1, height: 1, background: dark ? '#26262b' : '#ece5d7' }} />
-        </h3>
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
-          {onCowork && (
-            <ScreenplayDoor
-              label="Cowork with a .fdx"
-              hint="Keep writing in Final Draft; every save lands on the board"
-              title={coworkTitle}
-              icon={<CoworkIcon />}
-              dark={dark}
-              finalDraft
-              onClick={onCowork}
-            />
-          )}
-          <ScreenplayDoor
-            label="Import a .fdx once"
-            hint="Read the script into cards one time (PDF and Fade In work too)"
-            title={importTitle}
-            icon={<ImportIcon />}
-            dark={dark}
-            onClick={onImport}
-          />
-        </div>
+            pulled toward it. Each door needs its handler; a board that offers
+            neither (the sandbox, 2026-10-15: not for now) gets no section. */}
+        {(onImport || onCowork) && (
+          <>
+            <h3
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                margin: '22px 0 12px',
+                fontSize: 11,
+                textTransform: 'uppercase',
+                letterSpacing: 0.7,
+                fontWeight: 600,
+                color: dark ? '#5c5c66' : '#736b5e',
+              }}
+            >
+              <span style={{ flex: 1, height: 1, background: dark ? '#26262b' : '#ece5d7' }} />
+              Already have a screenplay?
+              <span style={{ flex: 1, height: 1, background: dark ? '#26262b' : '#ece5d7' }} />
+            </h3>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+              {onCowork && (
+                <ScreenplayDoor
+                  label="Cowork with a .fdx"
+                  hint="Keep writing in Final Draft (or a .fountain file); every save lands on the board"
+                  title={coworkTitle}
+                  icon={<CoworkIcon />}
+                  dark={dark}
+                  finalDraft
+                  onClick={onCowork}
+                />
+              )}
+              {onImport && (
+                <ScreenplayDoor
+                  label="Import a .fdx once"
+                  hint="Read the script into cards one time (PDF, Fade In and Fountain work too)"
+                  title={importTitle}
+                  icon={<ImportIcon />}
+                  dark={dark}
+                  onClick={onImport}
+                />
+              )}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -252,12 +276,14 @@ function StarterButton({
   color,
   dark,
   onClick,
+  tip = true,
 }: {
   label: string;
   hint: string;
   color: string;
   dark: boolean;
   onClick: () => void;
+  tip?: boolean;
 }) {
   const [hover, setHover] = useState(false);
   return (
@@ -265,7 +291,7 @@ function StarterButton({
       onClick={onClick}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      title={hint}
+      title={tip ? hint : undefined}
       style={{
         flex: '1 1 140px',
         minWidth: 130,

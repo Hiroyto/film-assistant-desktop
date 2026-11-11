@@ -4,7 +4,12 @@ import { getEntityColor, hexToRgba } from '../../../components/Freeform/entityCo
 import { NOTE_FONT_SERIF, PEER_BLUE } from '../../../components/Freeform/tokens';
 import { queueEditGlobal } from '../../../lib/storySession';
 import { EVOKES_TRANSITIONS, buildArcRun, buildCharacterArc, createArc, setCharacterDevelopment, type BuildArcRunResponse, type BuildCharacterArcResponse, type StopConflict, createInformation, listCardQuestions, setKnowledge, tagArcInvolvesCharacter, tagEventEvokes, unlinkInformation, untagArcInvolvesCharacter, untagEventEvokes, setSequenceColor, tagEventInvolvesCharacter, tagEventOccursIn, tagSequenceContains, untagEventInvolvesCharacter, untagEventOccursIn, untagSequenceContains, updateArc, updateCardDescription, updateEventSubEvents, updateRelationshipKind, type ArcKind, type EvokesTransition, type NarrativeStatus, type PersistedQuestion, type ProjectEdges, type ProjectEntity, type ProjectInformation, type SubEvent } from '../../../lib/freeformApi';
-import { OrbitSheet } from './orbit';
+import { OrbitSheet, type OrbitItem } from './orbit';
+import type { SandboxFragment, WorldEntry } from '../../../lib/freeformApi';
+import { stickyPaper } from './sandbox';
+import { ColorDot, colorIn } from './storylineLabels';
+import type { LabelSet } from '../../../lib/freeformApi';
+
 import InternIcon from '../InternIcon';
 import { toldOrderEvents } from './connectors';
 // The bento surface it replaced still lives in ./bento (and still owns
@@ -12,6 +17,7 @@ import { toldOrderEvents } from './connectors';
 // is re-importing BentoSheet and its layout builder. (FIL-588)
 import { type SectionTileDef } from './bento';
 import { EditableDescription, EditableName, NarrativeStatusToggle } from './cards';
+import { plainOf } from './richText';
 import { ARC_THREAD_PALETTE } from './connectors';
 import { ArcEvokesEditor, ArcInvolvesEditor, EdgeChips, EstablishedHereEditor, EventEvokesEditor, EventThroughlineEditor, EvokesArcControls, InlineText, KnowledgeEditor, KnowledgeFactBuckets, type ChipCandidate } from './editors';
 import { arcKindLabel, narrativeStatusBg, narrativeStatusFg, narrativeStatusLabel } from './labels';
@@ -19,6 +25,70 @@ import { OpenQuestionsPanel, PeerReadProse, QuestionComposer, miniActionBtn, use
 import { createWriterQuestion } from '../../../lib/freeformApi';
 import { topoSortByPrecedes, type CardSignal } from './signals';
 import { liftColor, useThemeMode } from './theme';
+
+/** FIL-653 / anchor section 7, "before the story": the world entries that
+ *  touch this character (history that happened to them, a rule they live
+ *  under, a faction they belong to), each a door to the entry. Intent until a
+ *  scene on the page establishes it. Omitted when none. */
+function worldTilesFor(world: WorldEntry[] | undefined, cardId: string, dark: boolean, onOpen: (id: string) => void): SectionTileDef[] {
+  const list = (world ?? []).filter((w) => (w.touches ?? []).some((t) => t.id === cardId));
+  if (!list.length) return [];
+  const green = '#8bbf7a';
+  const items: OrbitItem[] = list.map((w) => ({
+    id: w.id,
+    kicker: `world · ${w.kind}`,
+    title: w.title,
+    body: w.text,
+    bodySerif: true,
+    accent: green,
+    shape: 'note' as const,
+    tag: w.establishedIn.length ? 'on the page' : 'intent',
+    tagColor: w.establishedIn.length ? green : (dark ? '#9a9aa4' : '#888'),
+    onOpen: () => onOpen(w.id),
+  }));
+  return [{
+    id: 'before-the-story', label: 'Before the story', accent: green, defaultW: 2,
+    summary: `${list.length}`,
+    hint: 'What is true of this character off the page: history, rules, factions. Intent until a scene establishes it.',
+    items,
+    content: (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {list.map((w) => <div key={w.id} style={{ fontSize: 12.5, lineHeight: 1.4 }}><b>{w.title}</b> · {w.kind}{w.establishedIn.length ? '' : ' · intent'}</div>)}
+      </div>
+    ),
+  }];
+}
+
+/** FIL-644 / anchor section 8: stickies hang on the card vertex, so the sheet
+ *  shows them as one more satellite category with nothing extra built. Empty
+ *  when the card has none (the category is omitted, not shown empty). */
+function stickyTilesFor(fragments: SandboxFragment[] | undefined, cardId: string, dark: boolean): SectionTileDef[] {
+  const list = (fragments ?? []).filter((f) => f.open && f.attachedTo === cardId);
+  if (!list.length) return [];
+  const items: OrbitItem[] = list.map((f) => {
+    const p = stickyPaper(f);
+    return {
+      id: f.id,
+      kicker: f.label || 'sticky',
+      title: f.text,
+      body: f.source && f.source.trim() !== f.text.trim() ? `“${f.source}”` : undefined,
+      bodySerif: true,
+      accent: dark ? p.glow : (f.kind === 'note' ? '#c97b86' : f.kind === 'story' ? '#8bbf7a' : f.kind === 'dialogue' ? '#6b9bd1' : '#d4a92a'),
+      shape: 'note' as const,
+    };
+  });
+  return [{
+    id: 'stickies', label: 'Stickies', accent: '#d4a92a', defaultW: 2,
+    summary: `${list.length} ${list.length === 1 ? 'sticky' : 'stickies'}`,
+    hint: 'What dumps left on this card, in your words. Edit them on the sandbox board.',
+    items,
+    content: (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {list.map((f) => <div key={f.id} style={{ fontSize: 12.5, lineHeight: 1.4 }}>{f.text}</div>)}
+      </div>
+    ),
+  }];
+}
 
 // =====================================================================
 // CharacterSheet — level-3 full character view. Full-screen overlay.
@@ -40,12 +110,19 @@ export function CharacterSheet({
   onClose,
   onEntitiesChanged,
   onOpenCard,
+  fragments,
+  world,
 }: {
   entity: ProjectEntity;
   signal: CardSignal;
   allEntities: ProjectEntity[];
   /** Facts, for the per-scene "learns" row (direct at_event knowledge only). */
   information?: ProjectInformation[];
+  /** The board read's stickies; the ones on this card become a category. */
+  fragments?: SandboxFragment[];
+  /** The board read's world entries; the ones touching this character become
+   *  "Before the story" (FIL-653). */
+  world?: WorldEntry[];
   edges: ProjectEdges;
   precedesEdges: Array<{ from: string; to: string }>;
   auth: { userId: string; token: string };
@@ -58,6 +135,8 @@ export function CharacterSheet({
   const dark = useThemeMode() === 'dark';
   const [questions, setQuestions] = useState<PersistedQuestion[] | null>(null);
 
+  const stickyTiles = stickyTilesFor(fragments, entity.id, dark);
+  const worldTiles = worldTilesFor(world, entity.id, dark, onOpenCard);
   const refetchQuestions = useCallback(async () => {
     try {
       const res = await listCardQuestions(
@@ -335,6 +414,7 @@ export function CharacterSheet({
               plain paragraph while the scene's equivalent was an InlineText,
               so the hint was a lie on this sheet only. */}
           <InlineText
+            paper
             value={entity.description ?? ''}
             placeholder="Who is this character…"
             style={{ marginBottom: 12, fontFamily: NOTE_FONT_SERIF, fontSize: 14.5, lineHeight: 1.6 }}
@@ -587,7 +667,7 @@ export function CharacterSheet({
       ),
       items: orderedAppearsIn.map((ev, runIdx) => {
         const full = eventsById.get(ev.id);
-        const summary = String(full?.summary ?? '').trim();
+        const summary = plainOf(String(full?.summary ?? '')).trim();
         const subEvents = full?.sub_events ?? [];
         const n = sceneNoById.get(ev.id);
         const status = String(ev.narrative_status ?? '');
@@ -994,9 +1074,12 @@ export function CharacterSheet({
   // builder happens to emit. Anything omitted is still built; adding its id
   // here brings it back. (FIL-588)
   const CHAR_ORBIT_TILES = ['identity', 'appears-in', 'relationships', 'knowledge', 'working', 'arcs'];
-  const orderedTiles = CHAR_ORBIT_TILES
-    .map((id) => tiles.find((t) => t.id === id))
-    .filter((t): t is SectionTileDef => !!t);
+  const orderedTiles = [
+    ...CHAR_ORBIT_TILES.slice(0, 2).map((id) => tiles.find((t) => t.id === id)).filter((t): t is SectionTileDef => !!t),
+    ...worldTiles, // scenes on the page, then what happened before it
+    ...CHAR_ORBIT_TILES.slice(2).map((id) => tiles.find((t) => t.id === id)).filter((t): t is SectionTileDef => !!t),
+    ...stickyTiles,
+  ];
 
   return (
     <div
@@ -1080,6 +1163,8 @@ export function SequenceSheet({
   onEntitiesChanged,
   onOpenCard,
   onUpdateDescription,
+  onToScene,
+  sandbox,
 }: {
   entity: ProjectEntity;
   allEntities: ProjectEntity[];
@@ -1091,6 +1176,12 @@ export function SequenceSheet({
   onEntitiesChanged: () => void;
   onOpenCard: (cardId: string) => void;
   onUpdateDescription: (d: string) => void;
+  /** FIL-709 (sandbox): put the sequence on the board as a scene. */
+  onToScene?: () => void;
+  /** FIL-720: opened from the sandbox strip. The sheet wears the sequence's
+   *  strip colour and number on paper, picks colours from the strip's palette,
+   *  and leaves out the master's Peer (the sandbox Peer comes with FIL-712). */
+  sandbox?: { color: string; number: number; palette: string[] };
 }) {
   const dark = useThemeMode() === 'dark';
   const [questions, setQuestions] = useState<PersistedQuestion[] | null>(null);
@@ -1132,7 +1223,7 @@ export function SequenceSheet({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const color = getEntityColor('sequence');
+  const color = sandbox ? (dark ? liftColor(sandbox.color, 0.3) : sandbox.color) : getEntityColor('sequence');
   const byId = useMemo(() => new Map(allEntities.map((e) => [e.id, e])), [allEntities]);
 
   // The story's scene numbers, ranked against the WHOLE spine — a scene is
@@ -1185,11 +1276,18 @@ export function SequenceSheet({
           />
           <SequenceColorRow
             sequenceId={entity.id}
-            current={entity.color}
+            current={sandbox ? sandbox.color : entity.color}
             auth={auth}
             projectId={projectId}
             onChanged={onEntitiesChanged}
+            palette={sandbox?.palette}
           />
+          {onToScene && !sandbox && (
+            <button type="button" data-seq-to-scene onClick={onToScene}
+              style={{ marginTop: 10, font: 'inherit', fontSize: 12, fontWeight: 600, padding: '5px 12px', borderRadius: 999, cursor: 'pointer', border: `1px solid ${dark ? '#3a3a42' : '#ddd8cc'}`, background: 'transparent', color: dark ? '#dcdce2' : '#333' }}>
+              Put it on the board as a scene
+            </button>
+          )}
         </div>
       ),
     },
@@ -1203,9 +1301,11 @@ export function SequenceSheet({
       defaultExpanded: true,
       layout: 'throughline',
       summary: `${memberScenes.length}`,
-      hint: "The scenes this sequence contains, in told order. Empty means it's still broad — the peer's decomposition questions turn it into scenes.",
+      hint: sandbox
+        ? 'The scenes in this sequence, in story order. To add or take one out, open the sequence in the strip and click scenes on the board.'
+        : "The scenes this sequence contains, in told order. Empty means it's still broad — the peer's decomposition questions turn it into scenes.",
       items: memberScenes.map((ev) => {
-        const summary = String(ev.summary ?? ev.description ?? '').trim();
+        const summary = plainOf(String(ev.summary ?? ev.description ?? '')).trim();
         const isBackstory = String(ev.narrative_status ?? '') === 'backstory';
         return {
           id: ev.id,
@@ -1246,7 +1346,9 @@ export function SequenceSheet({
       }),
       content: memberScenes.length === 0 ? (
         <p style={{ fontSize: 12.5, lineHeight: 1.55, color: dark ? '#9a9aa2' : '#777', margin: 0 }}>
-          No scenes yet. This is still a broad movement. Ask the peer to help you break it into the scenes inside it.
+          {sandbox
+            ? 'No scenes yet. Open the sequence in the strip and click scenes on the board to add them, or use + scene there.'
+            : 'No scenes yet. This is still a broad movement. Ask the peer to help you break it into the scenes inside it.'}
         </p>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -1383,30 +1485,40 @@ export function SequenceSheet({
   const orderedTiles = [
     ...SEQ_TILE_ORDER.map((id) => tiles.find((t) => t.id === id)).filter((t): t is SectionTileDef => !!t),
     ...tiles.filter((t) => !SEQ_TILE_ORDER.includes(t.id)),
-  ];
+  ].filter((t) => !(sandbox && t.id === 'working'));
+  // The sandbox's paper (FIL-720): the board's warm white and its dark card tone.
+  const pageBg = sandbox ? (dark ? '#121215' : '#f6f1e6') : (dark ? '#101013' : '#fafafa');
+  const headBg = sandbox ? (dark ? '#1e1e22' : '#fffdf7') : (dark ? '#1a1a1e' : '#fff');
 
   return (
     <div
       style={{
-        position: 'fixed', inset: 0, background: dark ? '#101013' : '#fafafa',
+        position: 'fixed', inset: 0, background: pageBg,
         zIndex: 200, display: 'flex', flexDirection: 'column', fontFamily: 'system-ui, sans-serif',
       }}
+      data-sequence-sheet={sandbox ? 'sandbox' : undefined}
     >
       <div
         style={{
-          padding: '16px 28px', background: dark ? '#1a1a1e' : '#fff',
+          padding: '16px 28px', background: headBg,
           borderBottom: `3px solid ${dark ? hexToRgba(liftColor(color, 0.2), 0.55) : color}`,
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexShrink: 0,
         }}
       >
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
-          <span style={{ fontSize: 10, letterSpacing: 0.6, textTransform: 'uppercase', color, fontWeight: 600 }}>
-            SEQUENCE
+          <span data-sheet-kicker style={{ fontSize: 10, letterSpacing: 0.6, textTransform: 'uppercase', color, fontWeight: 600 }}>
+            {sandbox ? `Sequence ${sandbox.number}` : 'SEQUENCE'}
           </span>
           <span style={{ fontSize: 22, fontWeight: 500, color: dark ? '#e6e6ea' : '#1a1a1a', lineHeight: 1 }}>
             {entity.working_title ?? entity.working_name ?? entity.id}
           </span>
         </div>
+        {sandbox && onToScene && (
+          <button type="button" data-seq-to-scene onClick={onToScene}
+            style={{ marginLeft: 'auto', font: 'inherit', fontSize: 12, fontWeight: 600, padding: '5px 12px', borderRadius: 999, cursor: 'pointer', border: `1px solid ${dark ? '#3a3a42' : '#ddd8cc'}`, background: 'transparent', color: dark ? '#dcdce2' : '#333' }}>
+            Put it on the board as a scene
+          </button>
+        )}
         <button
           onClick={onClose}
           style={{ background: 'transparent', border: 'none', fontSize: 20, color: dark ? '#82828c' : '#888', cursor: 'pointer', padding: 4 }}
@@ -2530,12 +2642,25 @@ export function EventSheet({
   onEntitiesChanged,
   onChangeNarrativeStatus,
   onOpenCard,
+  fragments,
+  labelSet,
+  onSetColor,
+  colorSetId,
+  paintSetId,
 }: {
   entity: ProjectEntity;
   signal: CardSignal;
   allEntities: ProjectEntity[];
   edges: ProjectEdges;
   information: ProjectInformation[];
+  /** The board read's stickies; the ones on this card become a category. */
+  fragments?: SandboxFragment[];
+  /** Card colour (2026-10-09): the names per colour, and the pick for this scene. */
+  labelSet?: LabelSet;
+  onSetColor?: (color: string) => void;
+  /** FIL-707: the set the dot edits and the set that paints; both default to the first set. */
+  colorSetId?: string;
+  paintSetId?: string;
   auth: { userId: string; token: string };
   projectId: string;
   completedResponseIds: Set<string>;
@@ -2547,6 +2672,7 @@ export function EventSheet({
   const dark = useThemeMode() === 'dark';
   const [questions, setQuestions] = useState<PersistedQuestion[] | null>(null);
 
+  const stickyTiles = stickyTilesFor(fragments, entity.id, dark);
   const refetchQuestionsRef = useRef<(() => void) | null>(null);
   const refetchQuestions = useCallback(async () => {
     try {
@@ -2571,7 +2697,7 @@ export function EventSheet({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const color = getEntityColor('event');
+  const color = colorIn(entity, paintSetId) ?? getEntityColor('event');
   // Authoritative edge data lives in `edges.*` (from = this event's id), NOT in
   // the stale `entity.involves`/`entity.occurs_in` name-arrays the old read-only
   // renderer used (same unreliable class as entity.precedes — see below).
@@ -2754,6 +2880,7 @@ export function EventSheet({
             </span>
           </div>
           <InlineText
+            paper
             value={entity.summary ?? ''}
             placeholder="Add a summary…"
             // The peer's serif: this is the scene in its own words, and it
@@ -3260,6 +3387,7 @@ export function EventSheet({
             value={(entity.narrative_status as NarrativeStatus) ?? 'on_screen'}
             onChange={onChangeNarrativeStatus}
           />
+          {onSetColor && <ColorDot value={colorIn(entity, colorSetId)} set={labelSet} dark={dark} onPick={onSetColor} size={14} />}
         </div>
         <button
           onClick={onClose}
@@ -3281,7 +3409,7 @@ export function EventSheet({
           of the sheet the tallest thing on it. */}
       <div style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
         <OrbitSheet
-          tiles={EVENT_ORBIT_TILES.map((id) => tiles.find((t) => t.id === id)).filter((t): t is SectionTileDef => !!t)}
+          tiles={[...EVENT_ORBIT_TILES.map((id) => tiles.find((t) => t.id === id)).filter((t): t is SectionTileDef => !!t), ...stickyTiles]}
           focalTileIds={['summary']}
           focalAccent={color}
           focalCardId={entity.id}
@@ -4023,12 +4151,15 @@ export function ArcColorRow({
   auth,
   projectId,
   onChanged,
+  palette,
 }: {
   arcId: string;
   current?: string;
   auth: { userId: string; token: string };
   projectId: string;
   onChanged: () => void;
+  /** FIL-711 (sandbox): the strip's colours. */
+  palette?: string[];
 }) {
   const dark = useThemeMode() === 'dark';
   const [busy, setBusy] = useState(false);
@@ -4048,10 +4179,10 @@ export function ArcColorRow({
   return (
     <div style={{ marginBottom: 12 }}>
       <div style={{ fontSize: 10, letterSpacing: 0.5, textTransform: 'uppercase', color: dark ? '#82828c' : '#888', fontWeight: 600, marginBottom: 6 }}>
-        Thread color
+        {palette ? 'Color' : 'Thread color'}
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 7, opacity: busy ? 0.5 : 1 }}>
-        {ARC_THREAD_PALETTE.map((c) => {
+        {(palette ?? ARC_THREAD_PALETTE).map((c) => {
           const active = sel === c.toLowerCase();
           return (
             <button
@@ -4095,12 +4226,15 @@ export function SequenceColorRow({
   auth,
   projectId,
   onChanged,
+  palette,
 }: {
   sequenceId: string;
   current?: string;
   auth: { userId: string; token: string };
   projectId: string;
   onChanged: () => void;
+  /** FIL-720 (sandbox): the strip's colours instead of the master's container palette; no default swatch. */
+  palette?: string[];
 }) {
   const dark = useThemeMode() === 'dark';
   const [busy, setBusy] = useState(false);
@@ -4120,15 +4254,16 @@ export function SequenceColorRow({
   return (
     <div style={{ marginTop: 12 }}>
       <div style={{ fontSize: 10, letterSpacing: 0.5, textTransform: 'uppercase', color: dark ? '#82828c' : '#888', fontWeight: 600, marginBottom: 6 }}>
-        Container color
+        {palette ? 'Color' : 'Container color'}
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 7, opacity: busy ? 0.5 : 1 }}>
-        {SEQUENCE_PALETTE.map((c) => {
-          const active = sel === c.toLowerCase() || (sel === '' && c === '#22c55e');
+        {(palette ?? SEQUENCE_PALETTE).map((c) => {
+          const active = palette ? sel === c.toLowerCase() : sel === c.toLowerCase() || (sel === '' && c === '#22c55e');
           return (
             <button
               key={c}
-              onClick={() => pick(c === '#22c55e' ? '' : c)}
+              data-seq-color={c}
+              onClick={() => pick(!palette && c === '#22c55e' ? '' : c)}
               title={c}
               aria-label={`Set sequence color ${c}`}
               style={{
@@ -4279,6 +4414,7 @@ export function ArcSheet({
   onOpenCard,
   onEntitiesChanged,
   onTagScenes,
+  sandbox,
 }: {
   entity: ProjectEntity;
   signal: CardSignal;
@@ -4297,6 +4433,11 @@ export function ArcSheet({
    *  pickable, Accept writes the EVOKES tags and returns here (Ben
    *  2026-09-01). Absent on hosts without the wall (the script page). */
   onTagScenes?: () => void;
+  /** FIL-720/711: opened from the sandbox strip as a Subplot. Its strip colour
+   *  on paper, its path in story order with the missing "resolves" step, the
+   *  strip's colours; no master Peer tile and no run button (both read the
+   *  master's board, without the sandbox's scenes). */
+  sandbox?: { color: string; palette: string[]; path: Array<{ id: string; title: string; transition: string }> };
 }) {
   const dark = useThemeMode() === 'dark';
   useEffect(() => {
@@ -4341,7 +4482,7 @@ export function ArcSheet({
     (byStatus[q.status] ??= []).push(q);
   }
 
-  const color = getEntityColor('arc');
+  const color = sandbox ? (dark ? liftColor(sandbox.color, 0.3) : sandbox.color) : getEntityColor('arc');
   const kind = (entity.kind as ArcKind | undefined) ?? undefined;
   const evokes = signal.evokesEntries ?? [];
 
@@ -4443,21 +4584,42 @@ export function ArcSheet({
   const tiles: SectionTileDef[] = [
     {
       id: 'identity', label: 'Summary', accent: color, defaultExpanded: true,
-      hint: "The arc's name, description, color, and any former names.",
+      hint: sandbox ? "The subplot's words, its path through the scenes, and its color." : "The arc's name, description, color, and any former names.",
       content: (
         <div>
+          {sandbox && (
+            <div data-subplot-path style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 10, letterSpacing: 0.5, textTransform: 'uppercase', color: dark ? '#82828c' : '#888', fontWeight: 600, marginBottom: 6 }}>Path</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                {sandbox.path.map((st) => (
+                  <button key={st.id} type="button" data-path-step={st.transition} onClick={() => onOpenCard(st.id)}
+                    style={{ display: 'flex', alignItems: 'baseline', gap: 8, textAlign: 'left', border: 'none', background: 'transparent', padding: 0, cursor: 'pointer', font: 'inherit', color: dark ? '#dcdce2' : '#333' }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color, minWidth: 82 }}>{st.transition || 'touches'}</span>
+                    <span style={{ fontSize: 12.5 }}>{st.title}</span>
+                  </button>
+                ))}
+                {!sandbox.path.some((st) => st.transition === 'resolves') && (
+                  <div data-path-missing style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '4px 8px', marginLeft: -8, border: `1px dashed ${dark ? '#4a4a52' : '#cfc6b2'}`, borderRadius: 6 }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: dark ? '#82828c' : '#999', minWidth: 82 }}>resolves</span>
+                    <span style={{ fontSize: 12.5, color: dark ? '#82828c' : '#999', fontStyle: 'italic' }}>Not on the board yet</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
           <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 10, letterSpacing: 0.5, textTransform: 'uppercase', color: dark ? '#82828c' : '#888', fontWeight: 600, marginBottom: 4 }}>
               Description
             </div>
-            <EditableDescription value={entity.description ?? ''} onSave={onUpdateDescription} placeholder="What this arc is about…" />
+            <EditableDescription value={entity.description ?? ''} onSave={onUpdateDescription} placeholder={sandbox ? 'What this subplot is about' : 'What this arc is about…'} />
           </div>
           <ArcColorRow
             arcId={entity.id}
-            current={entity.color}
+            current={sandbox ? sandbox.color : entity.color}
             auth={auth}
             projectId={projectId}
             onChanged={onEntitiesChanged}
+            palette={sandbox?.palette}
           />
           {entity.evidence_quote && (
             <blockquote style={{ margin: '0 0 12px', paddingLeft: 10, borderLeft: `2px solid ${hexToRgba(color, 0.3)}`, fontSize: 11, color: dark ? '#8e8e98' : '#777', fontStyle: 'italic', lineHeight: 1.5 }}>
@@ -4481,7 +4643,7 @@ export function ArcSheet({
       // A rail, not a ring: what these cards have to say is that one comes
       // after another. Same cascade as a character's scenes, same ladder.
       layout: 'throughline',
-      stageHeader: (
+      stageHeader: sandbox ? undefined : (
         <BuildRunHeader
           dark={dark}
           busy={arcPassBusy}
@@ -4806,14 +4968,14 @@ export function ArcSheet({
   return (
     <div
       style={{
-        position: 'fixed', inset: 0, background: dark ? '#101013' : '#fafafa', zIndex: 200,
+        position: 'fixed', inset: 0, background: sandbox ? (dark ? '#121215' : '#f6f1e6') : (dark ? '#101013' : '#fafafa'), zIndex: 200,
         display: 'flex', flexDirection: 'column',
         fontFamily: 'system-ui, sans-serif',
       }}
     >
       <div
         style={{
-          padding: '16px 28px', background: dark ? '#1a1a1e' : '#fff',
+          padding: '16px 28px', background: sandbox ? (dark ? '#1e1e22' : '#fffdf7') : (dark ? '#1a1a1e' : '#fff'),
           borderBottom: `3px solid ${dark ? hexToRgba(liftColor(color, 0.2), 0.55) : color}`,
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           gap: 16, flexShrink: 0,
@@ -4826,7 +4988,7 @@ export function ArcSheet({
               color, fontWeight: 600,
             }}
           >
-            ARC
+            {sandbox ? 'SUBPLOT' : 'ARC'}
           </span>
           <div style={{ flex: 1, minWidth: 0 }}>
             <EditableName
@@ -4836,7 +4998,7 @@ export function ArcSheet({
               marginBottom={0}
             />
           </div>
-          {kind && (
+          {kind && !sandbox && (
             <span
               style={{
                 fontSize: 10, padding: '3px 8px',
@@ -4849,7 +5011,7 @@ export function ArcSheet({
               {arcKindLabel(kind)}
             </span>
           )}
-          {signal.arcStatusLabel && (
+          {signal.arcStatusLabel && !sandbox && (
             <span style={{ fontSize: 12, color: dark ? '#9a9aa4' : '#666', fontStyle: 'italic' }}>
               {signal.arcStatusLabel}
             </span>
@@ -4870,7 +5032,7 @@ export function ArcSheet({
 
       {/* Bento section tiles */}
       <div style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
-        <OrbitSheet tiles={tiles} focalTileIds={['identity']} defaultCategoryId="timeline" focalAccent={color} focalCardId={entity.id} auth={auth} projectId={projectId} persistKey={`arc:${entity.id}`} />
+        <OrbitSheet tiles={sandbox ? tiles.filter((t) => t.id !== 'working') : tiles} focalTileIds={['identity']} defaultCategoryId={sandbox ? 'involves' : 'timeline'} focalAccent={color} focalCardId={entity.id} auth={auth} projectId={projectId} persistKey={sandbox ? `subplot:${entity.id}` : `arc:${entity.id}`} />
       </div>
       {/* Empty timeline: the tagging pill, bottom-center (Ben 2026-09-01) —
           opens the wall in arc-select mode instead of an in-tile picker. */}

@@ -18,6 +18,7 @@
  */
 
 import React, { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { Editor } from "@tiptap/react";
 
 const SLUGLINE_OPTIONS: string[] = ["INT.", "EXT.", "INT./EXT.", "EXT./INT."];
@@ -69,6 +70,9 @@ const SluglineAutoFill = ({ editor, getEditors, locationNames }: SluglineAutoFil
   const [currentNodePos, setCurrentNodePos] = useState<number | null>(null);
   const [currentStage, setCurrentStage] = useState<StageType>("none");
   const lockRef = useRef(false);
+  const openedRef = useRef(false);
+  // The line last written in: a caret move that stays on it keeps its list.
+  const editedAtRef = useRef<number | null>(null);
   const [currentFilter, setCurrentFilter] = useState("");
 
   // Refs so event handlers read the freshest sources without re-binding.
@@ -170,7 +174,10 @@ const SluglineAutoFill = ({ editor, getEditors, locationNames }: SluglineAutoFil
     }
   };
 
-  const processNodeState = () => {
+  /** Why the line is being looked at: the editor just opened, the caret
+   *  moved, or the words changed. (2026-10-15, Ben: the INT./EXT. list
+   *  should not greet you when a draft opens; it waits for you to write.) */
+  const processNodeState = (why: "open" | "move" | "edit" = "edit") => {
     if (!editor || lockRef.current) return;
 
     const { state } = editor.view;
@@ -181,6 +188,7 @@ const SluglineAutoFill = ({ editor, getEditors, locationNames }: SluglineAutoFil
     if (pos !== currentNodePos) {
       setCurrentNodePos(pos);
     }
+    if (why === "edit") editedAtRef.current = pos;
 
     if (node.attrs.lineType !== "scene") {
       setShowDropdown(false);
@@ -194,8 +202,14 @@ const SluglineAutoFill = ({ editor, getEditors, locationNames }: SluglineAutoFil
     switch (stage) {
       case "none": {
         const locationFiltered = filterOptions(SLUGLINE_OPTIONS, filter);
-        // Show INT./EXT. options while nothing (or a prefix fragment) is typed.
+        // Show INT./EXT. options while nothing (or a prefix fragment) is typed,
+        // but an empty heading offers them only once the writer has typed or
+        // made the line, not merely by being where the caret landed.
         const opts = filter ? locationFiltered : SLUGLINE_OPTIONS;
+        if (why === "open" || (!filter && why === "move" && editedAtRef.current !== pos)) {
+          setShowDropdown(false);
+          break;
+        }
         if (opts.length > 0) {
           setFilteredOptions(opts);
           setActiveIndex(0);
@@ -243,16 +257,21 @@ const SluglineAutoFill = ({ editor, getEditors, locationNames }: SluglineAutoFil
 
   useEffect(() => {
     if (!editor) return;
-    const updateHandler = () => {
-      processNodeState();
+    const onEdit = () => {
+      processNodeState("edit");
       updateDropdownPosition();
     };
-    editor.on("update", updateHandler);
-    editor.on("selectionUpdate", updateHandler);
-    processNodeState();
+    const onMove = () => {
+      processNodeState("move");
+      updateDropdownPosition();
+    };
+    editor.on("update", onEdit);
+    editor.on("selectionUpdate", onMove);
+    // First look: the line is read, nothing is offered yet.
+    if (!openedRef.current) { openedRef.current = true; processNodeState("open"); }
     return () => {
-      editor.off("update", updateHandler);
-      editor.off("selectionUpdate", updateHandler);
+      editor.off("update", onEdit);
+      editor.off("selectionUpdate", onMove);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, currentNodePos, currentStage, currentFilter]);
@@ -400,7 +419,12 @@ const SluglineAutoFill = ({ editor, getEditors, locationNames }: SluglineAutoFil
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showDropdown, filteredOptions, activeIndex, editor, currentStage, currentFilter]);
 
-  return (
+  // In a portal at the page's top level: position:fixed inside a transformed
+  // ancestor (the sandbox draft sits in a moved card) is fixed to THAT
+  // ancestor, not the window, and the list landed away from the caret
+  // (2026-10-15). At the top level the caret's window coordinates hold.
+  if (typeof document === "undefined") return null;
+  return createPortal(
     <>
       {showDropdown && filteredOptions.length > 0 && (
         <div
@@ -438,7 +462,8 @@ const SluglineAutoFill = ({ editor, getEditors, locationNames }: SluglineAutoFil
           ))}
         </div>
       )}
-    </>
+    </>,
+    document.body
   );
 };
 

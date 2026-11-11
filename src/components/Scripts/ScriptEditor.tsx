@@ -50,10 +50,10 @@ const InlineAIDecorations = Extension.create({
 interface ScriptEditorProps {
   onEditorReady: (editor: Editor) => void;
   editorTheme: "dark" | "light";
-  onThemeToggle: () => void;
+  onThemeToggle?: () => void;
   isGenerating: boolean;
   isFullscreen: boolean;
-  onFullscreen: () => void;
+  onFullscreen?: () => void;
   onMinimize: () => void;
   onScenePositionsUpdate: (positions: ScenePosition[]) => void;
   /** Called when the user explicitly triggers a save (toolbar button / Ctrl+S) */

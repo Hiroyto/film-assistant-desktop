@@ -14,6 +14,12 @@ export const ThemeCtx = createContext<ThemeMode>('dark');
 export const useThemeMode = () => useContext(ThemeCtx);
 
 export const THEME_STORE_KEY = 'ff-theme';
+/** The writer's stored theme, light when none is stored (FIL-701, Philip
+ *  2026-09-22 and again 2026-10-30: "writers are used to white"; a writer
+ *  who chose dark keeps it). */
+export function storedTheme(): 'light' | 'dark' {
+  try { return localStorage.getItem(THEME_STORE_KEY) === 'dark' ? 'dark' : 'light'; } catch { return 'light'; }
+}
 
 // ScenesCanvas's brand orange (connector glow, grid dots).
 export const DARK_ORANGE = '#ff6b35';

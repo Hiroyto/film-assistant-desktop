@@ -196,6 +196,7 @@ export function StagedRow({
   onPlaceDragStart,
   onPlaceDragEnd,
   onConfirmSlot,
+  onPark,
   sourceProse,
   dark,
 }: {
@@ -203,6 +204,9 @@ export function StagedRow({
   expanded: boolean;
   onToggle: () => void;
   onAnswer: (answer: 'merge' | 'keep' | 'convert' | 'replace') => void;
+  /** FIL-641: the third answer on a held card. It keeps its card and its
+   *  stickies and goes to the sandbox instead of being deleted. */
+  onPark?: () => void;
   onOpenCard: (cardId: string) => void;
   /** Spine drop: dragging an unplaced row opens the placement grid; its
    *  gutters are the drop slots. Fired deferred (see handler). */
@@ -733,6 +737,13 @@ export function StagedRow({
               </button>
             </HoverTip>
           )}
+          {onPark && row.held && row.questionType === 'unplaced' && (
+            <HoverTip dark={dark} tip="Keep the card and its stickies on the sandbox board, off the master, to work on later.">
+              <button onClick={onPark} style={{ ...btnBase, background: 'transparent', color: dark ? '#e8e8ec' : '#333', border: `1px solid ${dark ? '#2e2e36' : '#e4e4ea'}` }}>
+                Send to sandbox
+              </button>
+            </HoverTip>
+          )}
           <span style={{ fontSize: 10.5, color: quiet, marginLeft: 'auto', whiteSpace: 'nowrap' }}>
             {canDragPlace ? 'drag it into the story, or leave it here' : 'or leave it for later'}
           </span>
@@ -843,6 +854,7 @@ export function RightPanel({
   onPlaceDragStart,
   onPlaceDragEnd,
   onConfirmSlot,
+  onPark,
   hidden,
   onOpenCard,
   onEntitiesChanged,
@@ -863,6 +875,8 @@ export function RightPanel({
   onPlaceDragEnd?: () => void;
   /** Order ask: confirm the slot a live member scene currently renders in. */
   onConfirmSlot?: (cardId: string) => void;
+  /** FIL-641: send a held card to the sandbox. */
+  onPark?: (cardId: string) => void;
   /** Kept MOUNTED but invisible while the drag is live: unmounting the drag
    *  source mid-drag swallows dragend in Chrome. */
   hidden?: boolean;
@@ -1087,6 +1101,7 @@ export function RightPanel({
                     onAnswer={(answer) => answerAndAdvance(row.cardId, answer)}
                     onOpenCard={onOpenCard}
                     onPlaceDragStart={onPlaceDragStart ? () => onPlaceDragStart(row.cardId) : undefined}
+                    onPark={onPark ? () => onPark(row.cardId) : undefined}
                     onConfirmSlot={onConfirmSlot ? () => onConfirmSlot(row.cardId) : undefined}
                     onPlaceDragEnd={onPlaceDragEnd}
                     sourceProse={(

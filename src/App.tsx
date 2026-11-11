@@ -38,6 +38,8 @@ import { fetchUserAttributes, fetchAuthSession, AuthSession, JWT } from 'aws-amp
 import { FetchUserAttributesOutput } from 'aws-amplify/auth';
 import type { WithAuthenticatorProps } from '@aws-amplify/ui-react';
 import { withAuthenticator } from '@aws-amplify/ui-react';
+import ConsentBanner from './components/ConsentBanner';
+import AttributionSync from './components/AttributionSync';
 import { useAuthenticator, Authenticator } from '@aws-amplify/ui-react';
 import { BrowserRouter, HashRouter, Routes, Route, useLocation, Navigate } from 'react-router-dom';
 import MobileGuard, { isPhoneDevice } from './components/MobileGuard';
@@ -67,6 +69,7 @@ import Scenes from './components/scenes';
 import FreeformDemo from './pages/app/freeform-demo';
 import FreeformCorkboard from './pages/app/freeform-corkboard';
 import FreeformScript from './pages/app/freeform-script';
+import FreeformSandbox from './pages/app/freeform-sandbox';
 import HomePage from './components/HomePage';
 import { AIModelProvider } from './components/AIModelContext';
 import { GlobalErrorModal } from './components/Error/GlobalErrorModal';
@@ -326,6 +329,16 @@ function App() {
   return (
     <Router>
       <AppContent />
+      {/* FIL-621 (web only): cookie choices (denied by default) and attribution at
+          sign-in. The desktop loads no trackers — web-analytics.js skips itself in
+          the shell and the CSP blocks remote scripts — so inside the app there is
+          nothing to consent to and nothing to attribute. */}
+      {!isDesktop() && (
+        <>
+          <ConsentBanner />
+          <AttributionSync />
+        </>
+      )}
     </Router>
   );
 }
@@ -2078,6 +2091,14 @@ function AppContent() {
                 <Route path="/freeform/:storyId/script" element={
                   <ProtectedRoute>
                     <FreeformScript />
+                  </ProtectedRoute>
+                } />
+                {/* The sandbox board (FIL-641): parked cards and loose stickies,
+                    the dock on it. Behind the ff-sandbox flag on the corkboard;
+                    the route itself is open so a direct link works. */}
+                <Route path="/freeform/:storyId/sandbox" element={
+                  <ProtectedRoute>
+                    <FreeformSandbox />
                   </ProtectedRoute>
                 } />
 

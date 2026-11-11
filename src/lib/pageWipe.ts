@@ -10,7 +10,7 @@
 //
 // The ghost carries a light horizontal-only blur while moving (motion blur);
 // the incoming page stays crisp — it's what the writer reads on landing.
-import { THEME_STORE_KEY } from '../components/Freeform/corkboard/theme';
+import { storedTheme } from '../components/Freeform/corkboard/theme';
 
 const DURATION_MS = 340;
 const EASING = 'cubic-bezier(0.3, 0.6, 0.2, 1)';
@@ -23,8 +23,7 @@ export function playPageWipe(direction: 'right' | 'left', navigate: () => void):
   if (running || !root) { navigate(); return; }
   running = true;
 
-  let dark = true;
-  try { dark = (localStorage.getItem(THEME_STORE_KEY) ?? 'dark') !== 'light'; } catch { /* default dark */ }
+  const dark = storedTheme() === 'dark';
 
   // out = where the outgoing page exits; the incoming page enters from the
   // opposite edge. 'right' = traveling right through space: exit left.

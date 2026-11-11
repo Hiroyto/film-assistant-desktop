@@ -1,6 +1,8 @@
 // components/Freeform/corkboard/cards.tsx — split out of freeform-corkboard.tsx (FIL-496).
 import React, { useState, useEffect, useRef } from 'react';
 import { getEntityColor, hexToRgba, entityColorForMode } from '../../../components/Freeform/entityColors';
+import { ColorDot, cardColor } from './storylineLabels';
+import type { LabelSet } from '../../../lib/freeformApi';
 import InternIcon from '../../../components/Freeform/InternIcon';
 import { PEER_BLUE, PEER_BLUE_INK } from '../../../components/Freeform/tokens';
 import { type EntityType } from '../../../components/Freeform/types';
@@ -10,6 +12,8 @@ import { arcKindLabel, narrativeStatusBg, narrativeStatusFg, tieLabel, transitio
 import { FloatingPeerCard } from './peer';
 import { type CardSignal } from './signals';
 import { liftColor, useThemeMode } from './theme';
+import { InlineText } from './inlineText';
+import { RichText } from './richText';
 
 // =====================================================================
 // AskPeerButton — the peer's call-to-action, shared by the expanded card
@@ -113,12 +117,23 @@ export function CardBox({
   onAskPeer,
   onOpenSheet,
   onDelete,
+  onPark,
   onRename,
   onUpdateDescription,
   onChangeNarrativeStatus,
   onQuestionsChanged,
   cardRef,
+  lensColor,
+  lensDim,
+  colorSet,
+  onSetColor,
 }: {
+  /** Card colour (2026-10-09): the frame colour (the card's own, or the cast
+   *  lens), a dim for cards outside the legend's pick, and the dot's palette. */
+  lensColor?: string;
+  lensDim?: boolean;
+  colorSet?: LabelSet;
+  onSetColor?: (color: string) => void;
   entity: ProjectEntity;
   pos: Pos;
   expanded: boolean;
@@ -173,6 +188,8 @@ export function CardBox({
   onAskPeer: () => void;
   onOpenSheet: () => void;
   onDelete: () => void;
+  /** FIL-641: park this card (send it to the sandbox). */
+  onPark?: () => void;
   onRename: (newName: string) => Promise<void>;
   onUpdateDescription: (description: string) => Promise<void>;
   onChangeNarrativeStatus: (next: NarrativeStatus) => void;
@@ -180,7 +197,7 @@ export function CardBox({
   cardRef?: (el: HTMLDivElement | null) => void;
 }) {
   const type = entity.type as EntityType;
-  const color = getEntityColor(type);
+  const color = lensColor ?? getEntityColor(type);
   const name =
     entity.working_name ??
     entity.working_title ??
@@ -312,8 +329,8 @@ export function CardBox({
         // Focus mode is board-native — neighbors move aside and the scrim
         // (z144) dims everything once, so the per-card dim stays light: the
         // board should still read as the board, not vanish behind an overlay.
-        opacity: dimmed ? 0.55 : 1,
-        filter: dimmed ? 'blur(1px) saturate(0.7)' : 'none',
+        opacity: dimmed ? 0.55 : lensDim ? 0.3 : 1,
+        filter: dimmed ? 'blur(1px) saturate(0.7)' : lensDim ? 'saturate(0.5)' : 'none',
         pointerEvents: dimmed ? 'none' : 'auto',
         transform: 'none',
         // Entrance: content cards fade + settle in once on first mount (board
@@ -355,6 +372,7 @@ export function CardBox({
               a type label (the card's shape/color already says "event"). */}
           {type === 'event' && sceneNo ? `SC ${String(sceneNo).padStart(2, '0')}` : type}
         </span>
+        {onSetColor && (type === 'event' || type === 'sequence') && <ColorDot value={cardColor(entity)} set={colorSet} dark={dark} onPick={onSetColor} size={10} />}
         {type === 'event' && expanded ? (
           <NarrativeStatusToggle
             value={(entity.narrative_status as NarrativeStatus) ?? 'on_screen'}
@@ -507,6 +525,14 @@ export function CardBox({
               </svg>
               Open sheet
             </button>
+            {onPark && (
+              <button
+                type="button"
+                onClick={onPark}
+                title="Park this card: it leaves the master and waits on the sandbox board with its stickies"
+                style={{ font: 'inherit', fontSize: 10.5, fontWeight: 600, background: 'transparent', border: 'none', color: 'inherit', opacity: .75, cursor: 'pointer', padding: 0, textDecoration: 'underline' }}
+              >Park</button>
+            )}
             <DeleteCardLink onConfirm={onDelete} entityType={type} />
           </div>
           <AskPeerButton
@@ -789,126 +815,34 @@ export function EditableDescription({
   placeholder?: string;
 }) {
   const dark = useThemeMode() === 'dark';
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value);
-  const [busy, setBusy] = useState(false);
   const [hovered, setHovered] = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-
-  useEffect(() => {
-    if (!editing) setDraft(value);
-  }, [value, editing]);
-
-  useEffect(() => {
-    if (editing) {
-      requestAnimationFrame(() => {
-        textareaRef.current?.focus();
-        // Place cursor at end of existing content.
-        textareaRef.current?.setSelectionRange(draft.length, draft.length);
-      });
-    }
-  }, [editing, draft.length]);
-
-  const cancel = () => {
-    setEditing(false);
-    setDraft(value);
-  };
-
-  const commit = async () => {
-    const next = draft; // preserve internal whitespace; trim is the writer's call
-    if (next === value) {
-      cancel();
-      return;
-    }
-    setBusy(true);
-    try {
-      await onSave(next);
-      setEditing(false);
-    } catch {
-      setDraft(value);
-      setEditing(false);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  if (editing) {
-    return (
-      <textarea
-        ref={textareaRef}
-        value={draft}
-        disabled={busy}
-        placeholder={placeholder}
-        onMouseDown={(e) => e.stopPropagation()}
-        onClick={(e) => e.stopPropagation()}
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => {
-          e.stopPropagation();
-          if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-            e.preventDefault();
-            commit();
-          } else if (e.key === 'Escape') {
-            e.preventDefault();
-            cancel();
-          }
-        }}
-        // Save on blur so click-away doesn't silently discard a writer's
-        // edit. Esc still cancels explicitly.
-        onBlur={commit}
-        rows={4}
-        style={{
-          fontSize: 12,
-          color: dark ? '#e8e8ec' : '#222',
-          background: dark ? '#101013' : '#fff',
-          lineHeight: 1.45,
-          marginBottom: 10,
-          padding: '6px 8px',
-          border: dark ? '1px solid #2f2f36' : '1px solid #ccc',
-          borderRadius: 5,
-          outline: 'none',
-          width: '100%',
-          boxSizing: 'border-box',
-          fontFamily: 'system-ui, sans-serif',
-          resize: 'vertical',
-          minHeight: 60,
-        }}
-      />
-    );
-  }
-
-  // Read-only display. Empty case shows the placeholder italicized so writers
-  // know they can click in.
-  const isEmpty = !value;
+  // Paper (Ben, 2026-11-01): a card's words can carry a sticky's bold,
+  // italic and underline; they are drawn and edited as such, never shown as
+  // markers. Enter is a new line, Cmd/Ctrl+Enter or a click away saves, Esc
+  // cancels. A failed save puts the old words back (the value never moved).
   return (
     <div
       onMouseDown={(e) => e.stopPropagation()}
-      onClick={(e) => {
-        e.stopPropagation();
-        setEditing(true);
-      }}
+      onClick={(e) => e.stopPropagation()}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      title="Click to edit description (⌘/Ctrl+Enter to save, Esc to cancel)"
+      title="Click to edit (⌘/Ctrl+Enter to save, Esc to cancel; ⌘B, ⌘I, ⌘U format)"
       style={{
-        fontSize: 12,
-        color: isEmpty ? (dark ? '#6e6e78' : '#aaa') : dark ? '#c6c6cf' : '#444',
-        fontStyle: isEmpty ? 'italic' : 'normal',
-        lineHeight: 1.5,
         marginBottom: 10,
-        cursor: 'text',
         padding: '4px 6px',
         marginLeft: -6,
         marginRight: -6,
         borderRadius: 5,
         background: hovered ? (dark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)') : 'transparent',
-        whiteSpace: 'pre-wrap',
-        position: 'relative',
       }}
     >
-      {value || placeholder || 'Click to add a description…'}
-      {hovered && !isEmpty && (
-        <span style={{ marginLeft: 6, fontSize: 10, color: dark ? '#6e6e78' : '#aaa' }}>✎</span>
-      )}
+      <InlineText
+        paper allowEmpty
+        value={value}
+        placeholder={placeholder || 'Click to add a description…'}
+        onSave={(d) => { onSave(d).catch(() => { /* the value never moved: the old words come back */ }); }}
+        style={{ fontSize: 12, lineHeight: 1.5, color: dark ? '#c6c6cf' : '#444' }}
+      />
     </div>
   );
 }
@@ -1115,7 +1049,7 @@ export function LocationCompact({ entity, signal }: { entity: ProjectEntity; sig
             overflow: 'hidden',
           }}
         >
-          {entity.description}
+          <RichText text={entity.description} style={{ display: 'inline', whiteSpace: 'inherit' }} />
         </div>
       )}
     </div>
@@ -1146,7 +1080,7 @@ export function RelationshipCompact({
             overflow: 'hidden',
           }}
         >
-          {entity.description}
+          <RichText text={entity.description} style={{ display: 'inline', whiteSpace: 'inherit' }} />
         </div>
       )}
     </div>
@@ -1267,7 +1201,7 @@ export function ExpandedBody({
           }
         />
       ) : (
-        body && <div style={{ marginBottom: 10 }}>{body}</div>
+        body && <div style={{ marginBottom: 10 }}><RichText text={body} /></div>
       )}
 
       {/* Character: traits chips */}
@@ -1447,7 +1381,7 @@ export function ExpandedBody({
           {subEvents.map((s, i) => (
             <div key={i} style={{ marginBottom: 6, fontSize: 11 }}>
               {s.slugline && <div style={{ fontFamily: 'monospace', color: dark ? '#b2b2bc' : '#555' }}>{s.slugline}</div>}
-              {s.description && <div style={{ color: dark ? '#9a9aa4' : '#666' }}>{s.description}</div>}
+              {s.description && <div style={{ color: dark ? '#9a9aa4' : '#666' }}><RichText text={s.description} /></div>}
             </div>
           ))}
         </Section>

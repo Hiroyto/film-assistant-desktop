@@ -1,4 +1,5 @@
 // components/Freeform/corkboard/editors.tsx — split out of freeform-corkboard.tsx (FIL-496).
+import { InlineText as PaperText } from './inlineText';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { getEntityColor, hexToRgba } from '../../../components/Freeform/entityColors';
@@ -916,12 +917,17 @@ export function InlineText({
   placeholder,
   multiline = true,
   style,
+  paper = false,
 }: {
   value: string;
   onSave: (next: string) => Promise<void>;
   placeholder?: string;
   multiline?: boolean;
   style?: React.CSSProperties;
+  /** The card's words as the writer formatted them (Ben, 2026-11-01): bold,
+   *  italic and underline drawn and edited in place, never shown as markers.
+   *  Enter is a new line; Cmd/Ctrl+Enter or a click away saves. */
+  paper?: boolean;
 }) {
   const dark = useThemeMode() === 'dark';
   const [editing, setEditing] = useState(false);
@@ -962,6 +968,21 @@ export function InlineText({
     fontSize: 13, lineHeight: 1.55, color: dark ? '#dcdce2' : '#333',
     fontFamily: 'system-ui, sans-serif', ...style,
   };
+
+  if (paper) {
+    return (
+      <div className="bento-no-drag" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+        <PaperText
+          paper allowEmpty
+          value={value}
+          placeholder={placeholder ?? 'Click to add…'}
+          // A failed save puts the old words back (the value never moved).
+          onSave={(d) => { onSave(d).catch(() => {}); }}
+          style={sharedText}
+        />
+      </div>
+    );
+  }
 
   if (editing) {
     return (

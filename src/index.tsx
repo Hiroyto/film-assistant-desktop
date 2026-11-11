@@ -12,6 +12,13 @@ import { TourProvider } from './components/Tour/TourProvider';
 import { DesktopShell } from './components/widgets/DesktopShell';
 import { installTestBridge } from './test-bridge/install';
 import { installGoogleSignInDeepLink, installGoogleSignInWebRetry } from './features/auth/model/googleSignIn';
+import { captureTouch } from './lib/attribution';
+import { isDesktop } from './lib/ipcClient';
+
+// FIL-621 (web): what brought this visitor here, read off the URL before anything
+// (the router, the Google sign-in return) rewrites it. The desktop app has no ad
+// landing and loads no trackers, so there is nothing to capture there.
+if (!isDesktop()) captureTouch();
 
 // Monta window.__TEST__ p/ a suíte de paridade. No-op em web/produção (gated por
 // ELECTRON_IS_TEST=1, detectado via window.__TEST_SHELL__ exposto no preload).

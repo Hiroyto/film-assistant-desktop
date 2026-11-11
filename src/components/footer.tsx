@@ -8,6 +8,7 @@ import { EnvelopeClosedIcon } from '@radix-ui/react-icons';
 import React from 'react';
 import { Link } from 'react-router-dom';
 import './footer.css';
+import { openConsent } from '../lib/consent';
 
 /**
  * The one site footer: the landing page and every app page render this.
@@ -27,6 +28,7 @@ export function Footer({ onPricingClick }: { onPricingClick?: () => void }) {
           )}
           <a href="/privacy.html">Privacy Policy</a>
           <a href="/terms.html">Terms of Service</a>
+          <a href="#cookie-settings" data-cookie-settings onClick={(e) => { e.preventDefault(); openConsent(); }}>Cookie settings</a>
           <a href="mailto:accountservices@filmassistant.io">Contact</a>
         </div>
         <div>© 2026 FilmAssistant · Your Writers Room</div>

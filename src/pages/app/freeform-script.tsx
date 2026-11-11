@@ -19,7 +19,8 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { ScopedCardHead, ScopedCast, ScopedStickies, dotGrid, cardPaper, sceneBlue } from '../../components/Freeform/corkboard/scopedBand';
 import { fetchAuthSession } from 'aws-amplify/auth';
 import type { Editor } from '@tiptap/react';
 import { Extension } from '@tiptap/core';
@@ -466,16 +467,39 @@ const filterHtmlBlocks = (html: string, keep: (id: string, text: string) => bool
   }
 };
 
-export default function FreeformScript() {
+/** EMBEDDED (Ben, 2026-10-08): the sandbox mounts this page inside the
+ *  scene's own card, which morphs into the editor; no route change, no
+ *  wipe. `sceneId` scopes the document the way ?scene= does; `onClose`
+ *  replaces the back link; `onOpenCard` is the door from a cast card in
+ *  the left margin back to the board. */
+export default function FreeformScript({ embedded }: { embedded?: { sceneId: string; onClose: () => void; onOpenCard?: (id: string) => void; theme?: 'dark' | 'light' } } = {}) {
   const { storyId } = useParams<{ storyId: string }>();
   const routerNavigate = useNavigate();
+  // FIL-641 (anchor section 9): `?scene=<id>` scopes this same editor to ONE
+  // parked scene. The document holds that scene's pages and nothing else;
+  // its saves and reads go through the per-scene paths unchanged. Without
+  // the scope, parked scenes stay out of the document (their pages are off
+  // the master until they are placed).
+  const [searchParams] = useSearchParams();
+  const scopeSceneId = embedded?.sceneId ?? searchParams.get('scene');
+  const scoped = !!scopeSceneId;
+  // ONE SCENE, ITS OWN PAGES (Ben, 2026-10-13: a scene's draft showed the
+  // text typed into another scene's). The story's open tail (__scratch__) is
+  // the master script's: a scoped editor never restores it, never routes
+  // what is typed to it, never saves or carves it. Everything typed here is
+  // this scene's. Read through a ref by the walker (stable per mount: the
+  // sandbox keys the editor by scene).
+  const scopeRef = useRef<string | null>(scopeSceneId);
   const [auth, setAuth] = useState<{ userId: string; token: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [initialContent, setInitialContent] = useState<string | null>(null);
   const [sceneCount, setSceneCount] = useState(0);
   const [characters, setCharacters] = useState<any[]>([]);
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [theme, setTheme] = useState<'dark' | 'light'>(embedded?.theme ?? 'dark');
+  // Embedded in a sandbox card, the pages follow the board's mode (Ben,
+  // 2026-10-08: the editor colour in sync with light or dark on the board).
+  useEffect(() => { if (embedded?.theme) setTheme(embedded.theme); }, [embedded?.theme]);
   // FOCUS MODE (the toolbar arrows; Philip 2026-09-22 found the old
   // fullscreen button did nothing visible): a script-only view. The bar, the
   // outline rail, the formatting toolbar and the margin notes fold away and
@@ -1051,6 +1075,14 @@ export default function FreeformScript() {
           ]);
         }
         if (cancelled || !entities) return;
+        // Parked scenes are not in the script; a scoped editor holds only
+        // its one scene (characters and the rest stay for autofill).
+        entities = {
+          ...entities,
+          entities: entities.entities.filter((e: ProjectEntity) => scopeSceneId
+            ? ((e.type !== 'event' && e.type !== 'sequence') || e.id === scopeSceneId)
+            : (e as any).state !== 'parked'),
+        };
         setGraphData(entities); // proxy/full cards read this; refreshed on open
         void saveStoredGraph(storyId, { payload: entities }); // FIL-518: keep the shelf warm
 
@@ -1064,7 +1096,7 @@ export default function FreeformScript() {
         const staleByEvent = new Map(
           stexts.sceneTexts.filter((s) => s.eventId !== '__scratch__').map((s) => [s.eventId, s.stale === true]),
         );
-        let scratchHtml = stexts.sceneTexts.find((s) => s.eventId === '__scratch__')?.html ?? '';
+        let scratchHtml = scopeSceneId ? '' : (stexts.sceneTexts.find((s) => s.eventId === '__scratch__')?.html ?? '');
 
         // ---- Scratch reconciliation (refresh-proof) ----
         // Seed the extracted-hash set from the STORED scratch braindump prose:
@@ -1420,7 +1452,7 @@ export default function FreeformScript() {
         // sibling pairs): the guard survives the round trip and carve
         // polling resumes. Stale markers (>10 min) drop.
         try {
-          const raw = localStorage.getItem(`ff-scratch-inflight-${storyId}`);
+          const raw = scopeSceneId ? null : localStorage.getItem(`ff-scratch-inflight-${storyId}`);
           if (raw && !scratchEnqueuedRef.current) {
             const m = JSON.parse(raw);
             // A marker whose generation already LANDED is settled business:
@@ -1505,6 +1537,12 @@ export default function FreeformScript() {
           text: String(node.textContent ?? ''),
         });
       });
+    }
+    if (scopeRef.current) {
+      const own = scopeRef.current;
+      walkTailRef.current = own;
+      slotCandidatesRef.current = [];
+      return out.map((w) => ({ ...w, regionId: own }));
     }
     const byRegion = settledRef.current.byRegion;
     const settledIn = (regionId: string, w: WalkBlock): boolean => {
@@ -1763,7 +1801,7 @@ export default function FreeformScript() {
     const { regions, ledgers, unboundHtml, unboundText, scratchLedger } = collected;
     // Unbound content persists as the scratch buffer — captured, unbound,
     // structure decided later by extraction (never a premature scene mint).
-    if (unboundText.trim() !== '' && unboundHtml !== scratchBaselineRef.current) {
+    if (!scopeRef.current && unboundText.trim() !== '' && unboundHtml !== scratchBaselineRef.current) {
       try {
         await saveSceneText({ projectId: storyId, eventId: SCRATCH, html: unboundHtml, ledger: scratchLedger }, a.token);
         scratchBaselineRef.current = unboundHtml;
@@ -2125,6 +2163,7 @@ export default function FreeformScript() {
   pollCarveRef.current = pollCarve;
 
   const fireScratch = useCallback((opts?: { immediate?: boolean }) => {
+    if (scopeRef.current) return; // a scene's own pages: no open tail to carve
     console.info('[freeform-script] fireScratch', { immediate: !!opts?.immediate });
     const a = authRef.current;
     if (!a || !storyId) { console.info('[freeform-script] scratch gated: no auth/story'); return; }
@@ -2813,7 +2852,9 @@ export default function FreeformScript() {
   // the moment pages exist to read. Dies forever on dismiss or first read
   // (notes existing kills the eligibility). Geometry walk mirrors
   // relayoutPins' coordinate math but only needs one paragraph rect.
-  const inviteEligible = notesLoaded && allNotes.length === 0 && !inviteDismissed && !readingScene && !readingDraft;
+  // Not in the sandbox's draft (Ben, 2026-10-15): the Peer is not on the
+  // sandbox, so it does not offer itself there.
+  const inviteEligible = !embedded && notesLoaded && allNotes.length === 0 && !inviteDismissed && !readingScene && !readingDraft;
   useEffect(() => {
     if (!inviteEligible) { setInviteGeom(null); return; }
     let raf = 0;
@@ -3656,7 +3697,7 @@ export default function FreeformScript() {
     // app (Ben 2026-08-23). ThemeCtx wraps it because the mark reads the
     // corkboard theme context, which this page doesn't otherwise provide.
     return (
-      <div style={{ minHeight: '100vh', background: theme === 'dark' ? '#0a0a0b' : '#f7f3ea', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui, sans-serif' }}>
+      <div style={{ minHeight: embedded ? '100%' : '100vh', background: theme === 'dark' ? '#0a0a0b' : '#f7f3ea', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui, sans-serif' }}>
         <ThemeCtx.Provider value={theme}>
           <CorkboardLoading label="Loading script…" sub="Laying your scenes out on the page." minHeight="0" />
         </ThemeCtx.Provider>
@@ -3665,7 +3706,7 @@ export default function FreeformScript() {
   }
   if (error) {
     return (
-      <div style={{ minHeight: '100vh', background: '#0a0a0b', color: '#f87171', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui, sans-serif' }}>
+      <div style={{ minHeight: embedded ? '100%' : '100vh', background: '#0a0a0b', color: '#f87171', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui, sans-serif' }}>
         {error}
       </div>
     );
@@ -3677,15 +3718,12 @@ export default function FreeformScript() {
     // to need it. The nested providers below are now redundant but harmless.
     <ThemeCtx.Provider value={theme}>
     <div
+      className={scoped ? `ff-scoped-shell${theme === 'dark' ? ' ff-dark' : ''}${embedded ? ' ff-embedded' : ''}` : undefined}
       style={{
         display: 'flex', flexDirection: 'column',
-        height: '100vh', background: theme === 'dark' ? '#0a0a0b' : '#faf6ee',
-        // Page-level accent tokens read by the injected CSS below (.ff-nav-handle).
-        // Light uses the deeper orange: #ff8c42 is 2.3:1 on the cream stage.
-        ...(theme === 'dark'
-          ? { '--ff-acc': '#ff8c42', '--ff-acc-bd': 'rgba(255,140,66,0.55)', '--ff-acc-bg': 'rgba(255,140,66,0.08)' }
-          : { '--ff-acc': '#c2410c', '--ff-acc-bd': 'rgba(194,65,12,0.5)', '--ff-acc-bg': 'rgba(194,65,12,0.07)' }),
-      } as React.CSSProperties}
+        height: embedded ? '100%' : '100vh', background: embedded ? 'transparent' : (theme === 'dark' ? '#0a0a0b' : '#faf6ee'),
+        ...(scoped && !embedded ? dotGrid(theme === 'dark') : null),
+      }}
     >
       {/* FOCUS (script-only view): the bar folds away by animating its grid
           row to 0fr; clipped only while folded or moving, so its menus can
@@ -3698,10 +3736,10 @@ export default function FreeformScript() {
       <div style={{ minHeight: 0, overflow: chromeClipped ? 'hidden' : 'visible', opacity: isFullscreen ? 0 : 1, transition: `opacity ${FOCUS_MS - 80}ms ease` }}>
       {/* The freeform bar — this is the part that differs from the outline
           workflow's page (no beat sidebar, no outline chrome). */}
-      <div style={{
+      <div className="ff-script-bar" style={{
         flexShrink: 0, display: 'flex', alignItems: 'center', gap: 14, padding: '10px 18px',
-        background: theme === 'dark' ? 'rgba(10,10,11,0.94)' : 'rgba(255,255,255,0.94)',
-        borderBottom: `1px solid ${theme === 'dark' ? '#232328' : '#e8e0d2'}`,
+        background: scoped ? (theme === 'dark' ? 'rgba(10,10,11,0.55)' : 'rgba(250,246,238,0.55)') : (theme === 'dark' ? 'rgba(10,10,11,0.94)' : 'rgba(255,255,255,0.94)'),
+        borderBottom: `1px solid ${theme === 'dark' ? (scoped ? 'rgba(35,35,40,.8)' : '#232328') : (scoped ? 'rgba(232,224,210,.8)' : '#e8e0d2')}`,
         fontFamily: 'system-ui, sans-serif',
         // Toolbar theme tokens: the .ff-tb-* classes (injected <style> below)
         // read these, so hover/active states stay in CSS and both themes work.
@@ -3731,7 +3769,8 @@ export default function FreeformScript() {
             flushExtractions();
             // Wipe LEFT back to the board (the mirror of the board's
             // wipe-right in): navigation fires while the screen is covered.
-            playPageWipe('left', () => routerNavigate(`/freeform/${storyId}`));
+            if (embedded) { embedded.onClose(); return; }
+            playPageWipe('left', () => routerNavigate(scopeSceneId ? `/freeform/${storyId}/sandbox` : `/freeform/${storyId}`));
           }}
           style={{ color: 'var(--tb-sync)', textDecoration: 'none', fontSize: 13, fontWeight: 700 }}
         >
@@ -3763,9 +3802,9 @@ export default function FreeformScript() {
           </HoverTip>
         )}
         </span>
-        <span style={{ color: theme === 'dark' ? '#e6e6ea' : '#1a1a1a', fontSize: 14, fontWeight: 700 }}>Script</span>
-        <span style={{ color: theme === 'dark' ? '#6b6b74' : 'var(--tb-mut)', fontSize: 12 }}>
-          {sceneCount} scene{sceneCount === 1 ? '' : 's'} from your outline
+        <span style={{ color: theme === 'dark' ? '#e6e6ea' : '#1a1a1a', fontSize: 14, fontWeight: 700 }}>{scoped ? 'Sandbox' : 'Script'}</span>
+        <span style={{ color: '#6b6b74', fontSize: 12 }}>
+          {scoped ? 'one parked scene, its pages' : `${sceneCount} scene${sceneCount === 1 ? '' : 's'} from your outline`}
         </span>
         <div style={{ flex: 1 }} />
         {/* Right cluster: ambient state (status dot, auto-sync) | peer group
@@ -4010,12 +4049,12 @@ export default function FreeformScript() {
       <div style={{ flex: 1, minHeight: 0, display: 'flex', position: 'relative' }}>
         {/* FOCUS (script-only view): the outline rail folds to nothing by
             animating its grid column, so the page slides over. */}
-        <div style={{ display: 'grid', gridTemplateColumns: isFullscreen ? '0fr' : '1fr', transition: `grid-template-columns ${FOCUS_MS}ms ${FOCUS_EASE}`, flexShrink: 0 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: (isFullscreen || scoped) ? '0fr' : '1fr', transition: `grid-template-columns ${FOCUS_MS}ms ${FOCUS_EASE}`, flexShrink: 0 }}>
         <div style={{ minWidth: 0, display: 'flex', overflow: chromeClipped ? 'hidden' : 'visible', opacity: isFullscreen ? 0 : 1, transition: `opacity ${FOCUS_MS - 80}ms ease` }}>
         {/* Outline handle, collapsed state: a slim tab on the body's left edge. */}
-        {!navOpen && (
-          <button onClick={toggleNav} title="Show the outline panel" className="ff-nav-handle" style={{ position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)', zIndex: 30, width: 17, height: 54, borderRadius: '0 9px 9px 0', border: `1px solid ${theme === 'dark' ? '#26262c' : '#e3dbcb'}`, borderLeft: 'none', background: theme === 'dark' ? '#131316' : '#fbf8f1', color: theme === 'dark' ? '#8a8a93' : '#736b5e', fontSize: 13, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: theme === 'dark' ? '2px 0 10px rgba(0,0,0,0.18)' : '2px 0 10px rgba(60,40,10,0.10)' }}>›</button>
-        )}
+        {!navOpen && !scoped && (
+          <button onClick={toggleNav} title="Show the outline panel" className="ff-nav-handle" style={{ position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)', zIndex: 30, width: 17, height: 54, borderRadius: '0 9px 9px 0', border: `1px solid ${theme === 'dark' ? '#26262c' : '#e3dbcb'}`, borderLeft: 'none', background: theme === 'dark' ? '#131316' : '#fbf8f1', color: theme === 'dark' ? '#8a8a93' : '#8a8578', fontSize: 13, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: '2px 0 10px rgba(0,0,0,0.18)' }}>›</button>
+        )}git 
         {/* Navigator rail — sequences as sections, scenes as rows. Shell, not
             pages: this is where scene-level graph state lives (status now;
             stale/drift later). */}
@@ -4382,6 +4421,23 @@ export default function FreeformScript() {
              context so the markers scroll natively with the pages (no shake).
              The page stays centered; cards fit the existing right margin. */
           .ff-script-host .paginated-canvas { position: relative; }
+          /* FIL-641: inside the card the pages are its body. The editor's
+             canvas fills what the head leaves; the page sheet keeps its own
+             look, on the card's paper. */
+          .ff-script-host.ff-scoped > :not([data-testid="scoped-head"]) { flex: 1 1 0; min-height: 0; }
+          .ff-script-host.ff-scoped .paginated-canvas { background: var(--ff-scoped-body) !important; }
+          .ff-scoped-shell { --ff-scoped-body: #f3efe6; }
+          .ff-scoped-shell.ff-dark { --ff-scoped-body: #17171a; }
+          /* FIL-641: a parked scene's pages wear the sandbox: the board's dot
+             grid behind the sheet and the index card's scene-blue frame on
+             it. Nothing inside the sheet changes. */
+          .ff-scoped-shell [data-tour="script-peer-seg"], .ff-scoped-shell [data-tour="script-sync"], .ff-scoped-shell .ff-nav-handle { display: none !important; }
+          /* EMBEDDED in a sandbox card: the pages and nothing else. The bar,
+             the outline rail and the page's own fixed chrome stay away; the
+             card around it is the frame. */
+          .ff-embedded .ff-script-bar { display: none !important; }
+          .ff-embedded [data-tour="script-nav"] { display: none !important; }
+          .ff-embedded .ff-notes-toast { display: none !important; }
           /* Screenplay margins: the page text is a fixed 6in column; the editor
              pads 1in both sides, so the 6in column sits left-biased (1in left /
              1.5in right — backwards). Bump the left pad to 1.5in so the column
@@ -4482,17 +4538,40 @@ export default function FreeformScript() {
           .ff-rv-reopen { opacity: 0; transition: opacity 140ms; }
           .ff-rv-row:hover .ff-rv-reopen { opacity: 1; }
         `}</style>
-        <div className="ff-script-host" style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
+        {/* The pages row, inside the page column: on a scoped scene (FIL-641) the
+            cast hangs left of the card and its stickies right; otherwise the host
+            is the only item. The column above carries the review-panel margin. */}
+        <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex' }}>
+        {/* FIL-641 (anchor section 9): a parked scene's pages. Still the
+            sandbox: the host IS the scene's index card, opened large on the
+            board (head above, pages as the body), its stickies hanging
+            beside it as paper. The master script's chrome (outline rail,
+            Notes / Review, Sync) is away; the pages are the one editor,
+            untouched. Focus mode drops the card and shows the pages alone. */}
+        {scoped && !isFullscreen && !embedded && (
+          <div style={{ flex: '1 1 0', minWidth: 24, display: 'flex', justifyContent: 'flex-end', paddingTop: 24, paddingRight: 22, overflowY: 'auto' }}>
+            <ScopedCast sceneId={scopeSceneId} entities={graphData?.entities ?? []} edges={graphData?.edges} dark={theme === 'dark'} />
+          </div>
+        )}
+        <div
+          className={`ff-script-host${scoped ? ' ff-scoped' : ''}`}
+          style={embedded ? { flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column', background: theme === 'dark' ? '#17171a' : '#f3efe6' } : scoped && !isFullscreen ? {
+            flex: '0 1 872px', minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column', marginTop: 18,
+            background: cardPaper(theme === 'dark'), border: `1.5px solid ${sceneBlue(theme === 'dark')}`, borderBottom: 'none', borderRadius: '3px 3px 0 0',
+            boxShadow: theme === 'dark' ? '0 1px 2px rgba(0,0,0,.5), 0 8px 20px rgba(0,0,0,.45)' : '0 1px 2px rgba(0,0,0,.08), 0 6px 16px rgba(120,90,40,.10)', overflow: 'hidden',
+          } : { flex: 1, minHeight: 0, minWidth: 0 }}
+        >
+          {scoped && !isFullscreen && !embedded && <ScopedCardHead scene={graphData?.entities.find((e) => e.id === scopeSceneId)} dark={theme === 'dark'} />}
           <ScriptEditor
             key={`${storyId ?? ''}:${reloadTick}`}
             onEditorReady={handleEditorReady}
             editorTheme={theme}
-            onThemeToggle={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+            onThemeToggle={embedded ? undefined : () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
             isGenerating={false}
             isFullscreen={isFullscreen}
             focusMode={isFullscreen || coworkLock.readOnly}
             hideSaveButton
-            onFullscreen={() => setIsFullscreen(true)}
+            onFullscreen={embedded ? undefined : () => setIsFullscreen(true)}
             onMinimize={() => setIsFullscreen(false)}
             onScenePositionsUpdate={() => {}}
             onSave={() => void runSave()}
@@ -4510,6 +4589,12 @@ export default function FreeformScript() {
             showAIRail={false}
             extraExtensions={EXTRA_EXTENSIONS}
           />
+        </div>
+        {scoped && !isFullscreen && !embedded && (
+          <div style={{ flex: '1 1 0', minWidth: 24, display: 'flex', justifyContent: 'flex-start', paddingTop: 24, paddingLeft: 22, overflowY: 'auto' }}>
+            <ScopedStickies sceneId={scopeSceneId} fragments={graphData?.fragments ?? []} dark={theme === 'dark'} />
+          </div>
+        )}
         </div>
         </div>
       </div>
@@ -4676,7 +4761,7 @@ export default function FreeformScript() {
           : draftVerdict ? draftVerdict
           : (notesError || 'No notes yet. Use the peer button on a scene in the outline to read it.');
         return (
-          <div style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 870, maxWidth: 300, padding: '9px 12px', borderRadius: 9, fontFamily: 'system-ui, sans-serif', fontSize: 12, lineHeight: 1.45, display: 'flex', alignItems: 'center', gap: 8, background: dark ? 'rgba(20,20,23,0.96)' : 'rgba(255,255,255,0.98)', border: `1px solid ${notesError ? 'rgba(245,158,11,0.5)' : cleanBill ? (dark ? 'rgba(84,191,219,0.5)' : 'rgba(15,127,159,0.5)') : (dark ? '#26262c' : '#e8e0d2')}`, boxShadow: dark ? '0 8px 26px rgba(0,0,0,0.28)' : '0 8px 26px rgba(60,40,10,0.12)', color: notesError ? '#f59e0b' : cleanBill ? (dark ? PEER_BLUE : PEER_BLUE_INK) : (dark ? '#c9c9d1' : '#555') }}>
+          <div className="ff-notes-toast" style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 870, maxWidth: 300, padding: '9px 12px', borderRadius: 9, fontFamily: 'system-ui, sans-serif', fontSize: 12, lineHeight: 1.45, display: 'flex', alignItems: 'center', gap: 8, background: dark ? 'rgba(20,20,23,0.96)' : 'rgba(255,255,255,0.98)', border: `1px solid ${notesError ? 'rgba(245,158,11,0.5)' : cleanBill ? 'rgba(84,191,219,0.5)' : (dark ? '#26262c' : '#e8e0d2')}`, boxShadow: '0 8px 26px rgba(0,0,0,0.28)', color: notesError ? '#f59e0b' : cleanBill ? PEER_BLUE : (dark ? '#c9c9d1' : '#555') }}>
             {spinning && <span style={{ width: 11, height: 11, borderRadius: '50%', border: '2px solid rgba(96,165,250,0.3)', borderTopColor: '#60a5fa', display: 'inline-block', animation: 'ffspin 0.9s linear infinite', flexShrink: 0 }} />}
             <span>{msg}</span>
             {dismissible && (

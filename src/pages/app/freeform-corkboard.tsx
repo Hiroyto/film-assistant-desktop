@@ -31,8 +31,7 @@ import { notifyFdxJobComplete, remapFdxSyncCard } from '../../lib/fdxSync';
 import { isDesktop } from '../../lib/ipcClient';
 import { isLocalFirst } from '../../lib/localFirst';
 import { flushPushNow } from '../../data/desktop-lifecycle';
-import { SupersessionRequiredError, acceptArcSuggestion, answerStagedQuestion, saveStoryFact, deleteStoryFact, type StoryFactKind, createArc, createArcFromEvents, createCard, createInformation, createSequence, deleteArc, deleteCard, dismissArcSuggestion, enqueueCardExtraction, enqueueExtractionJob, getCardLayouts, isMockMode, listArcSuggestions, listCardQuestions, listProjectEntities, listBraindumps, listStagedQuestions, placeStagedCard, promoteStructuralToRelationship, resolveNarrativeStatusFlip, restoreArc, restoreCard, slugForCard, tagSequenceContains, updateArc, updateCardDescription, updateCardName, updateCardNarrativeStatus, updateCardPosition, type ArcKind, type ArcSuggestion, type BraindumpLogEntry, type CardLayout, type EvokesTransition, type ListProjectEntitiesResponse, type NarrativeStatus, type PersistedQuestion, type ProjectEntity, type StagedQuestion, type SupersessionRequiredResponse, tagEventEvokes
-} from '../../lib/freeformApi';
+import { SupersessionRequiredError, acceptArcSuggestion, answerStagedQuestion, saveStoryFact, deleteStoryFact, type StoryFactKind, createArc, createArcFromEvents, createCard, createInformation, createSequence, deleteArc, deleteCard, dismissArcSuggestion, enqueueCardExtraction, enqueueExtractionJob, getCardLayouts, isMockMode, listArcSuggestions, listCardQuestions, listProjectEntities, listBraindumps, listStagedQuestions, placeStagedCard, promoteStructuralToRelationship, resolveNarrativeStatusFlip, restoreArc, restoreCard, slugForCard, tagSequenceContains, updateArc, updateCardDescription, updateCardName, updateCardNarrativeStatus, updateCardPosition, type ArcKind, type ArcSuggestion, type BraindumpLogEntry, type CardLayout, type EvokesTransition, type ListProjectEntitiesResponse, type NarrativeStatus, type PersistedQuestion, type ProjectEntity, type StagedQuestion, type SupersessionRequiredResponse, tagEventEvokes, saveLabelSet, type LabelSet, setCardColor } from '../../lib/freeformApi';
 import { prefetchScriptData } from '../../lib/scriptPrefetch';
 import { playPageWipe } from '../../lib/pageWipe';
 import { useCascadeEvents } from '../../lib/useCascadeEvents';
@@ -55,9 +54,13 @@ import { BraindumpMeter, CorkboardLoading, Shell } from '../../components/Freefo
 import { StoryFactsStrip } from '../../components/Freeform/corkboard/storyFacts';
 import type { WinPhase } from '../../components/Freeform/corkboard/shell';
 import { computeCardSignals } from '../../components/Freeform/corkboard/signals';
-import { MoonIcon, SunIcon, THEME_STORE_KEY, ThemeCtx, type ThemeMode } from '../../components/Freeform/corkboard/theme';
+import { MoonIcon, SunIcon, THEME_STORE_KEY, ThemeCtx, storedTheme, type ThemeMode } from '../../components/Freeform/corkboard/theme';
 import { BallChip, BraindumpDock, ToolbarButton } from '../../components/Freeform/corkboard/toolbar';
+import { ColorLegend, cardColor, colorCounts, colorMatches } from '../../components/Freeform/corkboard/storylineLabels';
 import { PlacementGrid, type GridPick } from '../../components/Freeform/corkboard/placementGrid';
+import { SandboxDoorway, readSandboxFlag } from '../../components/Freeform/corkboard/sandbox';
+import { parkCard, placeParkedCard, establishWorldEntry, makeSceneFromWorld } from '../../lib/freeformApi';
+import { WorldSheet } from '../../components/Freeform/corkboard/worldSheet';
 import WowFlow from '../../components/Freeform/corkboard/WowFlow';
 import { markWowSeen } from '../../components/Freeform/corkboard/wowShared';
 
@@ -202,6 +205,10 @@ export default function FreeformCorkboard() {
   // Braindump lives in a toolbar slide-out now (BraindumpDock), not a
   // permanently-open header box. Extraction keeps running while closed.
   const [braindumpOpen, setBraindumpOpen] = useState(false);
+  // CARD COLOUR (2026-10-09): a coloured scene wears its colour always; the
+  // legend filters additively. (The Cast lens was dropped the same day.)
+  const [colorFilter, setColorFilter] = useState<Set<string>>(() => new Set());
+  const toggleFilter = useCallback((key: string) => setColorFilter((cur) => { const next = new Set(cur); if (next.has(key)) next.delete(key); else next.add(key); return next; }), []);
   // Field focus — the toolbar's orange underside brightens in sync.
   const [braindumpFocused, setBraindumpFocused] = useState(false);
 
@@ -626,15 +633,8 @@ export default function FreeformCorkboard() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
 
-  // Theme — dark by default (the site's language); persisted per browser.
-  const [theme, setTheme] = useState<ThemeMode>(() => {
-    try {
-      const stored = localStorage.getItem(THEME_STORE_KEY);
-      return stored === 'light' || stored === 'dark' ? stored : 'dark';
-    } catch {
-      return 'dark';
-    }
-  });
+  // Theme: light unless the writer chose dark (FIL-701); persisted per browser.
+  const [theme, setTheme] = useState<ThemeMode>(storedTheme);
   const dark = theme === 'dark';
   const toggleTheme = useCallback(() => {
     setTheme((cur) => {
@@ -995,6 +995,25 @@ export default function FreeformCorkboard() {
   // Placement Control v1b adds the third lens: staged cards (staged === '1')
   // are material the writer hasn't accepted into the story — they live in the
   // strip, never on the canvas, never in the trash.
+  const colorCountsHere = useMemo(() => colorCounts((data?.entities ?? []).filter((e) => !e.deleted_at && e.staged !== '1' && e.state !== 'parked')), [data?.entities]);
+  const onSetColor = useCallback((cardId: string, color: string) => {
+    if (!auth || !storyId) return;
+    setData((cur) => cur ? { ...cur, entities: (cur.entities ?? []).map((e) => (e.id === cardId ? { ...e, card_color: color || undefined } : e)) } : cur);
+    setCardColor({ projectId: storyId, userId: auth.userId, cardId, color }, auth.token).catch(() => { void refreshEntities(); });
+  }, [auth, storyId]);
+  const saveNames = useCallback(async (next: LabelSet) => {
+    if (!auth || !storyId) return;
+    setData((cur) => cur ? { ...cur, labelSet: next } : cur);
+    try { await saveLabelSet({ projectId: storyId, userId: auth.userId, dimension: next.dimension, labels: next.labels }, auth.token); } catch { /* refetch shows the truth */ }
+    await refreshEntities();
+  }, [auth, storyId]);
+  const onNameColor = useCallback((color: string, name: string) => {
+    const cur = data?.labelSet ?? { dimension: 'Label', labels: [] };
+    const labels = cur.labels.filter((l) => l.color !== color);
+    if (name.trim()) labels.push({ id: `lab_${color.slice(1)}`, name: name.trim(), color });
+    void saveNames({ dimension: cur.dimension, labels });
+  }, [data?.labelSet, saveNames]);
+  const onHeading = useCallback((name: string) => { const cur = data?.labelSet ?? { dimension: 'Label', labels: [] }; void saveNames({ dimension: name.trim() || 'Label', labels: cur.labels }); }, [data?.labelSet, saveNames]);
   const aliveEntities = useMemo(
     // Character-primary arcs (character_id set) never render on the board:
     // no card, no thread, no ball. They live on the character sheet's band.
@@ -1003,6 +1022,8 @@ export default function FreeformCorkboard() {
       const seen = new Set<string>();
       return (data?.entities ?? []).filter((e) => {
         if (e.deleted_at || e.staged === '1') return false;
+        // FIL-641: a parked card lives on the sandbox board, never here.
+        if (e.state === 'parked') return false;
         if (e.type === 'arc' && String((e as any).character_id ?? '') !== '') return false;
         if (seen.has(e.id)) return false; // belt: one card per id (see withEntity)
         seen.add(e.id);
@@ -3546,6 +3567,37 @@ export default function FreeformCorkboard() {
   // On-demand right-side panel (Information facts + arc suggestions). Opened
   // from the permanent toolbar button.
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  // FIL-657: every sandbox surface in the FE sits behind `ff-sandbox`. Read
+  // once per mount, like the theme key; flipping it is a reload.
+  const sandboxOn = useMemo(() => readSandboxFlag(), []);
+  // FIL-641: park a card (send it to the sandbox). From a card's expanded
+  // body, or from a held card's strip row as its third answer.
+  const onParkCard = useCallback(async (cardId: string) => {
+    if (!auth || !storyId) return;
+    const ent = (dataRef.current?.entities ?? []).find((e) => e.id === cardId);
+    const title = String(ent?.working_title ?? ent?.working_name ?? 'the card');
+    setStagedQuestions((cur) => cur.filter((q) => q.cardId !== cardId));
+    setData((prev) => prev ? { ...prev, entities: prev.entities.map((e) => (e.id === cardId ? { ...e, state: 'parked', staged: undefined } : e)) } : prev);
+    try {
+      await parkCard({ projectId: storyId, userId: auth.userId, cardId }, auth.token);
+      setLinkNotice(`Parked “${title}”. It waits on the sandbox board.`);
+    } catch (err: any) {
+      setLinkError(String(err?.message ?? 'Parking failed.'));
+    }
+    refreshEntitiesRef.current().catch(() => {});
+    refreshStagedQuestionsRef.current();
+  }, [auth, storyId]);
+  // FIL-641: arriving from the sandbox with a card to place opens the wall
+  // with that card as the drop card. One-shot; the route state is cleared.
+  useEffect(() => {
+    const st = (routerLocation.state ?? {}) as { placeParked?: string };
+    if (!st.placeParked || !data) return;
+    const cardId = st.placeParked;
+    routerNavigate(routerLocation.pathname, { replace: true, state: null });
+    if (!(data.entities ?? []).some((e) => e.id === cardId && e.state === 'parked')) return;
+    setPlacingStaged({ cardId, fresh: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, routerLocation.state]);
   // COMPOSER FOCUS (2026-08-30). The panel is a 420px right drawer at z 180;
   // the dock's placement chips live at the dock's bottom-right, at z 139.
   // With both open, the drawer physically covers the chips, and that is how a
@@ -4858,11 +4910,14 @@ export default function FreeformCorkboard() {
     // is guessed from layout.
     const isFdx = name.endsWith('.fdx');
     const isFadeIn = name.endsWith('.fadein');
-    const isNative = isFdx || isFadeIn;
-    const kind = isFdx ? 'Final Draft file' : isFadeIn ? 'Fade In file' : 'PDF';
+    // Fountain (.fountain): texto puro com marcação. O parser próprio
+    // (lib/fountain) devolve os mesmos blocos tipados de um .fdx.
+    const isFountain = name.endsWith('.fountain');
+    const isNative = isFdx || isFadeIn || isFountain;
+    const kind = isFdx ? 'Final Draft file' : isFadeIn ? 'Fade In file' : isFountain ? 'Fountain file' : 'PDF';
     if (!isPdf && !isNative) {
       setBraindumpPhase('error');
-      setBraindumpMsg('Drop a PDF, Final Draft (.fdx) or Fade In (.fadein) screenplay.');
+      setBraindumpMsg('Drop a PDF, Final Draft (.fdx), Fade In (.fadein) or Fountain (.fountain) screenplay.');
       return;
     }
     setBraindumpOpen(false);
@@ -4872,7 +4927,9 @@ export default function FreeformCorkboard() {
       let text: string;
       if (isNative) {
         const { fdxToBlocks, fadeInFileToBlocks, blocksToIndentedText } = await import('../../lib/screenplayExport');
-        const blocks = isFdx ? fdxToBlocks(await file.text()) : await fadeInFileToBlocks(await file.arrayBuffer());
+        const blocks = isFountain
+          ? (await import('../../lib/fountain')).fountainFileToBlocks(await file.arrayBuffer())
+          : isFdx ? fdxToBlocks(await file.text()) : await fadeInFileToBlocks(await file.arrayBuffer());
         text = blocksToIndentedText(blocks);
       } else {
         const { parsePdfToText } = await import('../../lib/pdfText');
@@ -5365,6 +5422,25 @@ export default function FreeformCorkboard() {
       setPlacingStaged(null);
       if (!auth || !storyId || !cardId) return;
       setStagedSpotlight(null);
+      // FIL-641: a PARKED card placed from the sandbox takes the slot through
+      // place-parked-card (state drops, the same edges are written).
+      const parkedEnt = (dataRef.current?.entities ?? []).find((e) => e.id === cardId && e.state === 'parked');
+      if (parkedEnt && pick.action !== 'merge') {
+        const title = String(parkedEnt.working_title ?? parkedEnt.working_name ?? cardId);
+        setData((prev) => prev ? { ...prev, entities: prev.entities.map((e) => (e.id === cardId ? { ...e, state: undefined } : e)) } : prev);
+        setPositions((p) => { const anchor = p[pick.targetId]; return { ...p, [cardId]: anchor ? { x: anchor.x + 340, y: anchor.y + 48 } : { x: 260, y: 220 } }; });
+        try {
+          const res = await placeParkedCard({ projectId: storyId, userId: auth.userId, cardId, placement: { targetId: pick.targetId, ...(pick.position ? { position: pick.position } : {}), ...(pick.containment ? { containment: pick.containment } : {}), ...(pick.nextId ? { nextId: pick.nextId } : {}) } }, auth.token);
+          setLinkNotice(res.retracted ? `Placed “${title}” ${pick.targetTitle}, replacing one link.` : `Placed “${title}” ${pick.targetTitle}.`);
+          if (boardIsAutoManaged()) relayoutFirstDumpRef.current = true; else relayoutSpineRef.current = true;
+          refreshEntitiesRef.current().catch(() => {});
+        } catch (err) {
+          refreshEntitiesRef.current().catch(() => {});
+          setLinkError('Placing the card failed; it stays on the sandbox board.');
+          console.warn('[corkboard] place-parked-card failed:', err);
+        }
+        return;
+      }
       const row = stagedQuestions.find((q) => q.cardId === cardId);
       const entName = (id: string) => {
         const e = (dataRef.current?.entities ?? []).find((x) => x.id === id);
@@ -7073,12 +7149,12 @@ export default function FreeformCorkboard() {
             </svg>
           }
           onClick={() => scriptInputRef.current?.click()}
-          title="Import a screenplay (PDF, Final Draft or Fade In); it is read into cards (or drop one anywhere on the board)"
+          title="Import a screenplay (PDF, Final Draft, Fade In or Fountain); it is read into cards (or drop one anywhere on the board)"
         />
         <input
           ref={scriptInputRef}
           type="file"
-          accept="application/pdf,.pdf,.fdx,.fadein"
+          accept="application/pdf,.pdf,.fdx,.fadein,.fountain"
           style={{ display: 'none' }}
           onChange={(e) => {
             const f = e.target.files?.[0];
@@ -7447,6 +7523,9 @@ export default function FreeformCorkboard() {
         />
       )}
 
+      {/* Card colours (2026-10-09): the legend, once any scene is coloured. */}
+      {data && <ColorLegend set={data.labelSet} counts={colorCountsHere} active={colorFilter} dark={dark} onToggle={toggleFilter} onClear={() => setColorFilter(new Set())} onName={onNameColor} onHeading={onHeading} />}
+
       {/* In-board zoom control — a small floating segmented control at the board's
           bottom-right (the canonical canvas-zoom spot, reads as part of the board).
           Discrete levels only; page scroll still pans. */}
@@ -7589,8 +7668,8 @@ export default function FreeformCorkboard() {
           braindumpPhase !== 'extracting' &&
           !braindumpOpen && (
             // "Already have a screenplay?" — two doors: the one-shot import
-            // (the toolbar's same file input: PDF/.fdx/.fadein read into cards
-            // once) everywhere, plus the .fdx cowork on desktop (same gate that
+            // (the toolbar's same file input: PDF/.fdx/.fadein/.fountain read into cards
+            // once) everywhere, plus the .fdx/.fountain cowork on desktop (same gate that
             // mounts FdxCoworkControl, which binds the engine).
             <BoardEmptyState
               onBraindump={() => setBraindumpOpen(true)}
@@ -7599,7 +7678,7 @@ export default function FreeformCorkboard() {
               {...(isDesktop() && auth && storyId
                 ? {
                     onCowork: () => void startFdxCowork(),
-                    coworkTitle: "Watch a Final Draft (.fdx) screenplay: every save becomes a per-scene save + extraction on this board, like the script editor's auto-sync",
+                    coworkTitle: "Watch a Final Draft (.fdx) or Fountain (.fountain) screenplay: every save becomes a per-scene save + extraction on this board, like the script editor's auto-sync",
                   }
                 : {})}
             />
@@ -8017,6 +8096,10 @@ export default function FreeformCorkboard() {
                 linkDrag.fromCardId !== entity.id
               }
               isSelected={selectedEventIds.has(entity.id)}
+              lensColor={cardColor(entity)}
+              lensDim={entity.type === 'event' || entity.type === 'sequence' ? !colorMatches(entity, colorFilter) : false}
+              colorSet={data?.labelSet}
+              onSetColor={entity.type === 'event' || entity.type === 'sequence' ? (c) => onSetColor(entity.id, c) : undefined}
               isArcHighlighted={
                 !!highlightedArcId &&
                 (entity.id === highlightedArcId ||
@@ -8029,6 +8112,7 @@ export default function FreeformCorkboard() {
               onAskPeer={() => { if (tourBlocks('ask')) return; setPeerForCardId(entity.id); }}
               onOpenSheet={() => { if (tourBlocks('fullcard')) return; setSheetCardId(entity.id); }}
               onDelete={() => { if (tourGate.active) return; onDeleteCard(entity.id); }}
+              onPark={sandboxOn && (entity.type === 'event' || entity.type === 'character' || entity.type === 'location' || entity.type === 'sequence') ? () => { if (tourGate.active) return; onParkCard(entity.id); } : undefined}
               onRename={(newName) => { if (tourGate.active) return Promise.resolve(); return onRenameCard(entity.id, newName); }}
               onUpdateDescription={(d) => { if (tourGate.active) return Promise.resolve(); return onUpdateDescription(entity.id, d); }}
               onChangeNarrativeStatus={(next) => { if (tourGate.active) return; onChangeNarrativeStatus(entity.id, next); }}
@@ -8578,6 +8662,21 @@ export default function FreeformCorkboard() {
         </div>
       )}
 
+      {/* FIL-642 — the sandbox's doorway, left side, opposite the confirm
+          panel. Behind `ff-sandbox` (localStorage). Read-only: counts and
+          stickies; nothing is answered from the master. Hidden while a spine
+          drop is mid-drag so the grid keeps the whole board. */}
+      {sandboxOn && placingStaged === null && (
+        <SandboxDoorway
+          fragments={data.fragments ?? []}
+          badges={data.badges ?? []}
+          entities={aliveEntities}
+          onOpenCard={(cardId) => setSheetCardId(cardId)}
+          onOpenBoard={() => playPageWipe('right', () => routerNavigate(`/freeform/${storyId}/sandbox`))}
+          top={stickyTopPx + 8}
+        />
+      )}
+
       {/* D'-9 — arc-suggestion right-side drawer. Toolbar badge toggles. */}
       {rightPanelOpen && (
         <RightPanel
@@ -8588,6 +8687,7 @@ export default function FreeformCorkboard() {
           onStagedSpotlight={onStagedSpotlight}
           onPlaceDragStart={(cardId) => { setStagedSpotlight(null); setPlacingStaged({ cardId }); }}
           onConfirmSlot={onConfirmSlot}
+          onPark={sandboxOn ? onParkCard : undefined}
           onPlaceDragEnd={() => setPlacingStaged(null)}
           hidden={placingStaged !== null}
           arcs={aliveEntities.filter((e) => e.type === 'arc' && !String((e as any).character_id ?? ''))}
@@ -8684,7 +8784,7 @@ export default function FreeformCorkboard() {
               Drop your screenplay
             </div>
             <div style={{ fontSize: 12.5, color: dark ? '#9a9aa4' : '#777', maxWidth: 280, lineHeight: 1.5 }}>
-              We’ll read the PDF, Final Draft or Fade In file and extract its scenes, characters, and locations into cards.
+              We’ll read the PDF, Final Draft, Fade In or Fountain file and extract its scenes, characters, and locations into cards.
             </div>
           </div>
         </div>
@@ -8915,6 +9015,18 @@ export default function FreeformCorkboard() {
 
       {/* Level-3 sheet overlay — dispatches by entity type. */}
       {sheetCardId && auth && storyId && (() => {
+        // FIL-653: a world entry opened from a character's "Before the story".
+        const w = sandboxOn ? (data.world ?? []).find((x) => x.id === sheetCardId) : undefined;
+        if (w) {
+          return (
+            <WorldSheet
+              entry={w} entities={data.entities} fragments={data.fragments ?? []} dark={dark}
+              onClose={() => setSheetCardId(null)} onOpenCard={(id) => setSheetCardId(id)}
+              onMakeScene={() => { makeSceneFromWorld({ projectId: storyId, userId: auth.userId, id: w.id }, auth.token).then(() => { setSheetCardId(null); refreshEntitiesRef.current().catch(() => {}); }).catch(() => {}); }}
+              onEstablish={(cardId, undo) => { establishWorldEntry({ projectId: storyId, id: w.id, cardId, undo }, auth.token).then(() => refreshEntitiesRef.current().catch(() => {})).catch(() => {}); }}
+            />
+          );
+        }
         const e = data.entities.find((x) => x.id === sheetCardId);
         if (!e) return null;
         if (e.type === 'event') {
@@ -8933,6 +9045,8 @@ export default function FreeformCorkboard() {
               onEntitiesChanged={refreshEntities}
               onChangeNarrativeStatus={(next) => onChangeNarrativeStatus(sheetCardId, next)}
               onOpenCard={(cardId) => setSheetCardId(cardId)}
+              labelSet={data.labelSet}
+              onSetColor={(c) => onSetColor(sheetCardId, c)}
             />
           );
         }
@@ -9015,6 +9129,8 @@ export default function FreeformCorkboard() {
             onClose={() => setSheetCardId(null)}
             onEntitiesChanged={refreshEntities}
             onOpenCard={(cardId) => setSheetCardId(cardId)}
+            fragments={sandboxOn ? (data.fragments ?? []) : undefined}
+            world={sandboxOn ? (data.world ?? []) : undefined}
           />
         );
       })()}
