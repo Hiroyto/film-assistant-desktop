@@ -685,7 +685,7 @@ export default function WowFlow({
           id: 'wow-tb-import',
           selector: '[data-tour="toolbar-import"]',
           nextLabel: "You're set →",
-          content: stepBody('Already have script pages?', 'Import a screenplay PDF, Final Draft or Fade In file (or drop one on the board) and it extracts into cards.'),
+          content: stepBody('Already have script pages?', 'Import a screenplay PDF, Final Draft, Fade In or Fountain file (or drop one on the board) and it extracts into cards.'),
           onExit: () => { wowEvent('completed', { full: true }); setPhase('done'); onComplete(); },
         },
       ],
