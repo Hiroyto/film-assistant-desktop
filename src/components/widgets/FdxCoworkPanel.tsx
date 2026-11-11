@@ -1,5 +1,5 @@
-// FdxCoworkPanel — cowork .fdx (SOMENTE LEITURA), opt-in. Não aparece até o
-// usuário acionar o menu "File → Open Screenplay (.fdx)…" (evento nativo
+// FdxCoworkPanel — cowork de um .fdx ou .fountain (SOMENTE LEITURA), opt-in. Não aparece até o
+// usuário acionar o menu "File → Open Screenplay (.fdx, .fountain)…" (evento nativo
 // 'app:open-fdx'). Depois de abrir, mostra um controle discreto (arquivo, nº de
 // cenas, board, parar) e o board ao vivo. Enquanto nenhum .fdx está aberto,
 // renderiza nada — não é mais um widget flutuante permanente. Desktop-only.
@@ -12,6 +12,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { isDesktop } from '../../lib/ipcClient';
 import { openFdx, closeFdx, onFdxChanged } from '../../lib/fdxClient';
+import { coworkExt } from '../../lib/fountainCowork';
 import { getFdxSyncSnapshot, openFdxSync } from '../../lib/fdxSync';
 import { useFdxSync } from './useFdxSync';
 import { FdxBoard } from './FdxBoard';
@@ -118,7 +119,7 @@ export function FdxCoworkPanel(): JSX.Element | null {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
           <strong style={{ fontSize: 12 }}>
             <span style={dot} />
-            .fdx cowork (read-only)
+            {`${coworkExt(payload.fileName)} cowork (read-only)`}
           </strong>
           <button type="button" onClick={stop} style={{ ...btn, background: 'transparent', color: 'rgba(255,255,255,0.6)', padding: 2 }}>
             stop

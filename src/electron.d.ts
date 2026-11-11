@@ -32,11 +32,17 @@ declare global {
     paragraphs?: FdxParagraph[];
   }
 
-  /** Snapshot parseado de um .fdx observado (emitido pelo shell). */
+  /** Snapshot de um roteiro observado (emitido pelo shell). Um .fdx chega com
+   *  `scenes` pronto; um .fountain chega com o texto em `source` e o fdxClient
+   *  monta as cenas (lib/fountainCowork) antes de entregar a quem consome. */
   interface FdxPayload {
     path: string;
     fileName: string;
     ok: boolean;
+    /** Ausente = 'fdx' (payloads antigos). */
+    format?: 'fdx' | 'fountain';
+    /** Só em `format: 'fountain'`, e só entre o shell e o fdxClient. */
+    source?: string;
     title?: string;
     sceneCount: number;
     paragraphCount: number;

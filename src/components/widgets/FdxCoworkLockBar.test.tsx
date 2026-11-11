@@ -61,6 +61,21 @@ describe('useFdxCoworkLock + FdxCoworkLockBar', () => {
     expect(sessionStorage.getItem('ff-fdx-edit-unlock-s1')).toBeNull();
   });
 
+  it('cowork com um .fountain: a barra e o aviso nomeiam o arquivo, não o Final Draft', () => {
+    (fdxCoworkFileFor as jest.Mock).mockReturnValue('tide.fountain');
+    render(<Harness storyId="s1" />);
+    const bar = screen.getByTestId('cowork-lock-bar');
+    expect(bar).toHaveTextContent('Read-only. This screenplay is coworking with tide.fountain. Edits made here would conflict with the file.');
+    fireEvent.click(screen.getByText('Enable editing…'));
+    expect(screen.getByRole('dialog')).toHaveTextContent('being written in tide.fountain and synced to the board after every save');
+    expect(screen.getByRole('dialog')).not.toHaveTextContent('Final Draft');
+  });
+
+  it('cowork com um .fdx: os textos do Final Draft ficam', () => {
+    render(<Harness storyId="s1" />);
+    expect(screen.getByTestId('cowork-lock-bar')).toHaveTextContent('coworking with pilot.fdx in Final Draft.');
+  });
+
   it('a escolha é por story e por sessão', () => {
     sessionStorage.setItem('ff-fdx-edit-unlock-s1', '1');
     const { rerender } = render(<Harness storyId="s1" />);

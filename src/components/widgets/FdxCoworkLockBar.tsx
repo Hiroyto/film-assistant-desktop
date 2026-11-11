@@ -1,11 +1,12 @@
-// FdxCoworkLockBar — trava de edição do roteiro enquanto um .fdx cowork a
-// story. Dois escritores de save-scene-text (o Final Draft, via motor, e o
+// FdxCoworkLockBar — trava de edição do roteiro enquanto um arquivo (.fdx ou
+// .fountain) cowork a story. Dois escritores de save-scene-text (o arquivo, via motor, e o
 // editor daqui) sobrescreveriam um ao outro — o último save vence. Então o
 // editor nasce READ-ONLY enquanto o cowork está ligado para a story, com a
 // opção de destravar, que vem com o aviso do risco. A escolha vale para esta
 // sessão do app (sessionStorage): ao reabrir, volta a travado — o padrão seguro.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { fdxCoworkFileFor } from '../../lib/fdxSync';
+import { isFountainFile } from '../../lib/fountainCowork';
 import { useFdxSync } from './useFdxSync';
 
 export interface FdxCoworkLock {
@@ -54,6 +55,8 @@ const FONT = 'system-ui, sans-serif';
 export function FdxCoworkLockBar({ lock, theme }: { lock: FdxCoworkLock; theme: 'dark' | 'light' }): JSX.Element | null {
   const [confirming, setConfirming] = useState(false);
   if (!lock.coworkFile) return null;
+  // Um .fountain não é "do Final Draft": o texto nomeia só o arquivo.
+  const fountain = isFountainFile(lock.coworkFile);
   const dark = theme === 'dark';
   const bar: React.CSSProperties = {
     flexShrink: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '7px 18px', fontSize: 12.5, fontFamily: FONT,
@@ -72,7 +75,7 @@ export function FdxCoworkLockBar({ lock, theme }: { lock: FdxCoworkLock; theme: 
           style={{ ...bar, background: dark ? 'rgba(93,212,200,0.08)' : 'rgba(15,127,159,0.08)', color: dark ? '#c9c9d1' : '#2c2c28' }}
         >
           <span>
-            Read-only. This screenplay is coworking with <strong>{lock.coworkFile}</strong> in Final Draft. Edits made here would conflict with the file.
+            Read-only. This screenplay is coworking with <strong>{lock.coworkFile}</strong>{fountain ? '' : ' in Final Draft'}. Edits made here would conflict with the file.
           </span>
           <button type="button" style={{ ...btn, marginLeft: 'auto' }} onClick={() => setConfirming(true)}>Enable editing…</button>
         </div>
@@ -107,13 +110,15 @@ export function FdxCoworkLockBar({ lock, theme }: { lock: FdxCoworkLock; theme: 
           >
             <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>Edit while coworking?</div>
             <p style={{ margin: '0 0 8px', lineHeight: 1.5 }}>
-              This screenplay is being written in Final Draft (<strong>{lock.coworkFile}</strong>) and synced to the board on every save.
+              {fountain
+                ? <>This screenplay is being written in <strong>{lock.coworkFile}</strong> and synced to the board after every save.</>
+                : <>This screenplay is being written in Final Draft (<strong>{lock.coworkFile}</strong>) and synced to the board on every save.</>}
             </p>
             <p style={{ margin: '0 0 8px', lineHeight: 1.5 }}>
               If you also edit here, the two copies can conflict: the file and the app write the same scenes, and the last save wins.
-              Text you type here may be replaced by the next Final Draft save, or overwrite it.
+              Text you type here may be replaced by the next {fountain ? 'save of the file' : 'Final Draft save'}, or overwrite it.
             </p>
-            <p style={{ margin: 0, lineHeight: 1.5, opacity: 0.75 }}>Safer: edit in Final Draft, or stop the cowork first.</p>
+            <p style={{ margin: 0, lineHeight: 1.5, opacity: 0.75 }}>Safer: edit {fountain ? 'the file' : 'in Final Draft'}, or stop the cowork first.</p>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16, flexWrap: 'wrap' }}>
               <button type="button" style={btn} onClick={() => setConfirming(false)}>Keep read-only</button>
               <button

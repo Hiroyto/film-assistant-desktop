@@ -33,6 +33,12 @@
 // O texto fica no servidor; o .fdx no disco É a cópia local-first — qualquer
 // rodada pode ser refeita a partir do arquivo de forma idempotente (hashes).
 //
+// FOUNTAIN (.fountain): o mesmo motor. O arquivo chega do fdxClient já como
+// cenas tipadas (lib/fountainCowork), então nada aqui depende do formato —
+// menos o ritmo do modo auto: um editor de texto salva sozinho, então a rodada
+// espera o arquivo sossegar (FOUNTAIN_AUTO_DEBOUNCE_MS), como o editor de
+// roteiro faz com a própria lane de extração.
+//
 // Módulo sem React (a UI assina via subscribeFdxSync). Desktop-only na prática:
 // openFdx/onFdxChanged degradam para no-op na web.
 import { fetchAuthSession } from 'aws-amplify/auth';
@@ -48,6 +54,7 @@ import {
   type SceneLedgerBlock,
 } from './freeformApi';
 import { openFdx, closeFdx, onFdxChanged, watchFdx } from './fdxClient';
+import { isFountainFile } from './fountainCowork';
 import { pulseExtractionGlobal } from './storySession';
 
 // ---- Helpers puros (exportados para teste) ---------------------------------
@@ -596,7 +603,17 @@ export interface FdxSyncSnapshot {
 
 type Auth = { userId: string; token: string };
 
-const AUTO_DEBOUNCE_MS = 1500;
+/** Auto-sync de um .fdx: o save do Final Draft É o "terminei a cena". */
+export const AUTO_DEBOUNCE_MS = 1500;
+/** Auto-sync de um .fountain: editor de texto salva sozinho enquanto o
+ *  roteirista digita, então um save não quer dizer "terminei" — e cada rodada
+ *  manda cena nova ou alterada para a IA. Vale a MESMA folga da lane de
+ *  extração do editor de roteiro (8 s sem mudança): cada save reinicia a
+ *  contagem e a rodada só sai quando o arquivo sossega. */
+export const FOUNTAIN_AUTO_DEBOUNCE_MS = 8000;
+/** Quanto o modo auto espera depois do último save antes de rodar. Pura. */
+export const autoDebounceFor = (payload: Pick<FdxPayload, 'format' | 'fileName'>): number =>
+  (payload.format === 'fountain' || isFountainFile(payload.fileName) ? FOUNTAIN_AUTO_DEBOUNCE_MS : AUTO_DEBOUNCE_MS);
 /** Polling do job de IA: como o pollCarve do editor (20s, 4×15s, depois 30s). */
 const POLL_FIRST_MS = 20000;
 const POLL_EARLY_MS = 15000;
@@ -813,7 +830,7 @@ function handleChanged(payload: FdxPayload): void {
   lastChangeAt = payload.updatedAt;
   if (!payload.ok) {
     // mid-write / parse falhou: o próximo save do FD reenvia. Não é erro de sync.
-    lastError = payload.error || 'could not read the .fdx';
+    lastError = payload.error || 'could not read the file';
     emit();
     return;
   }
@@ -824,7 +841,7 @@ function handleChanged(payload: FdxPayload): void {
     debounceTimer = setTimeout(() => {
       debounceTimer = null;
       void runSync(payload);
-    }, AUTO_DEBOUNCE_MS);
+    }, autoDebounceFor(payload));
   }
   emit();
 }
@@ -852,7 +869,7 @@ async function activate(payload: FdxPayload): Promise<void> {
   if (storyId) persistStore(storyId, store);
   lastPayload = payload;
   lastChangeAt = payload.updatedAt;
-  lastError = payload.ok ? undefined : (payload.error || 'could not read the .fdx');
+  lastError = payload.ok ? undefined : (payload.error || 'could not read the file');
   emit();
   if (payload.ok) await runSync(payload, { manual: true });
 }
@@ -983,7 +1000,7 @@ export async function chooseFdxCandidate(): Promise<CandidateReport | null> {
   const payload = await openFdx();
   if (!payload) return null;
   if (!payload.ok) {
-    lastError = payload.error || 'could not read the .fdx';
+    lastError = payload.error || 'could not read the file';
     try { await closeFdx(); } catch { /* best-effort */ }
     emit();
     return null;

@@ -7,8 +7,8 @@ export const IPC = {
   DB_QUERY: 'db:query', // { sql, params, mode: 'run'|'all'|'get' } -> resultado
   DB_BATCH: 'db:batch', // { ops: {sql,params}[] } em uma transação -> void
   UPDATE_INSTALL: 'shell:updateInstall', // invoke: relaunch p/ instalar update (AD-09)
-  FDX_OPEN: 'fdx:open', // invoke: dialog + inicia watch de um .fdx -> FdxPayload | null
-  FDX_WATCH: 'fdx:watch', // invoke: { path } — retoma o watch de um .fdx conhecido, sem dialog -> FdxPayload | null (arquivo sumiu)
+  FDX_OPEN: 'fdx:open', // invoke: dialog + inicia watch de um .fdx/.fountain -> FdxPayload | null
+  FDX_WATCH: 'fdx:watch', // invoke: { path } — retoma o watch de um .fdx/.fountain conhecido, sem dialog -> FdxPayload | null (arquivo sumiu)
   FDX_CLOSE: 'fdx:close', // invoke: para o watch atual -> void
 
   // send (main -> renderer, push)
@@ -39,11 +39,19 @@ export interface FdxScene {
   paragraphs?: FdxParagraph[];
 }
 
-/** Snapshot parseado de um arquivo .fdx observado. */
+/** Snapshot de um roteiro observado (.fdx ou .fountain).
+ *  .fdx: parseado aqui no main (fdx/parse.ts), `scenes` já vem pronto.
+ *  .fountain: o parser Fountain vive SÓ no renderer (src/lib/fountain.ts), então
+ *  o main manda o texto cru em `source` e o renderer monta as cenas
+ *  (src/lib/fountainCowork.ts, via fdxClient) antes de qualquer consumidor ver. */
 export interface FdxPayload {
   path: string;
   fileName: string;
-  ok: boolean; // parse bem-sucedido (false = mid-write / não é fdx / erro)
+  ok: boolean; // leitura bem-sucedida (false = mid-write / não é roteiro / erro)
+  /** Ausente = 'fdx' (payloads antigos). */
+  format?: 'fdx' | 'fountain';
+  /** Só em `format: 'fountain'`: o texto do arquivo, já decodificado. */
+  source?: string;
   title?: string;
   sceneCount: number;
   paragraphCount: number;

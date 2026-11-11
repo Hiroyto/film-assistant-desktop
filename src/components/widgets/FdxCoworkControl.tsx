@@ -1,8 +1,8 @@
-// FdxCoworkControl — controle do cowork .fdx DENTRO do corkboard. Vincula o
-// motor headless (lib/fdxSync) à story aberta e expõe o mesmo vocabulário do
-// auto-sync do editor de roteiro: Auto-sync on/off, "Sync now", status. Com o
-// watch ativo, cada save do Final Draft vira save + extração por cena no board
-// real — o FdxBoard read-only deixa de ser necessário aqui.
+// FdxCoworkControl — controle do cowork (.fdx ou .fountain) DENTRO do corkboard.
+// Vincula o motor headless (lib/fdxSync) à story aberta e expõe o mesmo
+// vocabulário do auto-sync do editor de roteiro: Auto-sync on/off, "Sync now",
+// status. Com o watch ativo, cada save do arquivo vira save + extração por
+// cena no board real — o FdxBoard read-only deixa de ser necessário aqui.
 //
 // A janela também é o DOCKET do cowork: as perguntas que as páginas levantaram
 // (o strip do Placement Control, "Things to confirm…") aparecem aqui com as
@@ -14,6 +14,7 @@ import {
   bindFdxSync, chooseFdxCandidate, confirmFdxCandidate, discardFdxCandidate, dismissFdxUndo, openFdxSync,
   resolveMissingScene, setFdxAuto, stopFdxSync, syncFdxNow, undoFdxResync,
 } from '../../lib/fdxSync';
+import { coworkExt, isFountainFile } from '../../lib/fountainCowork';
 import type { BraindumpLogEntry } from '../../lib/freeformApi';
 import { BD_ORANGE, StagedRow, type StagedStripRow } from '../Freeform/corkboard/panels';
 import { useFdxSync } from './useFdxSync';
@@ -54,10 +55,11 @@ interface Props {
   strip?: CoworkStrip;
 }
 
-/** Abre o seletor de .fdx e liga o cowork na story vinculada. Chamado pelo
- *  botão "Cowork with a .fdx" do empty state do board (ao lado do import
- *  one-shot); em board que já tem cards, a entrada é o menu File → Open
- *  Screenplay (.fdx)…, que vai direto ao openFdxSync (FdxCoworkPanel). */
+/** Abre o seletor de roteiro (.fdx ou .fountain) e liga o cowork na story
+ *  vinculada. Chamado pelo botão "Cowork with a .fdx" do empty state do board
+ *  (ao lado do import one-shot); em board que já tem cards, a entrada é o menu
+ *  File → Open Screenplay (.fdx, .fountain)…, que vai direto ao openFdxSync
+ *  (FdxCoworkPanel). */
 export async function startFdxCowork(): Promise<void> {
   try {
     await flushPushNow(); // o freeform nega escrita de story ainda não registrada no /works
@@ -218,6 +220,13 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, strip }: Pr
   // (startFdxCowork). Os effects acima continuam vinculando o motor à story.
   if (!snap.active && !fileMissing && !snap.candidate && !snap.undo) return null;
 
+  // Os textos seguem o formato do arquivo da story: um .fountain não é "o
+  // arquivo do Final Draft", e o auto-sync dele espera o arquivo sossegar.
+  const coworkFileName = snap.fileName ?? snap.fileMissing;
+  const fountain = isFountainFile(coworkFileName);
+  const coworkLabel = `${coworkExt(coworkFileName)} cowork`;
+  const sourceApp = fountain ? 'Fountain' : 'Final Draft';
+
   // ---- Ativo: painel de status + controles -------------------------------
   const dotColor = fileMissing ? '#ef4444' : snap.status === 'syncing' || snap.pending ? '#5dd4c8' : snap.status === 'error' ? '#ef4444' : snap.dirty ? '#eab308' : '#4ecdc4';
   const liveLine = snap.status === 'syncing'
@@ -271,7 +280,7 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, strip }: Pr
     <>
       {showMissingDialog ? (
         <CoworkDialog
-          title="Final Draft file not found"
+          title={`${sourceApp} file not found`}
           actions={(
             <>
               <button type="button" style={btnSmall} onClick={() => setMissingDismissed(true)}>Later</button>
@@ -365,7 +374,7 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, strip }: Pr
               animation: busy ? 'fdxchip-pulse 1.1s ease-in-out infinite' : 'none',
             }}
           />
-          .fdx cowork
+          {coworkLabel}
           <span style={{ fontWeight: 500, color: chipTone, transition: 'color 200ms', fontVariantNumeric: 'tabular-nums' }}>{chipStatus}</span>
           {coworkRows.length ? (
             <span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 7px', borderRadius: 999, background: 'rgba(230,126,34,0.18)', color: BD_ORANGE, border: '1px solid rgba(230,126,34,0.45)' }}>
@@ -394,7 +403,7 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, strip }: Pr
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
           <strong style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: dotColor, transition: 'background 200ms' }} />
-            .fdx cowork
+            {coworkLabel}
           </strong>
           <button
             type="button"
@@ -525,7 +534,7 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, strip }: Pr
             <button
               type="button"
               onClick={() => void chooseFdxCandidate()}
-              title="Pick the Final Draft file again. You confirm before anything syncs."
+              title={`Pick the ${sourceApp} file again. You confirm before anything syncs.`}
               style={{ ...btnPrimary, padding: '5px 10px', fontSize: 12, boxShadow: 'none' }}
             >
               Choose the file…
@@ -536,7 +545,9 @@ export function FdxCoworkControl({ storyId, auth, onSynced, onAiJob, strip }: Pr
             type="button"
             onClick={() => setFdxAuto(!snap.auto)}
             title={snap.auto
-              ? 'Auto-sync is on: every Final Draft save updates the board. Click to switch to manual.'
+              ? (fountain
+                ? 'Auto-sync is on: the board updates a few seconds after the file stops changing. Click to switch to manual.'
+                : 'Auto-sync is on: every Final Draft save updates the board. Click to switch to manual.')
               : 'Auto-sync is off: the board only updates on Sync now. Click to turn it back on.'}
             style={{ ...btnSmall, color: snap.auto ? 'rgba(255,255,255,0.85)' : '#eab308' }}
           >

@@ -173,3 +173,28 @@ describe('FdxCoworkControl — arquivo perdido, confirmação do arquivo novo e 
     expect(dismissFdxUndo).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('FdxCoworkControl — cowork com um .fountain', () => {
+  it('o chip e a janela nomeiam o formato do arquivo, e o auto-sync explica a espera', () => {
+    (useFdxSync as jest.Mock).mockReturnValue(snapshot({ fileName: 'tide.fountain' }));
+    render(<FdxCoworkControl storyId="s1" auth={AUTH} />);
+    expect(screen.getByText('.fountain cowork')).toBeInTheDocument();
+    expect(screen.queryByText('.fdx cowork')).toBeNull();
+    openChip();
+    expect(screen.getByText('.fountain cowork')).toBeInTheDocument();
+    expect(screen.getByText('Auto-sync on')).toHaveAttribute('title', expect.stringMatching(/after the file stops changing/));
+  });
+
+  it('arquivo perdido: o alerta não fala em Final Draft', () => {
+    (useFdxSync as jest.Mock).mockReturnValue(snapshot({ active: false, fileName: 'tide.fountain', fileMissing: 'tide.fountain', lastSyncAt: undefined }));
+    render(<FdxCoworkControl storyId="s1" auth={AUTH} />);
+    expect(screen.getByRole('dialog', { name: 'Fountain file not found' })).toHaveTextContent('tide.fountain');
+    expect(screen.queryByText(/Final Draft/)).toBeNull();
+  });
+
+  it('um .fdx continua com os textos do Final Draft', () => {
+    render(<FdxCoworkControl storyId="s1" auth={AUTH} />);
+    openChip();
+    expect(screen.getByText('Auto-sync on')).toHaveAttribute('title', expect.stringMatching(/every Final Draft save/));
+  });
+});
