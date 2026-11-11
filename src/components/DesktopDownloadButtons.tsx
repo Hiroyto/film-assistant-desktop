@@ -2,7 +2,8 @@
 //
 // Os instaladores são publicados no GitHub Releases pelo Electron Forge
 // (publisher-github, AD-09). O Windows tem nome estável (FilmAssistantSetup.exe,
-// forge.config.js §maker-squirrel); o macOS .dmg é versionado. Por isso resolvemos
+// forge.config.js §maker-squirrel); o macOS .dmg é versionado e sai um por
+// arquitetura (…-arm64.dmg e …-x64.dmg). Por isso resolvemos
 // os assets DINAMICAMENTE pela API do GitHub. Preferimos a release CHEIA mais
 // recente (canal prod); sem nenhuma, a pre-release mais recente (canal beta) —
 // o atalho /releases/latest/download não enxergaria o canal beta.
@@ -33,12 +34,20 @@ interface GhRelease {
   assets?: GhAsset[];
 }
 
+// Um botão de Mac por instalador. `arch` decide o rótulo: 'arm64' / 'x64' quando
+// o nome do dmg diz a arquitetura; 'any' para um dmg universal ou sem ela no nome.
+export type MacArch = 'arm64' | 'x64' | 'any';
+export interface MacDownload {
+  arch: MacArch;
+  url: string;
+}
+
 export interface DesktopReleaseInfo {
   loading: boolean;
   error: string | null;
   version: string | null;
   windowsUrl: string | null;
-  macUrl: string | null; // melhor pick por arquitetura (universal > detectada > única)
+  macDownloads: MacDownload[]; // Apple Silicon primeiro; vazio = nenhum dmg publicado
 }
 
 function detectOS(): OS {
@@ -49,27 +58,28 @@ function detectOS(): OS {
   return 'other';
 }
 
-// A UA não revela Apple Silicon de forma confiável (Safari mascara como Intel).
-// Então preferimos universal/Intel por padrão; um dmg arm64 explícito ainda é
-// oferecido se existir. Best-effort: sem detecção agressiva.
-function preferAppleSilicon(): boolean {
-  return false;
-}
-
 function pickWindows(assets: GhAsset[]): string | null {
   const exact = assets.find(a => /FilmAssistantSetup\.exe$/i.test(a.name));
   const anyExe = assets.find(a => /\.exe$/i.test(a.name));
   return (exact || anyExe)?.browser_download_url || null;
 }
 
-function pickMac(assets: GhAsset[], prefArm: boolean): string | null {
+// A UA não revela Apple Silicon de forma confiável (o Safari se apresenta como
+// Intel em qualquer Mac), então não adivinhamos: com um dmg por arquitetura a
+// página oferece os dois e o visitante escolhe. O errado custa caro nos dois
+// sentidos — o arm64 não abre num Mac Intel; o x64 roda num Apple Silicon só via
+// Rosetta, e o auto-update mantém a pessoa nele.
+export function pickMac(assets: GhAsset[]): MacDownload[] {
   const dmgs = assets.filter(a => /\.dmg$/i.test(a.name));
-  if (dmgs.length === 0) return null;
   const universal = dmgs.find(a => /universal/i.test(a.name));
+  if (universal) return [{ arch: 'any', url: universal.browser_download_url }];
   const arm = dmgs.find(a => /(arm64|aarch64|apple[-_ ]?silicon)/i.test(a.name));
-  const intel = dmgs.find(a => /(x64|x86_64|intel)/i.test(a.name));
-  const best = universal || (prefArm ? (arm || intel) : (intel || arm)) || dmgs[0];
-  return best?.browser_download_url || null;
+  const intel = dmgs.find(a => a !== arm && /(x64|x86_64|intel)/i.test(a.name));
+  const picks: MacDownload[] = [];
+  if (arm) picks.push({ arch: 'arm64', url: arm.browser_download_url });
+  if (intel) picks.push({ arch: 'x64', url: intel.browser_download_url });
+  if (picks.length === 0 && dmgs[0]) picks.push({ arch: 'any', url: dmgs[0].browser_download_url });
+  return picks;
 }
 
 // Memoiza o fetch entre montagens (evita bater na API a cada render / rate limit).
@@ -97,7 +107,7 @@ function fetchLatestRelease(): Promise<GhRelease | null> {
 
 export function useLatestDesktopRelease(): DesktopReleaseInfo {
   const [info, setInfo] = useState<DesktopReleaseInfo>({
-    loading: true, error: null, version: null, windowsUrl: null, macUrl: null,
+    loading: true, error: null, version: null, windowsUrl: null, macDownloads: [],
   });
 
   useEffect(() => {
@@ -106,7 +116,7 @@ export function useLatestDesktopRelease(): DesktopReleaseInfo {
       .then(rel => {
         if (cancelled) return;
         if (!rel) {
-          setInfo({ loading: false, error: 'no-release', version: null, windowsUrl: null, macUrl: null });
+          setInfo({ loading: false, error: 'no-release', version: null, windowsUrl: null, macDownloads: [] });
           return;
         }
         const assets = rel.assets || [];
@@ -115,12 +125,12 @@ export function useLatestDesktopRelease(): DesktopReleaseInfo {
           error: null,
           version: rel.tag_name || rel.name || null,
           windowsUrl: pickWindows(assets),
-          macUrl: pickMac(assets, preferAppleSilicon()),
+          macDownloads: pickMac(assets),
         });
       })
       .catch(err => {
         if (!cancelled) {
-          setInfo({ loading: false, error: err?.message || 'fetch-failed', version: null, windowsUrl: null, macUrl: null });
+          setInfo({ loading: false, error: err?.message || 'fetch-failed', version: null, windowsUrl: null, macDownloads: [] });
         }
       });
     return () => { cancelled = true; };
@@ -145,37 +155,53 @@ interface Props {
   className?: string;
   /** Texto do rótulo acima dos botões. */
   label?: string;
+  /** Tag on the visitor's own OS button (default "Your OS"). An ad landing
+   *  can say why that download matters, e.g. "Final Draft sync". */
+  badge?: string;
 }
 
-const DesktopDownloadButtons: React.FC<Props> = ({ className, label = 'Download the desktop app' }) => {
+const DesktopDownloadButtons: React.FC<Props> = ({ className, label = 'Download the desktop app', badge = 'Your OS' }) => {
   // Nunca renderiza dentro do próprio app desktop.
   if (isDesktop()) return null;
 
-  return <DownloadButtonsInner className={className} label={label} />;
+  return <DownloadButtonsInner className={className} label={label} badge={badge} />;
 };
 
 interface Btn {
+  key: string;
   target: OS;
   url: string;
   icon: React.ReactNode;
   text: string;
 }
 
+const MAC_LABEL: Record<MacArch, string> = {
+  arm64: 'macOS · Apple Silicon',
+  x64: 'macOS · Intel',
+  any: 'macOS',
+};
+
 // Componente interno para poder chamar o hook depois do early-return de isDesktop().
-const DownloadButtonsInner: React.FC<Props> = ({ className, label }) => {
+const DownloadButtonsInner: React.FC<Props> = ({ className, label, badge }) => {
   const os = detectOS();
-  const { loading, version, windowsUrl, macUrl } = useLatestDesktopRelease();
+  const { loading, version, windowsUrl, macDownloads } = useLatestDesktopRelease();
 
   // Enquanto carrega, não mostra nada (evita botão "quebrado" piscando).
   if (loading) return null;
 
   // Só entra na lista o SO que tem asset publicado. Sem asset → botão some.
   const available: Btn[] = [];
-  if (windowsUrl) available.push({ target: 'windows', url: windowsUrl, icon: <WindowsIcon />, text: 'Windows' });
-  if (macUrl) available.push({ target: 'mac', url: macUrl, icon: <AppleIcon />, text: 'macOS' });
+  if (windowsUrl) available.push({ key: 'windows', target: 'windows', url: windowsUrl, icon: <WindowsIcon />, text: 'Windows' });
+  for (const m of macDownloads) {
+    available.push({ key: `mac-${m.arch}`, target: 'mac', url: m.url, icon: <AppleIcon />, text: MAC_LABEL[m.arch] });
+  }
 
   // Nenhum instalador publicado ainda (ou API indisponível) → seção some por completo.
   if (available.length === 0) return null;
+
+  // Com dois dmgs o selo "Your OS" não diz QUAL é o do visitante: sai o selo e
+  // entra, para quem está num Mac, a dica de como descobrir o chip.
+  const macSplit = macDownloads.length > 1;
 
   return (
     <div className={['ddl-wrap', className].filter(Boolean).join(' ')}>
@@ -185,17 +211,22 @@ const DownloadButtonsInner: React.FC<Props> = ({ className, label }) => {
       <div className="ddl-buttons">
         {available.map(b => (
           <a
-            key={b.target}
+            key={b.key}
             className={['ddl-btn', os === b.target ? 'ddl-recommended' : ''].filter(Boolean).join(' ')}
             href={b.url}
             rel="noopener"
           >
             <span className="ddl-icon">{b.icon}</span>
             <span className="ddl-text">{b.text}</span>
-            {os === b.target && <span className="ddl-badge">Your OS</span>}
+            {os === b.target && !(b.target === 'mac' && macSplit) && <span className="ddl-badge">{badge}</span>}
           </a>
         ))}
       </div>
+      {macSplit && os === 'mac' && (
+        <div className="ddl-note">
+          Not sure which Mac you have? Apple menu → About This Mac: “Chip” means Apple Silicon, “Processor” means Intel.
+        </div>
+      )}
     </div>
   );
 };

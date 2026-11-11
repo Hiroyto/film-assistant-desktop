@@ -82,7 +82,10 @@
   pointer-events: none;
 }
 
+/* Dica de arquitetura sob os botões (Mac com dois dmgs). */
 .ddl-note {
+  max-width: 44ch;
   font-size: 0.78rem;
+  text-align: center;
   color: rgba(255, 255, 255, 0.45);
 }
