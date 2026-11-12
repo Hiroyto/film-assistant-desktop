@@ -8,6 +8,7 @@
 //
 // Setup de assinatura é iniciado já na Fase 1 (não esperar Fase 4) — handoff.md §2.
 
+const fs = require('fs');
 const path = require('path');
 const { FusesPlugin } = require('@electron-forge/plugin-fuses');
 const { FuseV1Options, FuseVersion } = require('@electron/fuses');
@@ -47,6 +48,41 @@ const macOSSign =
           : undefined,
       }
     : {};
+
+// ---- Arquitetura do módulo nativo no macOS ----------------------------------
+// O pacote x64 (Intel) é cross-build num runner arm64 (desktop-release.yml,
+// `--arch=x64`). O Electron já vem na arquitetura certa, mas o
+// better_sqlite3.node só fica x64 se o rebuild do forge trocar o binário arm64
+// deixado pelo postinstall. Se isso falhar calado, o app sai assinado,
+// notarizado e publicado — e não abre o SQLite em nenhum Mac Intel
+// ("incompatible architecture"), sem que ninguém do time veja. Por isso lemos o
+// cabeçalho Mach-O do .node depois do rebuild e antes do asar/assinatura.
+const MACHO_CPU = { 0x01000007: 'x64', 0x0100000c: 'arm64' };
+/** Arquiteturas de um binário Mach-O (thin 64-bit ou fat); [] se não for Mach-O. */
+function machOArchs(file) {
+  const buf = fs.readFileSync(file);
+  if (buf.length < 8) return [];
+  const magic = buf.readUInt32BE(0);
+  if (magic === 0xcffaedfe) return [MACHO_CPU[buf.readUInt32LE(4)] || 'desconhecida'];
+  if (magic === 0xcafebabe) {
+    // fat_header (8 bytes) + fat_arch[] de 20 bytes, big-endian; cputype abre cada um.
+    const count = buf.readUInt32BE(4);
+    return Array.from({ length: count }, (_, i) => MACHO_CPU[buf.readUInt32BE(8 + i * 20)] || 'desconhecida');
+  }
+  return [];
+}
+/** Hook packageAfterPrune: roda uma vez por arquitetura, já com os nativos refeitos. */
+async function assertNativeArch(_forgeConfig, buildPath, _electronVersion, platform, arch) {
+  if (platform !== 'darwin') return;
+  const native = path.join(buildPath, 'node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node');
+  const archs = machOArchs(native);
+  if (!archs.includes(arch)) {
+    throw new Error(
+      `better_sqlite3.node saiu como [${archs.join(', ') || 'não é Mach-O'}], mas o pacote é darwin-${arch}. ` +
+        'O rebuild do forge não gerou o módulo nativo para a arquitetura alvo — build abortado antes de assinar/publicar.',
+    );
+  }
+}
 
 // ---- O que fica FORA do asar ------------------------------------------------
 // `ignore` é uma FUNÇÃO, não uma lista de regex, por um motivo concreto: o
@@ -134,6 +170,9 @@ module.exports = {
     ignore: ignorePath,
     ...windowsSign,
     ...macOSSign,
+  },
+  hooks: {
+    packageAfterPrune: assertNativeArch,
   },
   plugins: [
     // better-sqlite3 ships a native .node that cannot be dlopen'd from inside

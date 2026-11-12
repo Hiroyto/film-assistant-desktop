@@ -1,6 +1,7 @@
 name: Desktop Release
 
-# Publica o app desktop (Windows .exe + macOS .dmg) no GitHub Releases DESTE repo.
+# Publica o app desktop (Windows .exe + macOS .dmg, um por arquitetura: arm64 e
+# x64) no GitHub Releases DESTE repo.
 # Pré-requisitos:
 #   - Este repo deve ser o repo PÚBLICO dedicado ao desktop (a web consome os releases dele).
 #   - A web aponta para ele via REACT_APP_GITHUB_REPO_OWNER / _NAME.
@@ -84,7 +85,19 @@ jobs:
       matrix:
         include:
           - os: windows-latest   # gera FilmAssistantSetup.exe (Squirrel)
-          - os: macos-latest     # gera .dmg (Apple Silicon / arm64)
+          # macOS sai em dois pacotes, um por arquitetura (.dmg + .zip do auto-update,
+          # com a arquitetura no nome — o update.electronjs.org separa por ela).
+          # Os dois rodam no MESMO runner arm64: o x64 é cross-build (`--arch=x64` no
+          # passo de publish) — o packager baixa o Electron x64 e o forge refaz o
+          # better-sqlite3 para x64 (o forge.config.js confere o Mach-O do .node antes
+          # de assinar). Jobs separados, e não `--arch=arm64,x64` num job só, para uma
+          # falha no x64 não segurar o arm64 (fail-fast: false + "Re-run failed jobs").
+          # Os dois terminam quase juntos: se ambos tentarem CRIAR a release no mesmo
+          # instante, o segundo falha no publish — "Re-run failed jobs" resolve.
+          - os: macos-latest
+            arch: arm64          # Apple Silicon
+          - os: macos-latest
+            arch: x64            # Intel
     runs-on: ${{ matrix.os }}
     # Rede de segurança: assinatura/notarização podem TRAVAR (codesign esperando
     # autorização de keychain, ou notarytool aguardando a Apple indefinidamente).
@@ -299,4 +312,7 @@ jobs:
           # "Finalizing package" e não dá para saber se travou no codesign ou se está
           # apenas aguardando a Apple analisar o upload da notarização.
           DEBUG: '@electron/osx-sign*,@electron/notarize*,electron-osx-sign*,electron-notarize*'
-        run: npm run desktop:publish
+        # macOS: a arquitetura vem da matrix e vai para o `electron-forge publish`
+        # (o npm repassa o que vem depois do `--` ao último comando do script).
+        # Windows não tem `arch` na matrix e roda o comando de sempre.
+        run: ${{ matrix.arch && format('npm run desktop:publish -- --arch={0}', matrix.arch) || 'npm run desktop:publish' }}
