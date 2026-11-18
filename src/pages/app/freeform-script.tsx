@@ -4054,7 +4054,7 @@ export default function FreeformScript({ embedded }: { embedded?: { sceneId: str
         {/* Outline handle, collapsed state: a slim tab on the body's left edge. */}
         {!navOpen && !scoped && (
           <button onClick={toggleNav} title="Show the outline panel" className="ff-nav-handle" style={{ position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)', zIndex: 30, width: 17, height: 54, borderRadius: '0 9px 9px 0', border: `1px solid ${theme === 'dark' ? '#26262c' : '#e3dbcb'}`, borderLeft: 'none', background: theme === 'dark' ? '#131316' : '#fbf8f1', color: theme === 'dark' ? '#8a8a93' : '#8a8578', fontSize: 13, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: '2px 0 10px rgba(0,0,0,0.18)' }}>›</button>
-        )}git 
+        )}
         {/* Navigator rail — sequences as sections, scenes as rows. Shell, not
             pages: this is where scene-level graph state lives (status now;
             stale/drift later). */}
