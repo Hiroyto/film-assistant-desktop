@@ -15,6 +15,7 @@ import { ErrorModal } from './ui/ErrorModal';
 import { useError } from './Error/useError';
 import { markStoryWorkflow, resolveStoryWorkflow } from '../lib/storyWorkflows';
 import { isLocalFirst } from '../lib/localFirst';
+import { brainstormForBuild, MIN_BUILD_CHARS } from '../lib/brainstormSeed';
 import { saveStory } from '../features/story-workspace/model/storySave';
 import { cacheDataToCanonical } from '../features/story-workspace/model/cacheDataAdapter';
 import { worksFromLocal } from '../features/story-workspace/model/worksFromLocal';
@@ -242,16 +243,28 @@ export function HomePage(props: HomePageProps) {
     }
     if (!canCreateStory()) return;
 
-    const brainstormContent = brainstormText.trim();
+    // The writer's own text — or, when they never touched the field, the WHOLE
+    // example idea that is typing itself there (the animation may be mid-word,
+    // or between two ideas). Either way this is what lands in the corkboard's
+    // braindump field and starts processing on arrival.
+    const brainstormContent = brainstormForBuild(brainstormText, userHasInteracted, EXAMPLE_PROMPTS[currentPromptIndex]);
 
-    if (!brainstormContent || brainstormContent.length < 50) {
-      toast.error('Please write at least 50 characters before building your story');
+    if (brainstormContent.length < MIN_BUILD_CHARS) {
+      toast.error(`Please write at least ${MIN_BUILD_CHARS} characters before building your story`);
       return;
+    }
+
+    // An example idea that was still animating: show all of it and stop the
+    // animation, so the field reads what is about to be built.
+    if (!userHasInteracted) {
+      setUserHasInteracted(true);
+      setIsTyping(false);
+      setBrainstormText(brainstormContent);
     }
 
     pendingBrainstormRef.current = brainstormContent;
     setOpenNewStory(true);
-  }, [brainstormText, canCreateStory]);
+  }, [brainstormText, canCreateStory, userHasInteracted, currentPromptIndex]);
 
   // ============================================================
   // CREATE NEW EMPTY STORY (Jump to Outline)

@@ -33,6 +33,7 @@ import { isLocalFirst } from '../../lib/localFirst';
 import { flushPushNow } from '../../data/desktop-lifecycle';
 import { SupersessionRequiredError, acceptArcSuggestion, answerStagedQuestion, saveStoryFact, deleteStoryFact, type StoryFactKind, createArc, createArcFromEvents, createCard, createInformation, createSequence, deleteArc, deleteCard, dismissArcSuggestion, enqueueCardExtraction, enqueueExtractionJob, getCardLayouts, isMockMode, listArcSuggestions, listCardQuestions, listProjectEntities, listBraindumps, listStagedQuestions, placeStagedCard, promoteStructuralToRelationship, resolveNarrativeStatusFlip, restoreArc, restoreCard, slugForCard, tagSequenceContains, updateArc, updateCardDescription, updateCardName, updateCardNarrativeStatus, updateCardPosition, type ArcKind, type ArcSuggestion, type BraindumpLogEntry, type CardLayout, type EvokesTransition, type ListProjectEntitiesResponse, type NarrativeStatus, type PersistedQuestion, type ProjectEntity, type StagedQuestion, type SupersessionRequiredResponse, tagEventEvokes, saveLabelSet, type LabelSet, setCardColor } from '../../lib/freeformApi';
 import { prefetchScriptData } from '../../lib/scriptPrefetch';
+import { markSeedProcessed, takeArrivalSeed } from '../../lib/brainstormSeed';
 import { playPageWipe } from '../../lib/pageWipe';
 import { useCascadeEvents } from '../../lib/useCascadeEvents';
 import { countFreshDeltaEdges, loadStoredGraph, mergeGraphDelta, onGraphUpdate, saveStoredGraph, type GraphDelta } from '../../lib/localGraphStore';
@@ -213,31 +214,29 @@ export default function FreeformCorkboard() {
   const [braindumpFocused, setBraindumpFocused] = useState(false);
 
   // Dashboard hero seeding: arriving from "create corkboard story" with
-  // brainstorm text in navigation state opens the dock prefilled — one
-  // keystroke (⌘↵) from the first extraction. Runs once per mount.
+  // brainstorm text in navigation state opens the dock with it and starts the
+  // first extraction (AUTO-START below). Runs once per mount.
   const braindumpSeededRef = useRef(false);
+  // The brainstorm still waiting for its first extraction (AUTO-START, right
+  // after onSubmitBraindump): set here on arrival, consumed once auth is in.
+  const autoRunSeedRef = useRef<string | null>(null);
   useEffect(() => {
     // Router state is the fast path; sessionStorage is the belt for the cases
     // that lose it (a refresh on arrival, a re-entry through the guard). The
-    // key is consumed on read so a later visit to the same story opens clean.
-    const stashKey = storyId ? `ff-braindump-seed:${storyId}` : null;
-    let stashed: string | null = null;
-    if (stashKey) {
-      try {
-        stashed = sessionStorage.getItem(stashKey);
-        if (stashed) sessionStorage.removeItem(stashKey);
-      } catch {
-        /* private mode — router state is the only path */
-      }
-    }
-    const seed = (routerLocation.state as { braindump?: string } | null)?.braindump ?? stashed;
+    // stash is consumed on read, and a brainstorm already processed in this
+    // session is not brought over again (lib/brainstormSeed): router state
+    // survives a refresh, and a second run would mint the same cards twice.
+    const seed = takeArrivalSeed(storyId, routerLocation.state);
     if (seed && !braindumpSeededRef.current) {
       braindumpSeededRef.current = true;
       setBraindumpText(seed);
       setBraindumpOpen(true);
-      // Nothing is submitted automatically — the writer edits/adds freely and
-      // chooses when to extract.
-      setBraindumpMsg('Brought your brainstorm over. Edit or add to it, then hit Process when ready.');
+      // "Build Your Story" already asked for the story to be built: the words
+      // go into the field AND straight into the extraction (2026-11-17). The
+      // dock stays open with them while the cards land, and closes itself when
+      // the run is done (FIL-515).
+      autoRunSeedRef.current = seed;
+      setBraindumpMsg('Brought your brainstorm over. Building your cards…');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -4891,6 +4890,19 @@ export default function FreeformCorkboard() {
     await runBraindumpExtraction(prose, { wow: wowActive });
     setDockIntent({ mode: 'auto' }); // the intent was for that dump only
   }, [braindumpText, runBraindumpExtraction, wowActive]);
+
+  // AUTO-START (2026-11-17): a brainstorm brought over from the Home's "Build
+  // Your Story" is processed on arrival, without a second click. Fires once:
+  // it waits for auth, and marks the seed as processed for this session, so a
+  // refresh (router state survives it) cannot run the extraction again. If the
+  // enqueue fails, the text is still in the open dock and Process retries it.
+  useEffect(() => {
+    const seed = autoRunSeedRef.current;
+    if (!seed || !auth || !storyId) return;
+    autoRunSeedRef.current = null;
+    markSeedProcessed(storyId);
+    void runBraindumpExtraction(seed, { wow: wowActive });
+  }, [auth, storyId, runBraindumpExtraction, wowActive]);
 
   // -------- Script (PDF) drop → extraction --------
 
