@@ -222,9 +222,12 @@ function toUnits(blocks: ExportBlock[]): Unit[] {
   return units;
 }
 
-export function layoutScreenplay(blocks: ExportBlock[]): ScreenplayLayout {
+/** `sanitize`: what each block's text goes through first. The PDF needs
+ *  `courierSafe` (its Courier is WinAnsi only); a screen that draws the same
+ *  pages (the shared-story preview) passes its own and keeps every glyph. */
+export function layoutScreenplay(blocks: ExportBlock[], sanitize: (s: string) => string = courierSafe): ScreenplayLayout {
   const clean = blocks
-    .map((b) => ({ type: b.type, text: courierSafe(b.text) }))
+    .map((b) => ({ type: b.type, text: sanitize(b.text) }))
     .filter((b) => b.text.length > 0);
   const titlePage = layoutTitlePage(clean.filter((b) => b.type === 'title').map((b) => b.text));
   const units = toUnits(clean.filter((b) => b.type !== 'title'));

@@ -70,6 +70,7 @@ import FreeformDemo from './pages/app/freeform-demo';
 import FreeformCorkboard from './pages/app/freeform-corkboard';
 import FreeformScript from './pages/app/freeform-script';
 import FreeformSandbox from './pages/app/freeform-sandbox';
+import SharedStory from './pages/app/shared-story';
 import HomePage from './components/HomePage';
 import { AIModelProvider } from './components/AIModelContext';
 import { GlobalErrorModal } from './components/Error/GlobalErrorModal';
@@ -2029,6 +2030,10 @@ function AppContent() {
                     <Login />
                   </LoginRoute>
                 } />
+                {/* A shared story: the read-only preview behind a share link
+                    (lib/shareLinks). Public: no account needed unless the share
+                    service is set to require one. */}
+                <Route path="/share/:token" element={<SharedStory />} />
 
                 {/* ========================================
                 PROTECTED ROUTES (AUTHENTICATION REQUIRED)

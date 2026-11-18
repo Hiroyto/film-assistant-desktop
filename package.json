@@ -97,7 +97,8 @@
     "desktop:publish": "npm run renderer:build && npm run shell:build && electron-forge publish",
     "parity:web": "playwright test -c parity/playwright.config.ts --project=web",
     "parity:desktop": "npm run renderer:build && npm run shell:build && playwright test -c parity/playwright.config.ts --project=desktop",
-    "parity:update-golden": "playwright test -c parity/playwright.config.ts --project=web --update-snapshots"
+    "parity:update-golden": "playwright test -c parity/playwright.config.ts --project=web --update-snapshots",
+    "share:lambda": "node scripts/build-share-lambda.js"
   },
   "eslintConfig": {
     "extends": [

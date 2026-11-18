@@ -85,6 +85,9 @@ RELEASE.md
 
 # Backend Lambda — código de servidor não pertence ao repo público do cliente.
 index.mjs
+# A Lambda do freeform inteira: os outros arquivos dela (lib/*.mjs) não casam
+# com a regra acima e iriam para o repositório público num `git add -A`.
+/backend/freeform-workflow-app/
 
 # Worker do pdf.js copiado de node_modules pelo craco.config.js (derivado, não versionar).
 /public/pdf.worker.min.mjs

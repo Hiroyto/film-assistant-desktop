@@ -34,6 +34,7 @@ import { flushPushNow } from '../../data/desktop-lifecycle';
 import { SupersessionRequiredError, acceptArcSuggestion, answerStagedQuestion, saveStoryFact, deleteStoryFact, type StoryFactKind, createArc, createArcFromEvents, createCard, createInformation, createSequence, deleteArc, deleteCard, dismissArcSuggestion, enqueueCardExtraction, enqueueExtractionJob, getCardLayouts, isMockMode, listArcSuggestions, listCardQuestions, listProjectEntities, listBraindumps, listStagedQuestions, placeStagedCard, promoteStructuralToRelationship, resolveNarrativeStatusFlip, restoreArc, restoreCard, slugForCard, tagSequenceContains, updateArc, updateCardDescription, updateCardName, updateCardNarrativeStatus, updateCardPosition, type ArcKind, type ArcSuggestion, type BraindumpLogEntry, type CardLayout, type EvokesTransition, type ListProjectEntitiesResponse, type NarrativeStatus, type PersistedQuestion, type ProjectEntity, type StagedQuestion, type SupersessionRequiredResponse, tagEventEvokes, saveLabelSet, type LabelSet, setCardColor } from '../../lib/freeformApi';
 import { prefetchScriptData } from '../../lib/scriptPrefetch';
 import { markSeedProcessed, takeArrivalSeed } from '../../lib/brainstormSeed';
+import { ShareStoryDialog } from '../../components/widgets/ShareStoryDialog';
 import { playPageWipe } from '../../lib/pageWipe';
 import { useCascadeEvents } from '../../lib/useCascadeEvents';
 import { countFreshDeltaEdges, loadStoredGraph, mergeGraphDelta, onGraphUpdate, saveStoredGraph, type GraphDelta } from '../../lib/localGraphStore';
@@ -212,6 +213,9 @@ export default function FreeformCorkboard() {
   const toggleFilter = useCallback((key: string) => setColorFilter((cur) => { const next = new Set(cur); if (next.has(key)) next.delete(key); else next.add(key); return next; }), []);
   // Field focus — the toolbar's orange underside brightens in sync.
   const [braindumpFocused, setBraindumpFocused] = useState(false);
+  // SHARE (2026-11-17): the header's "Share" opens the dialog that makes
+  // read-only preview links of this story (components/widgets/ShareStoryDialog).
+  const [shareOpen, setShareOpen] = useState(false);
 
   // Dashboard hero seeding: arriving from "create corkboard story" with
   // brainstorm text in navigation state opens the dock with it and starts the
@@ -6904,9 +6908,26 @@ export default function FreeformCorkboard() {
           onOpenQuestions={() => { panelAutoRef.current = false; setRightPanelOpen(true); }}
         />
       ) : undefined}
+      headerRight={storyId && auth && canRename ? (
+        <button
+          type="button"
+          data-tour="toolbar-share"
+          onClick={() => setShareOpen(true)}
+          title="Share a read-only preview of this story with a link"
+          style={{
+            background: 'transparent', border: 'none', padding: 0, marginRight: 18, cursor: 'pointer', fontFamily: 'inherit',
+            color: theme === 'dark' ? '#c9c9d1' : '#4a4a45', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap',
+          }}
+        >
+          Share
+        </button>
+      ) : undefined}
       onOpenScript={storyId ? () => playPageWipe('right', () => routerNavigate(`/freeform/${storyId}/script`)) : undefined}
       onPrefetchScript={storyId && auth ? () => prefetchScriptData(storyId, auth.token) : undefined}
     >
+      {shareOpen && storyId && auth ? (
+        <ShareStoryDialog storyId={storyId} title={workTitle ?? ''} auth={auth} dark={theme === 'dark'} onClose={() => setShareOpen(false)} />
+      ) : null}
       {isDesktop() && auth && storyId ? (
         <FdxCoworkControl
           storyId={storyId}
