@@ -695,7 +695,11 @@ export function HomePage(props: HomePageProps) {
 
   const autoResizeTextarea = (el: HTMLTextAreaElement) => {
     el.style.height = 'auto';          // reseta
-    el.style.height = `${el.scrollHeight}px`; // ajusta ao conteúdo
+    // scrollHeight não conta a borda e o campo é border-box: sem somá-la ele
+    // fica alguns px mais baixo que o texto e ganha uma barra de rolagem à toa
+    // (a de uma linha só, com as setas espremidas). O teto é o max-height do CSS.
+    const border = el.offsetHeight - el.clientHeight;
+    el.style.height = `${el.scrollHeight + border}px`; // ajusta ao conteúdo
   };
 
   // ============================================================
